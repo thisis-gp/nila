@@ -49,10 +49,18 @@ Working notes and agent checkpoints belong in the git-ignored `vault/`; durable 
 - New behavior starts with one failing test; bug fixes reproduce the bug first.
 - Before declaring done, run `.\scripts\build-install-test.ps1 -BuildOnly` and report the actual result.
 
+## Token discipline
+
+- Work the Ponytail way in `skills/ponytail/SKILL.md`: understand the flow, then stop at the first solution already provided by the repo, standard library, Android platform or an installed dependency.
+- Read only the files named by the task plus their direct callers. Use `rg`; do not dump build output, generated files or files already read in the session.
+- Keep one work item per session. Run `/compact` when context is about half full and use `skills/context-compression/SKILL.md` for handoffs.
+- Do not use subagents or broad web research unless the task requires it.
+- Keep agent replies and PR descriptions short; paste failures, not full successful build logs.
+
 ## Git workflow
 
-- Branches: `feat/<short-name>`, `fix/<short-name>`, `chore/<short-name>`.
-- Commits use Conventional Commits: `feat:`, `fix:`, `test:`, `docs:`, `chore:`.
+- Branches: `owner/short-topic` (for example, `deva/generated-cards`).
+- Commits and PR titles: one line, `area: what changed` (for example, `launcher: render generated cards`).
 - Keep commits single-purpose. Do not commit generated APKs, local SDK paths, secrets or agent transcripts.
 - PR description: problem, smallest solution, test output, screenshots for UI changes, known limitation.
 - Devananda and Habis open PRs; Gurupriyan reviews and merges.
