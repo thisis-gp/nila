@@ -50,12 +50,21 @@ class NilaEngineTest {
     @Test
     fun commitCallWaitsForConfirmation() {
         // No executor is registered for this tool, so running it throws. Only confirmation may reach that point.
-        val order = CapabilityDescriptor("place_order", "Place the order", listOf(Param("cart", ParamType.STRING)), PermissionClass.COMMIT)
+        val order = CapabilityDescriptor(
+            id = "place_order",
+            description = "Place the order",
+            params = listOf(Param("merchant", ParamType.STRING), Param("items", ParamType.STRING), Param("total_paise", ParamType.INT)),
+            permission = PermissionClass.COMMIT,
+        )
         val registry = engine.capabilities + (order.id to order)
-        val call = ToolCall("place_order", mapOf("cart" to "1"))
+        val call = ToolCall("place_order", mapOf("total_paise" to 23900, "merchant" to "Meghana Foods", "items" to "1 chicken biryani"))
 
         assertEquals(
-            NilaResponse.NeedsConfirmation(call, order),
+            NilaResponse.NeedsConfirmation(
+                call = call,
+                capability = order,
+                lines = listOf("merchant" to "Meghana Foods", "items" to "1 chicken biryani", "total_paise" to "23900"),
+            ),
             engine.execute(NilaIntent.Call(call), registry = registry),
         )
         assertThrows(IllegalStateException::class.java) {

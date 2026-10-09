@@ -16,8 +16,15 @@ sealed interface NilaResponse {
     data class OpenApp(val name: String, val packageName: String, val fallbackUrl: String) : NilaResponse
     data class Choices(val intro: String, val items: List<Choice>) : NilaResponse
     data class Remember(val fact: String) : NilaResponse
-    /** A validated Commit call that has not run. Execute it again with confirmed = true after the user approves. */
-    data class NeedsConfirmation(val call: ToolCall, val capability: CapabilityDescriptor) : NilaResponse
+    /**
+     * A validated Commit call that has not run. [lines] are the call's own values, so the user sees exactly
+     * what Confirm authorizes. Execute it again with confirmed = true after the user approves.
+     */
+    data class NeedsConfirmation(
+        val call: ToolCall,
+        val capability: CapabilityDescriptor,
+        val lines: List<Pair<String, String>>,
+    ) : NilaResponse
 }
 
 class NilaEngine {
@@ -126,7 +133,7 @@ class NilaEngine {
             is CallCheck.Rejected -> NilaResponse.Text("I can't do that. ${check.reason}.")
             is CallCheck.Missing -> NilaResponse.Text("I need the ${check.params.joinToString()} to do that.")
             is CallCheck.Ok ->
-                if (check.capability.needsConfirmation && !confirmed) NilaResponse.NeedsConfirmation(check.call, check.capability)
+                if (check.capability.needsConfirmation && !confirmed) confirmation(check.call, check.capability)
                 else run(check.call)
         }
     }
@@ -151,6 +158,12 @@ class NilaEngine {
             else -> error("Capability ${call.capabilityId} is registered but has no executor")
         }
     }
+
+    private fun confirmation(call: ToolCall, capability: CapabilityDescriptor) = NilaResponse.NeedsConfirmation(
+        call = call,
+        capability = capability,
+        lines = capability.params.mapNotNull { param -> call.args[param.name]?.let { param.name to it.toString() } },
+    )
 
     /** 24-hour value, or null when invalid. With am/pm, only 1-12 is accepted. */
     private fun alarmHour(hour: Int, meridiem: String?): Int? = when (meridiem) {
