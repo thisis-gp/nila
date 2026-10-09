@@ -105,7 +105,13 @@ private fun NilaApp() {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("YOU", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                             Text(turn.user, style = MaterialTheme.typography.titleMedium)
-                            ResponseView(turn.response, context) { message ->
+                            ResponseView(
+                                response = turn.response,
+                                context = context,
+                                confirm = { call ->
+                                    turns += Turn("Confirmed", engine.execute(NilaIntent.Call(call), confirmed = true))
+                                },
+                            ) { message ->
                                 turns += Turn("Confirmation", NilaResponse.Text(message))
                             }
                         }
@@ -147,8 +153,19 @@ private fun DemoPrompts(onSelect: (String) -> Unit) {
 }
 
 @Composable
-private fun ResponseView(response: NilaResponse, context: Context, addStatus: (String) -> Unit) {
+private fun ResponseView(
+    response: NilaResponse,
+    context: Context,
+    confirm: (ToolCall) -> Unit,
+    addStatus: (String) -> Unit,
+) {
     when (response) {
+        // ponytail: plain tap confirms; biometric prompt comes with the confirmation flow.
+        is NilaResponse.NeedsConfirmation -> ActionCard(
+            title = response.capability.description,
+            detail = "Nothing happens until you confirm.",
+            action = "Confirm",
+        ) { confirm(response.call) }
         is NilaResponse.Text -> Text(response.value)
         is NilaResponse.Remember -> Text("I'll remember: ${response.fact}")
         is NilaResponse.Alarm -> ActionCard(

@@ -16,6 +16,8 @@ sealed interface NilaResponse {
     data class OpenApp(val name: String, val packageName: String, val fallbackUrl: String) : NilaResponse
     data class Choices(val intro: String, val items: List<Choice>) : NilaResponse
     data class Remember(val fact: String) : NilaResponse
+    /** A validated Commit call that has not run. Execute it again with confirmed = true after the user approves. */
+    data class NeedsConfirmation(val call: ToolCall, val capability: CapabilityDescriptor) : NilaResponse
 }
 
 class NilaEngine {
@@ -33,8 +35,12 @@ class NilaEngine {
     val capabilities = listOf(
         CapabilityDescriptor(
             id = "create_alarm",
-            description = "Set an alarm. Hour is 0-23.",
-            params = listOf(Param("hour", ParamType.INT), Param("minute", ParamType.INT)),
+            description = "Set an alarm. Give the hour as the user said it and meridiem (am or pm) only if they said one.",
+            params = listOf(
+                Param("hour", ParamType.INT),
+                Param("minute", ParamType.INT),
+                Param("meridiem", ParamType.STRING, required = false),
+            ),
             permission = PermissionClass.PREPARE,
             androidPermissions = setOf("com.android.alarm.permission.SET_ALARM"),
         ),
@@ -77,14 +83,14 @@ class NilaEngine {
     fun route(input: String): NilaIntent {
         val normalized = input.trim().lowercase()
 
+        // The router only extracts what was said; run() converts and validates the time.
         alarm.find(normalized)?.let { match ->
-            var hour = match.groupValues[1].toInt()
-            val minute = match.groupValues[2].ifBlank { "0" }.toInt()
-            when (match.groupValues[3]) {
-                "pm" -> if (hour in 1..11) hour += 12
-                "am" -> if (hour == 12) hour = 0
-            }
-            return NilaIntent.Call(ToolCall("create_alarm", mapOf("hour" to hour, "minute" to minute)))
+            val args = mutableMapOf<String, Any>(
+                "hour" to match.groupValues[1].toInt(),
+                "minute" to match.groupValues[2].ifBlank { "0" }.toInt(),
+            )
+            match.groupValues[3].ifEmpty { null }?.let { args["meridiem"] = it }
+            return NilaIntent.Call(ToolCall("create_alarm", args))
         }
 
         remember.find(normalized)?.let {
@@ -103,28 +109,35 @@ class NilaEngine {
         return NilaIntent.Converse(input)
     }
 
-    /** Validates a routed intent at the boundary, then maps it to a response. Never trusts router output. */
-    fun execute(intent: NilaIntent): NilaResponse = when (intent) {
+    /**
+     * Validates a routed intent at the boundary, then maps it to a response. Never trusts router output.
+     * Commit calls stop at NeedsConfirmation unless [confirmed] is true.
+     */
+    fun execute(
+        intent: NilaIntent,
+        confirmed: Boolean = false,
+        registry: Map<String, CapabilityDescriptor> = capabilities,
+    ): NilaResponse = when (intent) {
         // No assistant model yet, so conversation falls back to the capability list.
         is NilaIntent.Converse -> NilaResponse.Text(
             "I can calculate, set an alarm, remember a preference, compare mock food options, or open YouTube, Netflix, Instagram and BGMI."
         )
-        is NilaIntent.Call -> when (val check = checkCall(intent.call, capabilities)) {
+        is NilaIntent.Call -> when (val check = checkCall(intent.call, registry)) {
             is CallCheck.Rejected -> NilaResponse.Text("I can't do that. ${check.reason}.")
             is CallCheck.Missing -> NilaResponse.Text("I need the ${check.params.joinToString()} to do that.")
-            is CallCheck.Ok -> run(check.call)
+            is CallCheck.Ok ->
+                if (check.capability.needsConfirmation && !confirmed) NilaResponse.NeedsConfirmation(check.call, check.capability)
+                else run(check.call)
         }
     }
 
     private fun run(call: ToolCall): NilaResponse {
         val args = call.args
         return when (call.capabilityId) {
-            "create_alarm" -> {
-                val hour = args["hour"] as Int
-                val minute = args["minute"] as Int
-                if (hour in 0..23 && minute in 0..59) NilaResponse.Alarm(hour, minute)
-                else NilaResponse.Text("That alarm time is not valid.")
-            }
+            "create_alarm" -> alarmHour(args["hour"] as Int, args["meridiem"] as String?)
+                ?.takeIf { (args["minute"] as Int) in 0..59 }
+                ?.let { NilaResponse.Alarm(it, args["minute"] as Int) }
+                ?: NilaResponse.Text("That alarm time is not valid.")
             "open_app" -> apps[args["app"]]?.let { NilaResponse.OpenApp(it.first, it.second, it.third) }
                 ?: NilaResponse.Text("I can't open that app.")
             "remember_fact" -> NilaResponse.Remember(args["fact"] as String)
@@ -137,5 +150,13 @@ class NilaEngine {
             )
             else -> error("Capability ${call.capabilityId} is registered but has no executor")
         }
+    }
+
+    /** 24-hour value, or null when invalid. With am/pm, only 1-12 is accepted. */
+    private fun alarmHour(hour: Int, meridiem: String?): Int? = when (meridiem) {
+        null -> hour.takeIf { it in 0..23 }
+        "am" -> hour.takeIf { it in 1..12 }?.rem(12)
+        "pm" -> hour.takeIf { it in 1..12 }?.let { it % 12 + 12 }
+        else -> null
     }
 }
