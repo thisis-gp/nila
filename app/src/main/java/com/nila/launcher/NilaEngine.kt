@@ -2,6 +2,7 @@ package com.nila.launcher
 
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.util.UUID
 
 data class Choice(
     val title: String,
@@ -15,12 +16,14 @@ sealed interface NilaResponse {
     data class Alarm(val hour: Int, val minute: Int) : NilaResponse
     data class OpenApp(val name: String, val packageName: String, val fallbackUrl: String) : NilaResponse
     data class Choices(val intro: String, val items: List<Choice>) : NilaResponse
+    data class Confirmation(val title: String, val detail: String, val price: String) : NilaResponse
     data class Remember(val fact: String) : NilaResponse
     /**
      * A validated Commit call that has not run. [lines] are the call's own values, so the user sees exactly
-     * what Confirm authorizes. Execute it again with confirmed = true after the user approves.
+     * what Confirm authorizes. Pass [token] to NilaEngine.confirm after the user approves; it works once.
      */
     data class NeedsConfirmation(
+        val token: String,
         val call: ToolCall,
         val capability: CapabilityDescriptor,
         val lines: List<Pair<String, String>>,
@@ -119,11 +122,10 @@ class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
 
     /**
      * Validates a routed intent at the boundary, then maps it to a response. Never trusts router output.
-     * Commit calls stop at NeedsConfirmation unless [confirmed] is true.
+     * Commit calls stop at NeedsConfirmation and run only through [confirm].
      */
     fun execute(
         intent: NilaIntent,
-        confirmed: Boolean = false,
     ): NilaResponse = when (intent) {
         // No assistant model yet, so conversation falls back to the capability list.
         is NilaIntent.Converse -> NilaResponse.Text(
@@ -133,7 +135,7 @@ class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
             is CallCheck.Rejected -> NilaResponse.Text("I can't do that. ${check.reason}.")
             is CallCheck.Missing -> NilaResponse.Text("I need the ${check.params.joinToString()} to do that.")
             is CallCheck.Ok ->
-                if (check.capability.needsConfirmation && !confirmed) confirmation(check.call, check.capability)
+                if (check.capability.needsConfirmation) confirmation(check.call, check.capability)
                 else run(check.call)
         }
     }
@@ -159,7 +161,18 @@ class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
         }
     }
 
+    // ponytail: pending confirmations live in memory; a process restart drops them, which fails safe.
+    private val pending = mutableMapOf<String, ToolCall>()
+
+    /** Runs a pending Commit call once. A reused or unknown token runs nothing. */
+    fun confirm(token: String): NilaResponse {
+        val call = pending.remove(token) ?: return NilaResponse.Text("This confirmation was already used. Nothing was done.")
+        val check = checkCall(call, capabilities)
+        return if (check is CallCheck.Ok) run(check.call) else NilaResponse.Text("That action is no longer valid. Nothing was done.")
+    }
+
     private fun confirmation(call: ToolCall, capability: CapabilityDescriptor) = NilaResponse.NeedsConfirmation(
+        token = UUID.randomUUID().toString().also { pending[it] = call },
         call = call,
         capability = capability,
         lines = capability.params.mapNotNull { param -> call.args[param.name]?.let { param.label to display(param.type, it) } },
@@ -186,4 +199,10 @@ class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
         "pm" -> hour.takeIf { it in 1..12 }?.let { it % 12 + 12 }
         else -> null
     }
+
+    fun prepare(choice: Choice) = NilaResponse.Confirmation(
+        title = "Review ${choice.title}",
+        detail = "${choice.detail} · ${choice.eta}",
+        price = choice.price,
+    )
 }

@@ -61,19 +61,15 @@ class NilaEngineTest {
         val engine = NilaEngine(listOf(order))
         val call = ToolCall("place_order", mapOf("total_paise" to 12345600, "merchant" to "Meghana Foods", "items" to "1 chicken biryani"))
 
-        assertEquals(
-            NilaResponse.NeedsConfirmation(
-                call = call,
-                capability = order,
-                lines = listOf("Merchant" to "Meghana Foods", "Items" to "1 chicken biryani", "Total" to "₹1,23,456.00"),
-            ),
-            engine.execute(NilaIntent.Call(call)),
-        )
+        val pending = engine.execute(NilaIntent.Call(call)) as NilaResponse.NeedsConfirmation
+        assertEquals(call, pending.call)
+        assertEquals(order, pending.capability)
+        assertEquals(listOf("Merchant" to "Meghana Foods", "Items" to "1 chicken biryani", "Total" to "₹1,23,456.00"), pending.lines)
+
         // Confirmation keeps the engine's registry, so the tool is found; it has no executor and fails safely.
-        assertEquals(
-            NilaResponse.Text("I can't do that yet. Nothing was done."),
-            engine.execute(NilaIntent.Call(call), confirmed = true),
-        )
+        assertEquals(NilaResponse.Text("I can't do that yet. Nothing was done."), engine.confirm(pending.token))
+        // The token is single-use: a second tap runs nothing.
+        assertEquals(NilaResponse.Text("This confirmation was already used. Nothing was done."), engine.confirm(pending.token))
     }
 
     @Test
@@ -92,6 +88,20 @@ class NilaEngineTest {
         val response = engine.respond("Order chicken biryani under 250")
         assertTrue(response is NilaResponse.Choices)
         assertEquals(2, (response as NilaResponse.Choices).items.size)
+    }
+
+    @Test
+    fun preparesFoodChoiceWithoutOrdering() {
+        val choices = engine.respond("Order chicken biryani under 250") as NilaResponse.Choices
+
+        assertEquals(
+            NilaResponse.Confirmation(
+                title = "Review Meghana Foods",
+                detail = "Chicken boneless biryani · 4.6★ · 24 min",
+                price = "₹239",
+            ),
+            engine.prepare(choices.items.first()),
+        )
     }
 
     @Test

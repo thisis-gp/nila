@@ -83,5 +83,5 @@ if ($LASTEXITCODE -ne 0) { throw "ADB install failed with exit code $LASTEXITCOD
 if ($LASTEXITCODE -ne 0) { throw "NILA failed to launch with exit code $LASTEXITCODE." }
 
 $resumed = & $adb @adbArgs shell dumpsys activity activities
-if ($resumed -notmatch 'com\.nila\.launcher') { throw 'NILA installed but the activity smoke check did not find it in the activity stack.' }
+if (-not ($resumed -match 'com\.nila\.launcher')) { throw 'NILA installed but the activity smoke check did not find it in the activity stack.' }
 Write-Host 'NILA built, installed and launched successfully.'

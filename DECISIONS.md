@@ -56,6 +56,26 @@ We chose this problem because we live it. Ordering food, booking a ride or texti
 
 **Still to fill:** video walkthrough URL, deck upload (PDF), Android and LLM proficiency levels (pick honestly).
 
+## Integration decisions: 9 October 2026
+
+- **Swiggy login:** OAuth 2.1 with PKCE. Email builders@swiggy.in to register `nila://oauth` as a redirect. Until it is approved, NILA runs a loopback server inside the app and uses the dev-allowed `http://localhost` redirect. Access tokens last 5 days and cannot be refreshed, so log in on the demo phone on Friday night and show a clear "sign in again" state when the token expires.
+- **Swiggy fallback:** keep the labelled offline fixture so a login or network failure never blocks the demo.
+- **Model delivery:** Gemma 4 E2B (2.58 GB) is over Android's 2 GB APK limit. Push models with `adb push` or download them on first launch. Never bundle them in the APK.
+- **Embeddings:** EmbeddingGemma 2 Text 270M through LiteRT-LM. An Android-ready build exists (165 MB generic file, plus a Qualcomm SM8850 / iQOO 15 build). Measure RAM on the iQOO 15 ourselves; file size is not runtime RAM.
+- **Tool router languages:** the official Mobile Actions dataset and FunctionGemma's published evaluation are English-only. Fine-tune on English first, then add our own Hindi and Malayalam examples with a held-out test set. Claim only the languages that pass that test.
+- **Malayalam voice:** test offline `ml-IN` recognition on the iQOO 15. If it is not available offline, Malayalam uses typed input or online recognition, and the UI says so.
+- **Maps:** Maps Grounding Lite MCP at `https://mapstools.googleapis.com/mcp` with an API key (a free demo key exists). It provides place search, routes and weather. It does not provide turn-by-turn navigation or live traffic.
+- **Optional free fallback:** OpenStreetMap through Nominatim or Photon for places and OSRM for routes. No API key, about 1 request per second, and the app must show "© OpenStreetMap contributors". Public Overpass servers are too unreliable for the demo.
+- **Not used:** Zomato (third-party apps blocked), Uber, Rapido and Ola (no usable official MCP), and community WhatsApp bridges (break WhatsApp's terms). Person mode uses Android share and SMS intents.
+
+## Open items during the build
+
+- [x] Email builders@swiggy.in to register the `nila://oauth` redirect (sent 9 October; awaiting reply).
+- [ ] Build the loopback `http://localhost` OAuth fallback and test it on the event network.
+- [ ] Measure EmbeddingGemma 2 load time and RAM on the iQOO 15 (try the SM8850 build first).
+- [ ] Write Hindi and Malayalam routing examples plus a held-out test set.
+- [ ] Test Malayalam speech recognition on the iQOO 15 with networking disabled.
+- [ ] Get a Maps Grounding Lite API key.
 ## Open items during the build
 
 - [ ] Ask an organiser whether the pre-event scaffold may be used and record the answer.

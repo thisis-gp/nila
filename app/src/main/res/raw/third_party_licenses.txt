@@ -1,0 +1,5 @@
+Interface icons: Lucide, ISC License, https://lucide.dev
+Brand icons: Font Awesome Free Brands, CC BY 4.0, https://fontawesome.com
+
+Icons are provided through the MIT-licensed Compose Icons Android vector packages:
+https://github.com/composablehorizons/compose-icons
