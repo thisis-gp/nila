@@ -17,6 +17,7 @@ enum class NilaScreen {
     Apps,
     Activity,
     Settings,
+    Languages,
 }
 
 class NilaNavigation(start: NilaScreen) {
