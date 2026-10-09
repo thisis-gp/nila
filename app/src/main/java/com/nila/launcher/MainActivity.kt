@@ -5,6 +5,11 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.AlarmClock
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -19,19 +24,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -42,9 +51,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.composables.icons.lucide.R as LucideR
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,50 +103,59 @@ private fun NilaApp() {
     BackHandler(enabled = navigation.canGoBack) { screen = navigation.back() }
 
     MaterialTheme(
-        colorScheme = MaterialTheme.colorScheme.copy(
+        colorScheme = darkColorScheme(
             primary = Lime,
             onPrimary = Ink,
             background = Ink,
+            onBackground = Paper,
             surface = Panel,
             onSurface = Paper,
+            surfaceVariant = CardInk,
+            onSurfaceVariant = Muted,
+            outline = Color(0xFF45453F),
         )
     ) {
         Surface(Modifier.fillMaxSize()) {
-            if (screen == NilaScreen.Home) {
+            AnimatedContent(
+                targetState = screen,
+                transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
+                label = "NILA screen",
+            ) { destination ->
+            if (destination == NilaScreen.Home) {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(Ink)
+                        .safeDrawingPadding()
                         .imePadding()
-                        .padding(20.dp),
+                        .padding(horizontal = 18.dp, vertical = 12.dp),
                 ) {
                     NilaHeader { open(NilaScreen.Settings) }
-                    Spacer(Modifier.height(24.dp))
-
-                    if (turns.isEmpty()) {
-                        Text(
-                            "Your phone,\nwithout the hunt.",
-                            fontSize = 36.sp,
-                            lineHeight = 36.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            "Ask for an outcome. NILA answers, creates a useful view, or opens the full experience.",
-                            modifier = Modifier.padding(top = 12.dp, bottom = 20.dp),
-                            color = Muted,
-                            lineHeight = 20.sp,
-                        )
-                        DemoSummary()
-                        Spacer(Modifier.height(14.dp))
-                        HomeCatalogueLinks(::open)
-                        Spacer(Modifier.height(14.dp))
-                        DemoPrompts(::submit)
-                    }
-
                     LazyColumn(
                         modifier = Modifier.weight(1f),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 18.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
+                        if (turns.isEmpty()) {
+                            item {
+                                Text(
+                                    "Your phone,\nwithout the hunt.",
+                                    fontSize = 32.sp,
+                                    lineHeight = 33.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                            item {
+                                Text(
+                                    "Ask for an outcome. NILA answers, creates a useful view, or opens the full experience.",
+                                    color = Muted,
+                                    lineHeight = 20.sp,
+                                )
+                            }
+                            item { DemoSummary() }
+                            item { HomeCatalogueLinks(::open) }
+                            item { DemoPrompts(::submit) }
+                        }
                         items(turns) { turn ->
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text("YOU", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
@@ -149,21 +169,37 @@ private fun NilaApp() {
                         }
                     }
 
-                    OutlinedTextField(
-                        value = input,
-                        onValueChange = { input = it },
+                    Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("What do you want to do?") },
-                        singleLine = true,
-                        keyboardActions = KeyboardActions(onDone = { submit() }),
-                        trailingIcon = { Button(onClick = { submit() }) { Text("Go") } },
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    BottomNavigation(::open)
+                        color = Panel,
+                        shape = RoundedCornerShape(24.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(Modifier.weight(1f)) {
+                                if (input.isEmpty()) Text("Ask NILA anything", color = Muted)
+                                BasicTextField(
+                                    value = input,
+                                    onValueChange = { input = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = Paper),
+                                    singleLine = true,
+                                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                                )
+                            }
+                            IconButton(onClick = { submit() }) {
+                                Icon(painterResource(LucideR.drawable.lucide_ic_send), contentDescription = "Send", tint = Lime)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    BottomNavigation(NilaScreen.Home, ::open)
                 }
             } else {
                 NilaScreenCatalogue(
-                    screen = screen,
+                    screen = destination,
                     onOpen = ::open,
                     onBack = { screen = navigation.back() },
                 ) { app ->
@@ -171,6 +207,7 @@ private fun NilaApp() {
                         ?: Intent(Intent.ACTION_VIEW, Uri.parse(app.fallbackUrl))
                     runCatching { context.startActivity(launch) }.isSuccess
                 }
+            }
             }
         }
     }
@@ -185,7 +222,7 @@ private fun NilaHeader(onSettings: () -> Unit) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
-                modifier = Modifier.size(36.dp).background(Lime, RoundedCornerShape(18.dp)),
+                modifier = Modifier.size(34.dp).background(Lime, RoundedCornerShape(12.dp)),
                 contentAlignment = Alignment.Center,
             ) { Text("N", color = Ink, fontWeight = FontWeight.Black) }
             Text(
@@ -195,15 +232,18 @@ private fun NilaHeader(onSettings: () -> Unit) {
                 letterSpacing = 2.sp,
             )
         }
-        Button(onClick = onSettings, contentPadding = ButtonDefaults.TextButtonContentPadding) {
-            Text("Settings", style = MaterialTheme.typography.labelSmall)
+        IconButton(
+            onClick = onSettings,
+            modifier = Modifier.background(Panel, RoundedCornerShape(16.dp)),
+        ) {
+            Icon(painterResource(LucideR.drawable.lucide_ic_settings), contentDescription = "Settings", tint = Muted)
         }
     }
 }
 
 @Composable
 private fun HomeCatalogueLinks(onOpen: (NilaScreen) -> Unit) {
-    Text("TRUSTED UI", style = MaterialTheme.typography.labelSmall, color = Muted)
+    Text("QUICK VIEWS", style = MaterialTheme.typography.labelSmall, color = Muted)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         listOf(
             NilaScreen.Food to "Compare",
@@ -214,7 +254,8 @@ private fun HomeCatalogueLinks(onOpen: (NilaScreen) -> Unit) {
                 onClick = { onOpen(screen) },
                 modifier = Modifier.weight(1f),
                 contentPadding = ButtonDefaults.TextButtonContentPadding,
-                colors = ButtonDefaults.buttonColors(containerColor = CardInk),
+                colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Paper),
+                shape = RoundedCornerShape(14.dp),
             ) { Text(label, fontSize = 11.sp) }
         }
     }
@@ -223,7 +264,7 @@ private fun HomeCatalogueLinks(onOpen: (NilaScreen) -> Unit) {
 @Composable
 private fun DemoSummary() {
     Card(
-        colors = CardDefaults.cardColors(containerColor = Panel),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1C211B)),
         shape = RoundedCornerShape(18.dp),
     ) {
         Column(Modifier.padding(16.dp)) {
@@ -242,19 +283,21 @@ private fun DemoSummary() {
 @Composable
 private fun DemoPrompts(onSelect: (String) -> Unit) {
     val prompts = listOf(
-        "Order chicken biryani under ₹250",
+        "Find dinner under ₹800",
         "What is 18% of 4250?",
         "Set an alarm for 6:30 am",
         "Open YouTube",
     )
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
         Text("TRY A REQUEST", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
         prompts.forEach { prompt ->
             Button(
                 onClick = { onSelect(prompt) },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = CardInk),
-            ) { Text(prompt, color = Color.White) }
+                modifier = Modifier.fillMaxWidth().height(46.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Paper),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+                shape = RoundedCornerShape(14.dp),
+            ) { Text(prompt, modifier = Modifier.fillMaxWidth(), style = MaterialTheme.typography.bodyMedium) }
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.nila.launcher
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,14 +12,23 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,9 +39,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.composables.icons.fontawesome.brands.R as BrandsR
+import com.composables.icons.lucide.R as LucideR
 
 @Composable
 internal fun NilaScreenCatalogue(
@@ -62,21 +75,18 @@ internal fun NilaScreenCatalogue(
 @Composable
 private fun WelcomeScreen(onOpen: (NilaScreen) -> Unit) {
     Column(
-        Modifier.fillMaxSize().background(Lime).padding(24.dp),
+        Modifier.fillMaxSize().background(Ink).safeDrawingPadding().padding(24.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text("NILA  ·  SETUP 1/3", color = Ink, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
-        Column {
-            Box(
-                Modifier.size(72.dp).background(Ink, RoundedCornerShape(36.dp)),
-                contentAlignment = Alignment.Center,
-            ) { Text("N", color = Lime, fontSize = 34.sp, fontWeight = FontWeight.Black) }
-            ScreenTitle("Your phone,\nwithout the hunt.", Ink)
-            BodyText("Ask in English, हिंदी or മലയാളം. NILA prepares actions and keeps you in control.", Color(0xFF55540F))
+        Text("NILA  ·  SETUP 1/3", color = Lime, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            NilaMark(168.dp, Modifier.align(Alignment.CenterHorizontally))
+            ScreenTitle("Your phone,\nwithout the hunt.")
+            BodyText("Ask in English, हिंदी or മലയാളം. NILA prepares actions and keeps you in control.")
         }
         Column {
             PrimaryButton("Set up NILA") { onOpen(NilaScreen.Permissions) }
-            Text("PRIVATE BY DESIGN · ON YOUR DEVICE", Modifier.fillMaxWidth().padding(top = 10.dp), color = Ink, fontSize = 11.sp)
+            Text("PRIVATE BY DESIGN · ON YOUR DEVICE", Modifier.fillMaxWidth().padding(top = 12.dp), color = Muted, fontSize = 11.sp)
         }
     }
 }
@@ -94,11 +104,8 @@ private fun PermissionsScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) 
 
 @Composable
 private fun VoiceScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("VOICE MODE", onOpen, onBack) {
-    Spacer(Modifier.height(36.dp))
-    Box(
-        Modifier.size(150.dp).align(Alignment.CenterHorizontally).background(Lime, RoundedCornerShape(75.dp)),
-        contentAlignment = Alignment.Center,
-    ) { Text("N", color = Ink, fontSize = 54.sp, fontWeight = FontWeight.Black) }
+    Spacer(Modifier.height(12.dp))
+    NilaMark(164.dp, Modifier.align(Alignment.CenterHorizontally), voice = true)
     Text("VOICE PREVIEW · NOT LISTENING", Modifier.align(Alignment.CenterHorizontally), color = Lime, fontSize = 11.sp)
     ScreenTitle("“Find chicken biryani for three under ₹800.”")
     BodyText("Lakshmi voice and on-device speech packs are not connected in this build. Use the typed demo for reliable judging.")
@@ -174,7 +181,7 @@ private fun PeopleScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Pag
             BodyText("Running a little late. I’ll be at the studio by 6:30.", Paper)
         }
     }
-    SecondaryButton("Sending disabled in prototype", enabled = false) { }
+    SecondaryButton("Continue in NILA") { onOpen(NilaScreen.Home) }
 }
 
 @Composable
@@ -211,10 +218,10 @@ private fun AppsScreen(
 
     ScreenTitle("Some experiences\ndeserve the full screen.")
     BodyText("Movies, games and social feeds open in their own installed app or website.")
-    AppButton("YouTube") { launch(NilaResponse.OpenApp("YouTube", "com.google.android.youtube", "https://youtube.com")) }
-    AppButton("Netflix") { launch(NilaResponse.OpenApp("Netflix", "com.netflix.mediaclient", "https://netflix.com")) }
-    AppButton("Instagram") { launch(NilaResponse.OpenApp("Instagram", "com.instagram.android", "https://instagram.com")) }
-    AppButton("BGMI") { launch(NilaResponse.OpenApp("BGMI", "com.pubg.imobile", "https://www.battlegroundsmobileindia.com")) }
+    AppButton("YouTube", BrandsR.drawable.fontawesome_ic_youtube_brands) { launch(NilaResponse.OpenApp("YouTube", "com.google.android.youtube", "https://youtube.com")) }
+    AppButton("Netflix", LucideR.drawable.lucide_ic_film) { launch(NilaResponse.OpenApp("Netflix", "com.netflix.mediaclient", "https://netflix.com")) }
+    AppButton("Instagram", BrandsR.drawable.fontawesome_ic_instagram_brands) { launch(NilaResponse.OpenApp("Instagram", "com.instagram.android", "https://instagram.com")) }
+    AppButton("BGMI", LucideR.drawable.lucide_ic_gamepad_2) { launch(NilaResponse.OpenApp("BGMI", "com.pubg.imobile", "https://www.battlegroundsmobileindia.com")) }
     status?.let { BodyText(it, Paper) }
 }
 
@@ -249,40 +256,57 @@ private fun Page(
     showNavigation: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().background(Ink).padding(20.dp)) {
+    Column(
+        Modifier.fillMaxSize().background(Ink).safeDrawingPadding().padding(horizontal = 18.dp, vertical = 12.dp),
+    ) {
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (onBack != null) OutlinedButton(onClick = onBack) { Text("Back") } else Spacer(Modifier.size(72.dp, 40.dp))
+            if (onBack != null) RoundIconButton(LucideR.drawable.lucide_ic_arrow_left, "Back", onBack) else Spacer(Modifier.size(44.dp))
             Text(title, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-            OutlinedButton(onClick = { onOpen(NilaScreen.Home) }) { Text("Home") }
+            RoundIconButton(LucideR.drawable.lucide_ic_house, "Home") { onOpen(NilaScreen.Home) }
         }
         Column(
-            Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 18.dp),
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             content = content,
         )
-        if (showNavigation) BottomNavigation(onOpen)
+        if (showNavigation) BottomNavigation(current = null, onOpen = onOpen)
     }
 }
 
 @Composable
-internal fun BottomNavigation(onOpen: (NilaScreen) -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+internal fun BottomNavigation(current: NilaScreen?, onOpen: (NilaScreen) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(20.dp)).padding(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
         listOf(
-            NilaScreen.Home to "Home",
-            NilaScreen.People to "People",
-            NilaScreen.Voice to "NILA",
-            NilaScreen.Activity to "Activity",
-            NilaScreen.Apps to "Apps",
-        ).forEach { (screen, label) ->
+            Triple(NilaScreen.Home, "Home", LucideR.drawable.lucide_ic_house),
+            Triple(NilaScreen.People, "People", LucideR.drawable.lucide_ic_users),
+            Triple(NilaScreen.Voice, "NILA", LucideR.drawable.lucide_ic_mic),
+            Triple(NilaScreen.Activity, "Activity", LucideR.drawable.lucide_ic_history),
+            Triple(NilaScreen.Apps, "Apps", LucideR.drawable.lucide_ic_grid_2x2),
+        ).forEach { (screen, label, icon) ->
             Button(
                 onClick = { onOpen(screen) },
-                contentPadding = ButtonDefaults.TextButtonContentPadding,
-                colors = ButtonDefaults.buttonColors(containerColor = CardInk),
-            ) { Text(label, fontSize = 10.sp) }
+                modifier = Modifier.weight(1f).height(50.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(2.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = if (current == screen) Lime else Color.Transparent),
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        painterResource(icon),
+                        contentDescription = label,
+                        tint = if (current == screen) Ink else Muted,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(label, color = if (current == screen) Ink else Muted, fontSize = 9.sp, lineHeight = 12.sp)
+                }
+            }
         }
     }
 }
@@ -291,8 +315,8 @@ internal fun BottomNavigation(onOpen: (NilaScreen) -> Unit) {
 private fun ScreenTitle(value: String, color: Color = Paper) = Text(
     value,
     color = color,
-    fontSize = 36.sp,
-    lineHeight = 37.sp,
+    fontSize = 32.sp,
+    lineHeight = 34.sp,
     fontWeight = FontWeight.SemiBold,
 )
 
@@ -301,8 +325,12 @@ private fun BodyText(value: String, color: Color = Muted) = Text(value, color = 
 
 @Composable
 private fun SectionCard(title: String, detail: String, status: String) {
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CardInk)) {
-        Column(Modifier.padding(16.dp)) {
+    Card(
+        Modifier.fillMaxWidth().border(1.dp, Color(0xFF3A3A35), RoundedCornerShape(18.dp)),
+        colors = CardDefaults.cardColors(containerColor = Panel),
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Column(Modifier.padding(15.dp)) {
             Text(status, color = Lime, fontSize = 10.sp, fontWeight = FontWeight.Bold)
             Text(title, Modifier.padding(top = 7.dp), fontWeight = FontWeight.Bold)
             Text(detail, Modifier.padding(top = 4.dp), color = Muted, fontSize = 12.sp)
@@ -313,19 +341,64 @@ private fun SectionCard(title: String, detail: String, status: String) {
 @Composable
 private fun PrimaryButton(label: String, onClick: () -> Unit) = Button(
     onClick = onClick,
-    modifier = Modifier.fillMaxWidth().height(48.dp),
+    modifier = Modifier.fillMaxWidth().height(52.dp),
+    shape = RoundedCornerShape(16.dp),
 ) { Text(label) }
 
 @Composable
-private fun SecondaryButton(label: String, enabled: Boolean = true, onClick: () -> Unit) = OutlinedButton(
+private fun SecondaryButton(label: String, onClick: () -> Unit) = OutlinedButton(
     onClick = onClick,
-    enabled = enabled,
     modifier = Modifier.fillMaxWidth().height(48.dp),
+    shape = RoundedCornerShape(16.dp),
 ) { Text(label) }
 
 @Composable
-private fun AppButton(label: String, onClick: () -> Unit) = Button(
+private fun AppButton(label: String, icon: Int, onClick: () -> Unit) = Button(
     onClick = onClick,
-    modifier = Modifier.fillMaxWidth().height(54.dp),
-    colors = ButtonDefaults.buttonColors(containerColor = CardInk),
-) { Text("Open $label") }
+    modifier = Modifier.fillMaxWidth().height(52.dp),
+    colors = ButtonDefaults.buttonColors(containerColor = CardInk, contentColor = Paper),
+    shape = RoundedCornerShape(16.dp),
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(20.dp))
+        Text(label, modifier = Modifier.padding(start = 14.dp).weight(1f))
+        Text("Open", color = Muted, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun RoundIconButton(
+    icon: Int,
+    label: String,
+    onClick: () -> Unit,
+) = IconButton(
+    onClick = onClick,
+    modifier = Modifier.size(44.dp).background(Panel, CircleShape),
+) { Icon(painterResource(icon), contentDescription = label, tint = Paper, modifier = Modifier.size(20.dp)) }
+
+@Composable
+private fun NilaMark(size: androidx.compose.ui.unit.Dp, modifier: Modifier = Modifier, voice: Boolean = false) {
+    val pulse by rememberInfiniteTransition(label = "NILA pulse").animateFloat(
+        initialValue = 0.18f,
+        targetValue = 0.46f,
+        animationSpec = infiniteRepeatable(tween(1100), repeatMode = RepeatMode.Reverse),
+        label = "NILA pulse opacity",
+    )
+    Box(
+        modifier.size(size).background(Lime.copy(alpha = 0.06f), CircleShape).border(1.dp, Lime.copy(alpha = pulse), CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier.size(size * 0.62f).border(2.dp, Lime.copy(alpha = 0.65f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                Modifier.size(size * 0.34f).background(Lime, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (voice) Icon(painterResource(LucideR.drawable.lucide_ic_mic), contentDescription = null, tint = Ink)
+                else Text("N", color = Ink, fontSize = 24.sp, fontWeight = FontWeight.Black)
+            }
+        }
+    }
+}
