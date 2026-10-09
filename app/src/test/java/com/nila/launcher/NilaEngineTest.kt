@@ -24,6 +24,11 @@ class NilaEngineTest {
     }
 
     @Test
+    fun remembersFactContainingDottedTime() {
+        assertEquals(NilaResponse.Remember("Dinner is at 7 p.m."), engine.respond("Remember that Dinner is at 7 p.m."))
+    }
+
+    @Test
     fun parsesDottedMeridiemFromSpeech() {
         // Android's recognizer transcribed "six thirty PM" as "6:30 p.m." on the iQOO 15.
         assertEquals(NilaResponse.Alarm(18, 30), engine.respond("set an alarm for 6:30 p.m."))

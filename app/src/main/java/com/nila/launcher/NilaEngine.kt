@@ -53,7 +53,8 @@ class NilaEngine {
             return NilaResponse.Alarm(hour, minute)
         }
 
-        Regex("""remember(?: that)?\s+(.+)""").find(normalized)?.let {
+        // Match on the raw text: the user's fact is stored as they said it, not as normalized for parsing.
+        Regex("""remember(?: that)?\s+(.+)""").find(input.lowercase())?.let {
             val originalFact = input.substring(input.lowercase().indexOf(it.groupValues[1]))
             return NilaResponse.Remember(originalFact.trim())
         }
