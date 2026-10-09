@@ -19,12 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -43,7 +38,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.composables.icons.fontawesome.brands.R as BrandsR
 import com.composables.icons.lucide.R as LucideR
 
 @Composable
@@ -51,7 +45,9 @@ internal fun NilaScreenCatalogue(
     screen: NilaScreen,
     onOpen: (NilaScreen) -> Unit,
     onBack: () -> Unit,
-    onOpenApp: (NilaResponse.OpenApp) -> Boolean,
+    rememberedFact: String?,
+    onChooseDefaultHome: () -> Unit,
+    onForgetMemory: () -> Unit,
 ) {
     when (screen) {
         NilaScreen.Welcome -> WelcomeScreen(onOpen)
@@ -63,12 +59,11 @@ internal fun NilaScreenCatalogue(
         NilaScreen.PreparedOrder -> PreparedOrderScreen(onOpen, onBack)
         NilaScreen.ActionResult -> ActionResultScreen(onOpen)
         NilaScreen.People -> PeopleScreen(onOpen, onBack)
-        NilaScreen.Memory -> MemoryScreen(onOpen, onBack)
+        NilaScreen.Memory -> MemoryScreen(onOpen, onBack, rememberedFact, onForgetMemory)
         NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
-        NilaScreen.Apps -> AppsScreen(onOpen, onBack, onOpenApp)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
-        NilaScreen.Settings -> SettingsScreen(onOpen, onBack)
-        NilaScreen.Home -> Unit
+        NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome)
+        NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps -> Unit
     }
 }
 
@@ -92,7 +87,7 @@ private fun WelcomeScreen(onOpen: (NilaScreen) -> Unit) {
 }
 
 @Composable
-private fun PermissionsScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("SETUP · 2/3", onOpen, onBack, false) {
+private fun PermissionsScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("SETUP · 2/3", onOpen, onBack) {
     ScreenTitle("Let NILA help,\none permission at a time.")
     BodyText("Setup preview only. Android will ask for each permission when a real feature needs it.")
     SectionCard("Microphone", "For private voice requests", "NOT REQUESTED")
@@ -141,7 +136,7 @@ private fun FoodScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page(
 }
 
 @Composable
-private fun PreparedOrderScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("PREPARED · NOT ORDERED", onOpen, onBack, false) {
+private fun PreparedOrderScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("PREPARED · NOT ORDERED", onOpen, onBack) {
     Text("CONFIRMATION REQUIRED", color = Orange, fontSize = 12.sp, fontWeight = FontWeight.Bold)
     ScreenTitle("Review the exact action.")
     SectionCard("3 × Boneless chicken biryani", "Mock provider · Home · includes simulated fees", "₹717")
@@ -156,7 +151,7 @@ private fun PreparedOrderScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit
 }
 
 @Composable
-private fun ActionResultScreen(onOpen: (NilaScreen) -> Unit) = Page("ACTION RESULT", onOpen, null, false) {
+private fun ActionResultScreen(onOpen: (NilaScreen) -> Unit) = Page("ACTION RESULT", onOpen, null) {
     Box(
         Modifier.size(72.dp).background(Lime, RoundedCornerShape(36.dp)),
         contentAlignment = Alignment.Center,
@@ -185,12 +180,21 @@ private fun PeopleScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Pag
 }
 
 @Composable
-private fun MemoryScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("MEMORY · ON DEVICE", onOpen, onBack) {
+private fun MemoryScreen(
+    onOpen: (NilaScreen) -> Unit,
+    onBack: () -> Unit,
+    rememberedFact: String?,
+    onForgetMemory: () -> Unit,
+) = Page("MEMORY · ON DEVICE", onOpen, onBack) {
     ScreenTitle("What NILA\nremembers.")
-    BodyText("Illustrative memories below are mock data. Real typed ‘remember’ requests stay in this app’s local storage.")
-    SectionCard("Vegetarian food on Fridays", "Used only while comparing meals", "MOCK · USER SAID")
-    SectionCard("Prefer metro when it saves 10+ minutes", "Suggested preference · reviewable", "MOCK · INFERRED")
-    SecondaryButton("Manage typed memory on Home") { onOpen(NilaScreen.Home) }
+    BodyText("Saved facts stay on this device and can be removed here.")
+    if (rememberedFact == null) {
+        SectionCard("No saved memories", "Tell NILA ‘remember …’ to save a fact.", "EMPTY")
+    } else {
+        SectionCard(rememberedFact, "Stored in this app on this device.", "YOU ASKED NILA TO REMEMBER")
+        SecondaryButton("Forget this") { onForgetMemory() }
+    }
+    SecondaryButton("Back to chat") { onOpen(NilaScreen.Home) }
 }
 
 @Composable
@@ -206,26 +210,6 @@ private fun CapabilitiesScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit)
 }
 
 @Composable
-private fun AppsScreen(
-    onOpen: (NilaScreen) -> Unit,
-    onBack: () -> Unit,
-    onOpenApp: (NilaResponse.OpenApp) -> Boolean,
-) = Page("IMMERSIVE APPS", onOpen, onBack) {
-    var status by remember { mutableStateOf<String?>(null) }
-    fun launch(app: NilaResponse.OpenApp) {
-        status = if (onOpenApp(app)) "Opening ${app.name}." else "${app.name} could not be opened."
-    }
-
-    ScreenTitle("Some experiences\ndeserve the full screen.")
-    BodyText("Movies, games and social feeds open in their own installed app or website.")
-    AppButton("YouTube", BrandsR.drawable.fontawesome_ic_youtube_brands) { launch(NilaResponse.OpenApp("YouTube", "com.google.android.youtube", "https://youtube.com")) }
-    AppButton("Netflix", LucideR.drawable.lucide_ic_film) { launch(NilaResponse.OpenApp("Netflix", "com.netflix.mediaclient", "https://netflix.com")) }
-    AppButton("Instagram", BrandsR.drawable.fontawesome_ic_instagram_brands) { launch(NilaResponse.OpenApp("Instagram", "com.instagram.android", "https://instagram.com")) }
-    AppButton("BGMI", LucideR.drawable.lucide_ic_gamepad_2) { launch(NilaResponse.OpenApp("BGMI", "com.pubg.imobile", "https://www.battlegroundsmobileindia.com")) }
-    status?.let { BodyText(it, Paper) }
-}
-
-@Composable
 private fun ActivityScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("ACTIVITY & APPROVALS", onOpen, onBack) {
     ScreenTitle("Everything NILA\ndid for you.")
     BodyText("Demo audit trail. It does not represent real device or provider activity.")
@@ -235,9 +219,10 @@ private fun ActivityScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = P
 }
 
 @Composable
-private fun SettingsScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("SETTINGS", onOpen, onBack) {
+private fun SettingsScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit, onChooseDefaultHome: () -> Unit) = Page("SETTINGS", onOpen, onBack) {
     ScreenTitle("NILA is yours.")
     BodyText("Language, voice, privacy and intelligence stay understandable.")
+    PrimaryButton("Choose default Home app") { onChooseDefaultHome() }
     SectionCard("Languages", "English · हिंदी · മലയാളം", "PLANNED")
     SectionCard("Lakshmi voice", "Android on-device voice candidate", "NOT CONNECTED")
     SectionCard("Memory", "Typed demo fact stays in app storage", "LOCAL")
@@ -246,6 +231,8 @@ private fun SettingsScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = P
     SecondaryButton("Welcome preview") { onOpen(NilaScreen.Welcome) }
     SecondaryButton("Capabilities") { onOpen(NilaScreen.Capabilities) }
     SecondaryButton("Memory") { onOpen(NilaScreen.Memory) }
+    SecondaryButton("People & messages") { onOpen(NilaScreen.People) }
+    SecondaryButton("Activity & approvals") { onOpen(NilaScreen.Activity) }
 }
 
 @Composable
@@ -253,7 +240,6 @@ private fun Page(
     title: String,
     onOpen: (NilaScreen) -> Unit,
     onBack: (() -> Unit)?,
-    showNavigation: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
@@ -273,41 +259,6 @@ private fun Page(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             content = content,
         )
-        if (showNavigation) BottomNavigation(current = null, onOpen = onOpen)
-    }
-}
-
-@Composable
-internal fun BottomNavigation(current: NilaScreen?, onOpen: (NilaScreen) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(20.dp)).padding(5.dp),
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        listOf(
-            Triple(NilaScreen.Home, "Home", LucideR.drawable.lucide_ic_house),
-            Triple(NilaScreen.People, "People", LucideR.drawable.lucide_ic_users),
-            Triple(NilaScreen.Voice, "NILA", LucideR.drawable.lucide_ic_mic),
-            Triple(NilaScreen.Activity, "Activity", LucideR.drawable.lucide_ic_history),
-            Triple(NilaScreen.Apps, "Apps", LucideR.drawable.lucide_ic_grid_2x2),
-        ).forEach { (screen, label, icon) ->
-            Button(
-                onClick = { onOpen(screen) },
-                modifier = Modifier.weight(1f).height(50.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(2.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = if (current == screen) Lime else Color.Transparent),
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        painterResource(icon),
-                        contentDescription = label,
-                        tint = if (current == screen) Ink else Muted,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Text(label, color = if (current == screen) Ink else Muted, fontSize = 9.sp, lineHeight = 12.sp)
-                }
-            }
-        }
     }
 }
 
@@ -353,20 +304,6 @@ private fun SecondaryButton(label: String, onClick: () -> Unit) = OutlinedButton
 ) { Text(label) }
 
 @Composable
-private fun AppButton(label: String, icon: Int, onClick: () -> Unit) = Button(
-    onClick = onClick,
-    modifier = Modifier.fillMaxWidth().height(52.dp),
-    colors = ButtonDefaults.buttonColors(containerColor = CardInk, contentColor = Paper),
-    shape = RoundedCornerShape(16.dp),
-) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(20.dp))
-        Text(label, modifier = Modifier.padding(start = 14.dp).weight(1f))
-        Text("Open", color = Muted, fontSize = 12.sp)
-    }
-}
-
-@Composable
 private fun RoundIconButton(
     icon: Int,
     label: String,
@@ -378,14 +315,8 @@ private fun RoundIconButton(
 
 @Composable
 private fun NilaMark(size: androidx.compose.ui.unit.Dp, modifier: Modifier = Modifier, voice: Boolean = false) {
-    val pulse by rememberInfiniteTransition(label = "NILA pulse").animateFloat(
-        initialValue = 0.18f,
-        targetValue = 0.46f,
-        animationSpec = infiniteRepeatable(tween(1100), repeatMode = RepeatMode.Reverse),
-        label = "NILA pulse opacity",
-    )
     Box(
-        modifier.size(size).background(Lime.copy(alpha = 0.06f), CircleShape).border(1.dp, Lime.copy(alpha = pulse), CircleShape),
+        modifier.size(size).background(Lime.copy(alpha = 0.06f), CircleShape).border(1.dp, Lime.copy(alpha = 0.28f), CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         Box(

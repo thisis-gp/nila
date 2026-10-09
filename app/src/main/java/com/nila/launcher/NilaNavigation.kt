@@ -4,6 +4,7 @@ enum class NilaScreen {
     Welcome,
     Permissions,
     Home,
+    Nila,
     Voice,
     Answer,
     GeneratedCanvas,
@@ -23,6 +24,12 @@ class NilaNavigation(start: NilaScreen) {
 
     val current: NilaScreen get() = history.last()
     val canGoBack: Boolean get() = history.size > 1
+
+    fun select(screen: NilaScreen): NilaScreen {
+        history.clear()
+        history.add(screen)
+        return current
+    }
 
     fun open(screen: NilaScreen): NilaScreen {
         if (screen != current) history.add(screen)

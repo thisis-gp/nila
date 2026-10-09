@@ -29,4 +29,14 @@ class NilaNavigationTest {
         assertFalse(navigation.canGoBack)
         assertEquals(NilaScreen.Home, navigation.current)
     }
+
+    @Test
+    fun selectingLauncherSpaceClearsNestedHistory() {
+        val navigation = NilaNavigation(NilaScreen.Home)
+        navigation.open(NilaScreen.Settings)
+
+        assertEquals(NilaScreen.Apps, navigation.select(NilaScreen.Apps))
+        assertFalse(navigation.canGoBack)
+        assertEquals(NilaScreen.Apps, navigation.current)
+    }
 }

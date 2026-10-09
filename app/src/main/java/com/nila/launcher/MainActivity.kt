@@ -5,11 +5,13 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.AlarmClock
-import androidx.compose.animation.AnimatedContent
+import android.provider.Settings
+import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -17,6 +19,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,7 +30,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.BasicTextField
@@ -42,11 +45,15 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -80,24 +87,56 @@ private fun NilaApp() {
     val engine = remember { NilaEngine() }
     val turns = remember { mutableStateListOf<Turn>() }
     var input by remember { mutableStateOf("") }
+    val installedApps = remember(context) { loadInstalledApps(context) }
+    val launcherPreferences = remember(context) { context.getSharedPreferences("nila_launcher", Context.MODE_PRIVATE) }
+    val pinnedPackages = remember(installedApps, launcherPreferences) {
+        mutableStateListOf<String>().apply {
+            addAll(launcherPreferences.getStringSet("home_pins", null)?.toList() ?: suggestedHomeApps(installedApps))
+        }
+    }
     val memory = remember { context.getSharedPreferences("nila_memory", Context.MODE_PRIVATE) }
+    var rememberedFact by remember { mutableStateOf(memory.getString("fact", null)) }
     val navigation = remember { NilaNavigation(NilaScreen.Home) }
     var screen by remember { mutableStateOf(navigation.current) }
+    var overlayScreen by remember { mutableStateOf(screen) }
+    if (screen != NilaScreen.Home) overlayScreen = screen
 
     fun open(destination: NilaScreen) {
-        screen = navigation.open(destination)
+        screen = if (destination == NilaScreen.Home) navigation.select(NilaScreen.Home) else navigation.open(destination)
     }
 
+    fun chooseDefaultHome() {
+        runCatching { context.startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) }
+            .onFailure { Toast.makeText(context, "Android home-app settings are unavailable.", Toast.LENGTH_SHORT).show() }
+    }
+
+    val scope = rememberCoroutineScope()
+    var isThinking by remember { mutableStateOf(false) }
+    var justReplied by remember { mutableStateOf(false) }
+
     fun submit(prompt: String = input) {
-        if (prompt.isBlank()) return
-        val response = if (prompt.lowercase().contains("what do you remember")) {
-            NilaResponse.Text(memory.getString("fact", null)?.let { "You asked me to remember: $it" } ?: "You have not asked me to remember anything yet.")
-        } else {
-            engine.respond(prompt)
-        }
-        if (response is NilaResponse.Remember) memory.edit().putString("fact", response.fact).apply()
-        turns += Turn(prompt, response)
+        if (prompt.isBlank() || isThinking) return
         input = ""
+        val pendingIndex = turns.size
+        turns += Turn(prompt, NilaResponse.Text(""))
+        isThinking = true
+        scope.launch {
+            delay(550) // a visible thinking beat, so a reply doesn't feel like a canned instant lookup
+            val response = if (prompt.lowercase().contains("what do you remember")) {
+                NilaResponse.Text(memory.getString("fact", null)?.let { "You asked me to remember: $it" } ?: "You have not asked me to remember anything yet.")
+            } else {
+                engine.respond(prompt)
+            }
+            if (response is NilaResponse.Remember) {
+                memory.edit().putString("fact", response.fact).apply()
+                rememberedFact = response.fact
+            }
+            turns[pendingIndex] = Turn(prompt, response)
+            isThinking = false
+            justReplied = true
+            delay(900) // the dock head visibly "speaks" for a beat right after a reply lands
+            justReplied = false
+        }
     }
 
     BackHandler(enabled = navigation.canGoBack) { screen = navigation.back() }
@@ -116,172 +155,199 @@ private fun NilaApp() {
         )
     ) {
         Surface(Modifier.fillMaxSize()) {
-            AnimatedContent(
-                targetState = screen,
-                transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
-                label = "NILA screen",
-            ) { destination ->
-            if (destination == NilaScreen.Home) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Ink)
-                        .safeDrawingPadding()
-                        .imePadding()
-                        .padding(horizontal = 18.dp, vertical = 12.dp),
-                ) {
-                    NilaHeader { open(NilaScreen.Settings) }
-                    LazyColumn(
-                        modifier = Modifier.weight(1f),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 18.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
-                        if (turns.isEmpty()) {
-                            item {
-                                Text(
-                                    "Your phone,\nwithout the hunt.",
-                                    fontSize = 32.sp,
-                                    lineHeight = 33.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                            }
-                            item {
-                                Text(
-                                    "Ask for an outcome. NILA answers, creates a useful view, or opens the full experience.",
-                                    color = Muted,
-                                    lineHeight = 20.sp,
-                                )
-                            }
-                            item { DemoSummary() }
-                            item { HomeCatalogueLinks(::open) }
-                            item { DemoPrompts(::submit) }
-                        }
-                        items(turns) { turn ->
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text("YOU", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                                Text(turn.user, style = MaterialTheme.typography.titleMedium)
-                                ResponseView(
-                                    response = turn.response,
-                                    context = context,
-                                    prepare = engine::prepare,
-                                ) { label, next -> turns += Turn(label, next) }
-                            }
-                        }
-                    }
+            Box(Modifier.fillMaxSize().safeDrawingPadding()) {
+                val lastResponse = turns.lastOrNull()?.response
+                val lastText = (lastResponse as? NilaResponse.Text)?.value.orEmpty()
+                val nilaMood = when {
+                    isThinking -> MascotMood.Thinking
+                    justReplied -> MascotMood.Talking
+                    lastResponse is NilaResponse.Choices || lastResponse is NilaResponse.Confirmation -> MascotMood.Listening
+                    lastText.contains("could not", true) || lastText.contains("unavailable", true) || lastText.contains("No alarm", true) -> MascotMood.Error
+                    else -> MascotMood.Idle
+                }
+                HomeSpace(
+                    apps = installedApps,
+                    pinnedPackages = pinnedPackages,
+                    nilaMood = nilaMood,
+                    onOpenNila = { open(NilaScreen.Nila) },
+                    onOpenApp = { app -> launchInstalledApp(context, app.packageName) },
+                    onChangeWallpaper = { changeWallpaper(context) },
+                    onOpenSettings = { open(NilaScreen.Settings) },
+                )
 
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = Panel,
-                        shape = RoundedCornerShape(24.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(Modifier.weight(1f)) {
-                                if (input.isEmpty()) Text("Ask NILA anything", color = Muted)
-                                BasicTextField(
-                                    value = input,
-                                    onValueChange = { input = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = Paper),
-                                    singleLine = true,
-                                    keyboardActions = KeyboardActions(onDone = { submit() }),
-                                )
-                            }
-                            IconButton(onClick = { submit() }) {
-                                Icon(painterResource(LucideR.drawable.lucide_ic_send), contentDescription = "Send", tint = Lime)
-                            }
+                AnimatedVisibility(
+                    visible = screen != NilaScreen.Home,
+                    enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                    exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+                ) {
+                    when (overlayScreen) {
+                        NilaScreen.Apps -> OverlayScaffold(onClose = { screen = navigation.back() }) {
+                            AppsSpace(
+                                apps = installedApps,
+                                pinnedPackages = pinnedPackages,
+                                onOpenApp = { app -> launchInstalledApp(context, app.packageName) },
+                                onTogglePin = { app ->
+                                    val alreadyPinned = app.packageName in pinnedPackages
+                                    // shortcut: eight Home pins fit this grid; add pages before raising the limit.
+                                    if (!alreadyPinned && pinnedPackages.size >= 8) {
+                                        Toast.makeText(context, "Remove a Home shortcut before pinning another.", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        val updated = pinnedPackages.toMutableList().apply {
+                                            if (alreadyPinned) remove(app.packageName) else add(app.packageName)
+                                        }
+                                        pinnedPackages.clear()
+                                        pinnedPackages.addAll(updated)
+                                        launcherPreferences.edit().putStringSet("home_pins", updated.toSet()).apply()
+                                        Toast.makeText(
+                                            context,
+                                            if (app.packageName in updated) "${app.label} pinned to Home" else "${app.label} removed from Home",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                },
+                            )
                         }
+                        NilaScreen.Nila -> OverlayScaffold(onClose = { screen = navigation.back() }) {
+                            AgentSpace(
+                                turns = turns,
+                                input = input,
+                                isThinking = isThinking,
+                                onInput = { input = it },
+                                onSubmit = ::submit,
+                                context = context,
+                                prepare = engine::prepare,
+                            ) { label, next -> turns += Turn(label, next) }
+                        }
+                        NilaScreen.Home -> Unit
+                        else -> NilaScreenCatalogue(
+                            screen = overlayScreen,
+                            onOpen = ::open,
+                            onBack = { screen = navigation.back() },
+                            rememberedFact = rememberedFact,
+                            onChooseDefaultHome = ::chooseDefaultHome,
+                            onForgetMemory = {
+                                memory.edit().remove("fact").apply()
+                                rememberedFact = null
+                            },
+                        )
                     }
-                    Spacer(Modifier.height(10.dp))
-                    BottomNavigation(NilaScreen.Home, ::open)
                 }
-            } else {
-                NilaScreenCatalogue(
-                    screen = destination,
-                    onOpen = ::open,
-                    onBack = { screen = navigation.back() },
-                ) { app ->
-                    val launch = context.packageManager.getLaunchIntentForPackage(app.packageName)
-                        ?: Intent(Intent.ACTION_VIEW, Uri.parse(app.fallbackUrl))
-                    runCatching { context.startActivity(launch) }.isSuccess
+
+                if (screen == NilaScreen.Home) {
+                    NilaDock(
+                        // Real Phone/Messages apps, not a custom in-launcher screen —
+                        // matches what every existing launcher does, so it needs no explaining.
+                        onOpenPhone = { openDialer(context, "") },
+                        onOpenMessages = { openMessaging(context) },
+                        onOpenApps = { open(NilaScreen.Apps) },
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 22.dp),
+                    )
                 }
-            }
             }
         }
     }
 }
 
 @Composable
-private fun NilaHeader(onSettings: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+private fun OverlayScaffold(onClose: () -> Unit, content: @Composable () -> Unit) {
+    Column(Modifier.fillMaxSize().background(Ink).imePadding()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
+            IconButton(onClick = onClose) {
+                Icon(painterResource(LucideR.drawable.lucide_ic_arrow_left), contentDescription = "Close", tint = Paper)
+            }
+        }
+        Box(Modifier.weight(1f)) { content() }
+    }
+}
+
+@Composable
+private fun AgentSpace(
+    turns: List<Turn>,
+    input: String,
+    isThinking: Boolean,
+    onInput: (String) -> Unit,
+    onSubmit: (String) -> Unit,
+    context: Context,
+    prepare: (Choice) -> NilaResponse.Confirmation,
+    addTurn: (String, NilaResponse) -> Unit,
+) {
+    val lastWasConfirmation = turns.lastOrNull()?.response is NilaResponse.Confirmation
+    val lastText = (turns.lastOrNull()?.response as? NilaResponse.Text)?.value.orEmpty()
+    val lastWasError = !isThinking && (lastText.contains("could not", true) || lastText.contains("unavailable", true) || lastText.contains("No alarm", true))
+    var celebrate by remember { mutableStateOf(false) }
+    val mood = when {
+        celebrate -> MascotMood.Celebrate
+        isThinking -> MascotMood.Thinking
+        lastWasError -> MascotMood.Error
+        input.isNotBlank() -> MascotMood.Listening
+        turns.isEmpty() -> MascotMood.Idle
+        else -> MascotMood.Talking
+    }
+    LaunchedEffect(turns.size) {
+        if (lastWasConfirmation) {
+            celebrate = true
+            delay(900)
+            celebrate = false
+        }
+    }
+
+    Column(
+        Modifier.fillMaxSize().background(Ink).padding(horizontal = 18.dp, vertical = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier.size(34.dp).background(Lime, RoundedCornerShape(12.dp)),
-                contentAlignment = Alignment.Center,
-            ) { Text("N", color = Ink, fontWeight = FontWeight.Black) }
-            Text(
-                "NILA",
-                modifier = Modifier.padding(start = 10.dp),
-                fontWeight = FontWeight.Black,
-                letterSpacing = 2.sp,
-            )
+            Text("NILA", color = Lime, fontWeight = FontWeight.Bold, letterSpacing = 2.sp, modifier = Modifier.weight(1f))
+            NilaMascot(mood = mood, size = 36.dp)
         }
-        IconButton(
-            onClick = onSettings,
-            modifier = Modifier.background(Panel, RoundedCornerShape(16.dp)),
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(vertical = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Icon(painterResource(LucideR.drawable.lucide_ic_settings), contentDescription = "Settings", tint = Muted)
+            if (turns.isEmpty()) item {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    NilaMascot(mood = MascotMood.Idle, size = 84.dp, modifier = Modifier.align(Alignment.CenterHorizontally))
+                    Text("What would you like to get done?", color = Paper, fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
+                    DemoPrompts(onSubmit)
+                }
+            }
+            itemsIndexed(turns) { index, turn ->
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("YOU", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Text(turn.user, style = MaterialTheme.typography.titleMedium)
+                    if (index == turns.lastIndex && isThinking) {
+                        Text("NILA is thinking…", color = Muted, style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        ResponseView(response = turn.response, context = context, prepare = prepare, addTurn = addTurn)
+                    }
+                }
+            }
+        }
+        Surface(Modifier.fillMaxWidth(), color = Panel, shape = RoundedCornerShape(24.dp)) {
+            Row(
+                Modifier.padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.weight(1f)) {
+                    if (input.isEmpty()) Text("Ask NILA anything", color = Muted)
+                    BasicTextField(
+                        value = input,
+                        onValueChange = onInput,
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = Paper),
+                        singleLine = true,
+                        keyboardActions = KeyboardActions(onDone = { onSubmit(input) }),
+                    )
+                }
+                IconButton(onClick = { onSubmit(input) }) {
+                    Icon(painterResource(LucideR.drawable.lucide_ic_send), contentDescription = "Send", tint = Lime)
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun HomeCatalogueLinks(onOpen: (NilaScreen) -> Unit) {
-    Text("QUICK VIEWS", style = MaterialTheme.typography.labelSmall, color = Muted)
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        listOf(
-            NilaScreen.Food to "Compare",
-            NilaScreen.Answer to "Answer",
-            NilaScreen.GeneratedCanvas to "Canvas",
-        ).forEach { (screen, label) ->
-            Button(
-                onClick = { onOpen(screen) },
-                modifier = Modifier.weight(1f),
-                contentPadding = ButtonDefaults.TextButtonContentPadding,
-                colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Paper),
-                shape = RoundedCornerShape(14.dp),
-            ) { Text(label, fontSize = 11.sp) }
-        }
-    }
-}
-
-@Composable
-private fun DemoSummary() {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1C211B)),
-        shape = RoundedCornerShape(18.dp),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Text("PRIVATE BY DESIGN", color = Lime, style = MaterialTheme.typography.labelSmall)
-            Text("You decide before NILA acts.", modifier = Modifier.padding(top = 8.dp), fontWeight = FontWeight.Bold)
-            Text(
-                "This demo uses local rules and simulated provider results. Sending, paying and booking always stop for confirmation.",
-                modifier = Modifier.padding(top = 5.dp),
-                color = Muted,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-    }
-}
-
-@Composable
-private fun DemoPrompts(onSelect: (String) -> Unit) {
+private fun DemoPrompts(onSubmit: (String) -> Unit) {
     val prompts = listOf(
         "Find dinner under ₹800",
         "What is 18% of 4250?",
@@ -289,15 +355,22 @@ private fun DemoPrompts(onSelect: (String) -> Unit) {
         "Open YouTube",
     )
     Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        Text("TRY A REQUEST", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-        prompts.forEach { prompt ->
-            Button(
-                onClick = { onSelect(prompt) },
-                modifier = Modifier.fillMaxWidth().height(46.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Paper),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
-                shape = RoundedCornerShape(14.dp),
-            ) { Text(prompt, modifier = Modifier.fillMaxWidth(), style = MaterialTheme.typography.bodyMedium) }
+        Text("TRY ASKING", style = MaterialTheme.typography.labelSmall, color = Muted)
+        prompts.chunked(2).forEach { rowPrompts ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                rowPrompts.forEach { prompt ->
+                    Button(
+                        onClick = { onSubmit(prompt) },
+                        modifier = Modifier.weight(1f).height(46.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Paper),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Text(prompt, style = MaterialTheme.typography.bodySmall, maxLines = 2, lineHeight = 16.sp)
+                    }
+                }
+                if (rowPrompts.size == 1) Spacer(Modifier.weight(1f))
+            }
         }
     }
 }
