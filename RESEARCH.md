@@ -14,7 +14,6 @@ Sources:
 - Guide and scoring detail: https://iqoo-delhi.reskilll.com/guide
 - Terms: https://iqoo-delhi.reskilll.com/terms
 
-The terms say submission work must be original work created during the event, while pre-event idea drafting is allowed. This repository contains a pre-event scaffold and design prototype. Keep its history intact, disclose it to an organiser, and record the answer in the team channel. Do not rewrite history or imply that earlier code was written during the finale.
 
 ## Test device
 
@@ -143,3 +142,33 @@ Every durable memory stores its source, type, confidence, sensitivity, timestamp
 - MCP server scopes may be broader than NILA's policy. NILA applies its own Read, Prepare and Commit gate before every tool call.
 - Generated UI is declarative. Never run model-generated Kotlin, JavaScript or downloaded executable code.
 - Report measured device results only. Vendor and comparable-device numbers are references.
+
+## Verification: 9 October 2026
+
+These checks confirm or correct the stack above. Decisions that follow from them are in `DECISIONS.md` under "Integration decisions".
+
+| Item | Finding | Impact |
+|---|---|---|
+| Swiggy MCP auth | OAuth 2.1 with PKCE and dynamic client registration. Dev mode allows only `http://localhost` redirects. Custom schemes for Android apps must be registered by emailing builders@swiggy.in. Access tokens last 5 days with no refresh tokens. Authorization codes last 120 seconds. | Register `nila://oauth`; use an in-app loopback redirect until then; re-login before the demo. |
+| ObjectBox 5.4.2 | Latest release (6 May 2026) with HNSW vector search on Android. | Confirmed. |
+| EmbeddingGemma 2 | Released 6 October 2026. The 270M text model needs about 191 MB of RAM and supports 100+ languages with 768-dimension vectors (Matryoshka down to 128). No LiteRT Android build confirmed yet. | Keep EmbeddingGemma 1 (308M) as the fallback. |
+| FunctionGemma Mobile Actions | Official Colab fine-tunes with Hugging Face TRL and converts to `.litertlm`. Lists 20 interface languages including Hindi; Malayalam is not listed. Training time is not published. | English and Hindi first; Malayalam needs our own examples. |
+| Android on-device speech | `createOnDeviceSpeechRecognizer` and `isOnDeviceRecognitionAvailable` exist from API 31. `ml-IN` is a supported locale, but offline Malayalam is not confirmed. | Test on the iQOO 15; keep typed input. |
+| Maps Grounding Lite | Endpoint `https://mapstools.googleapis.com/mcp`. Tools: search places, compute routes (driving or walking), weather. API key or OAuth; a no-cost demo key exists. India availability and pricing are not documented. | Use for places and routes; keep OSM as a free fallback. |
+| OpenStreetMap (live test) | Nominatim and Photon returned real Bengaluru biryani restaurants; OSRM returned Indiranagar to Koramangala as 6.0 km, about 8 minutes. All four public Overpass servers failed. OSM has no prices, menus or ordering. | Optional fallback for places and routes only. |
+| Other providers | Zomato's MCP blocks third-party apps. Razorpay and Paytm MCPs are merchant-side payment links. No usable official MCP for Uber, Rapido, Ola, Zepto, Blinkit or ONDC. Meta's WhatsApp Business Tools MCP only sets up business accounts. | Swiggy and Maps are the only external MCPs in the build. |
+| APK size | Gemma 4 E2B LiteRT-LM is about 2.58 GB, above the 2 GB APK limit. | Side-load or download models; do not bundle. |
+
+Sources:
+
+- Swiggy authentication: https://mcp.swiggy.com/builders/docs/start/authenticate/
+- Swiggy Builders Club: https://mcp.swiggy.com/builders
+- ObjectBox vector search: https://docs.objectbox.io/on-device-vector-search
+- EmbeddingGemma 2: https://unsloth.ai/docs/models/embeddinggemma-2
+- FunctionGemma Mobile Actions: https://ai.google.dev/gemma/docs/mobile-actions
+- Android SpeechRecognizer: https://developer.android.com/reference/android/speech/SpeechRecognizer
+- Maps Grounding Lite MCP: https://developers.google.com/maps/architecture/grounding-with-maps-mcp
+- OSM MCP server (no API key): https://glama.ai/mcp/servers/ni-c/osm-mcp
+- Zomato MCP terms: https://github.com/Zomato/mcp-server-manifest
+- Razorpay MCP: https://hub.docker.com/r/mcp/razorpay
+- Paytm MCP: https://paytmpayments.com/docs/mcp-server-overview

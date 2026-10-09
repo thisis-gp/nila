@@ -11,7 +11,6 @@
 - **Generated-skill demo:** the user asks NILA to build an expense tracker. The resulting skill requests SMS permission, stores derived transactions locally, renders trusted UI and can be disabled or deleted.
 - **Safety:** Read and Prepare may run automatically. Commit always stops for explicit confirmation. Vector retrieval cannot authorize actions.
 - **Pitch:** parked until the primary phone demo passes.
-- **Compliance:** disclose the pre-event scaffold to an organiser and preserve repository history.
 
 ## Decisions
 - **Track:** Open Innovation (any domain, local/open-source model at the core).
@@ -56,9 +55,24 @@ We chose this problem because we live it. Ordering food, booking a ride or texti
 
 **Still to fill:** video walkthrough URL, deck upload (PDF), Android and LLM proficiency levels (pick honestly).
 
+## Integration decisions: 9 October 2026
+
+- **Swiggy login:** OAuth 2.1 with PKCE. Email builders@swiggy.in to register `nila://oauth` as a redirect. Until it is approved, NILA runs a loopback server inside the app and uses the dev-allowed `http://localhost` redirect. Access tokens last 5 days and cannot be refreshed, so log in on the demo phone on Friday night and show a clear "sign in again" state when the token expires.
+- **Swiggy fallback:** keep the labelled offline fixture so a login or network failure never blocks the demo.
+- **Model delivery:** Gemma 4 E2B (2.58 GB) is over Android's 2 GB APK limit. Push models with `adb push` or download them on first launch. Never bundle them in the APK.
+- **Embeddings:** try EmbeddingGemma 2 Text 270M first. It was released on 6 October 2026 and has no confirmed LiteRT Android build yet. If it is not ready by Checkpoint 3, use EmbeddingGemma 1 (308M).
+- **Tool router languages:** fine-tune FunctionGemma on English and Hindi first. Malayalam is a stretch goal because it is not one of Mobile Actions' listed languages and needs our own examples.
+- **Malayalam voice:** test offline `ml-IN` recognition on the iQOO 15. If it is not available offline, Malayalam uses typed input or online recognition, and the UI says so.
+- **Maps:** Maps Grounding Lite MCP at `https://mapstools.googleapis.com/mcp` with an API key (a free demo key exists). It provides place search, routes and weather.
+- **Optional free fallback:** OpenStreetMap through Nominatim or Photon for places and OSRM for routes. No API key, about 1 request per second, and the app must show "© OpenStreetMap contributors". Public Overpass servers are too unreliable for the demo.
+- **Not used:** Zomato (third-party apps blocked), Uber, Rapido and Ola (no usable official MCP), and community WhatsApp bridges (break WhatsApp's terms). Person mode uses Android share and SMS intents.
+
 ## Open items during the build
 
-- [ ] Ask an organiser whether the pre-event scaffold may be used and record the answer.
+- [ ] Email builders@swiggy.in to register the `nila://oauth` redirect.
+- [ ] Build the loopback `http://localhost` OAuth fallback and test it on the event network.
+- [ ] Check for an EmbeddingGemma 2 LiteRT Android artifact; otherwise switch to EmbeddingGemma 1.
+- [ ] Get a Maps Grounding Lite API key.
 - [ ] Confirm the loan iQOO 15 RAM and available storage.
 - [ ] Confirm Swiggy OAuth and redirect behavior on the event network.
 - [ ] Download and verify offline speech packs for English, Hindi and Malayalam.

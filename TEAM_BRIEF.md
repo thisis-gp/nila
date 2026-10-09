@@ -138,7 +138,6 @@ Keep these contracts small. Add fields only when a working flow needs them.
 
 ## Current risks
 
-- The organiser must confirm how the pre-event scaffold may be used.
 - Swiggy authentication or network access can fail on site.
 - Offline Hindi and Malayalam speech packs may not be installed.
 - Keeping all models resident may exceed the loan device's practical memory budget.
