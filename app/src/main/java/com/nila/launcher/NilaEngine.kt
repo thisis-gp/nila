@@ -10,11 +10,32 @@ data class Choice(
     val eta: String,
 )
 
+data class AsyncChoice(
+    val title: String,
+    val detail: String,
+    val price: String,
+    val eta: String,
+    val imageUrl: String? = null,
+    val onClick: () -> Unit,
+)
+
+/** One provider's results inside a GroupedChoices turn. Empty items + a note means that provider has nothing to show yet (e.g. MCP access pending). */
+data class ProviderGroup(
+    val providerName: String,
+    val summary: String,
+    val items: List<AsyncChoice>,
+    val note: String? = null,
+)
+
 sealed interface NilaResponse {
     data class Text(val value: String) : NilaResponse
     data class Alarm(val hour: Int, val minute: Int) : NilaResponse
     data class OpenApp(val name: String, val packageName: String, val fallbackUrl: String) : NilaResponse
     data class Choices(val intro: String, val items: List<Choice>) : NilaResponse
+    /** Like Choices, but each item runs real work (a Zepto call, etc.) when tapped instead of a canned status string. */
+    data class AsyncChoices(val intro: String, val items: List<AsyncChoice>) : NilaResponse
+    /** Results grouped by provider (Zepto, Swiggy Instamart, ...), each collapsible, for comparing multiple MCPs side by side. */
+    data class GroupedChoices(val intro: String, val groups: List<ProviderGroup>) : NilaResponse
     data class Remember(val fact: String) : NilaResponse
 }
 
