@@ -143,3 +143,37 @@ Every durable memory stores its source, type, confidence, sensitivity, timestamp
 - MCP server scopes may be broader than NILA's policy. NILA applies its own Read, Prepare and Commit gate before every tool call.
 - Generated UI is declarative. Never run model-generated Kotlin, JavaScript or downloaded executable code.
 - Report measured device results only. Vendor and comparable-device numbers are references.
+## Verification: 9 October 2026
+
+These checks confirm or correct the stack above. Decisions that follow from them are in `DECISIONS.md` under "Integration decisions".
+
+| Item | Finding | Impact |
+|---|---|---|
+| Swiggy MCP auth | OAuth 2.1 with PKCE and dynamic client registration. Dev mode allows only `http://localhost` redirects. Custom schemes for Android apps must be registered by emailing builders@swiggy.in. Access tokens last 5 days with no refresh tokens. Authorization codes last 120 seconds. | Register `nila://oauth`; use an in-app loopback redirect until then; re-login before the demo. |
+| ObjectBox 5.4.2 | Latest stable Java/Android release (6 May 2026) with HNSW vector search. `6.0.0-beta2` is newer but pre-release. | Confirmed; stay on 5.4.2. |
+| EmbeddingGemma 2 | Released 6 October 2026. The LiteRT-LM community repo has an Android-ready 165 MB build and an SM8850 (iQOO 15) build. Google lists 334 MB RAM on Android CPU (S26 Ultra, second load). 768-dimension vectors, Matryoshka down to 128. | Use it; measure RAM on the iQOO 15. |
+| FunctionGemma Mobile Actions | Official Colab fine-tunes with Hugging Face TRL and exports `.litertlm`. The Mobile Actions dataset (about 9.65k rows) and the published evaluation are English-only. No official evidence for or against Hindi or Malayalam. | English first; our own Hindi and Malayalam data with held-out evaluation. |
+| Android on-device speech | `createOnDeviceSpeechRecognizer` and `isOnDeviceRecognitionAvailable` exist from API 31. `ml-IN` is a supported locale, but an on-device recognizer does not guarantee Malayalam is installed, and `EXTRA_PREFER_OFFLINE` may be ignored. | Test on the iQOO 15 with networking off; keep typed input. |
+| Maps Grounding Lite | Endpoint `https://mapstools.googleapis.com/mcp`. Tools: search places, compute routes (driving or walking), weather and place resolution. API key or OAuth; a no-cost demo key exists. No turn-by-turn navigation or live traffic. | Use for places and routes; keep OSM as a free fallback. |
+| OpenStreetMap (live test) | Nominatim and Photon returned real Bengaluru biryani restaurants; OSRM returned Indiranagar to Koramangala as 6.0 km, about 8 minutes. All four public Overpass servers failed. OSM has no prices, menus or ordering. | Optional fallback for places and routes only. |
+| Other providers | Zomato's MCP blocks third-party apps. Razorpay and Paytm MCPs are merchant-side payment links. No usable official MCP for Uber, Rapido, Ola, Zepto, Blinkit or ONDC. Meta's WhatsApp Business Tools MCP only sets up business accounts. | Swiggy and Maps are the only external MCPs in the build. |
+| APK size | Gemma 4 E2B LiteRT-LM is about 2.58 GB, above the 2 GB APK limit. | Side-load or download models; do not bundle. |
+
+Sources:
+
+- Swiggy authentication: https://mcp.swiggy.com/builders/docs/start/authenticate/
+- Swiggy Builders Club: https://mcp.swiggy.com/builders
+- ObjectBox vector search: https://docs.objectbox.io/on-device-vector-search
+- EmbeddingGemma 2 LiteRT-LM: https://huggingface.co/litert-community/embeddinggemma-2-text-270m-litert-lm
+- Mobile Actions dataset: https://huggingface.co/datasets/google/mobile-actions
+- FunctionGemma model card: https://ai.google.dev/gemma/docs/functiongemma/model_card
+- Maps Grounding Lite overview: https://developers.google.com/maps/ai/grounding-lite
+- ObjectBox releases: https://github.com/objectbox/objectbox-java/releases
+- Android RecognizerIntent: https://developer.android.com/reference/android/speech/RecognizerIntent
+- FunctionGemma Mobile Actions: https://ai.google.dev/gemma/docs/mobile-actions
+- Android SpeechRecognizer: https://developer.android.com/reference/android/speech/SpeechRecognizer
+- Maps Grounding Lite MCP: https://developers.google.com/maps/architecture/grounding-with-maps-mcp
+- OSM MCP server (no API key): https://glama.ai/mcp/servers/ni-c/osm-mcp
+- Zomato MCP terms: https://github.com/Zomato/mcp-server-manifest
+- Razorpay MCP: https://hub.docker.com/r/mcp/razorpay
+- Paytm MCP: https://paytmpayments.com/docs/mcp-server-overview
