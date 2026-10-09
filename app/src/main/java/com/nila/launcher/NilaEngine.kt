@@ -27,7 +27,8 @@ sealed interface NilaResponse {
     ) : NilaResponse
 }
 
-class NilaEngine {
+/** [extraCapabilities] join the built-in tools. Routing, checking and confirmation all use the same registry. */
+class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
     private val percentage = Regex("""(\d+(?:\.\d+)?)\s*%\s*(?:of)?\s*(\d+(?:\.\d+)?)""")
     private val alarm = Regex("""alarm\s+(?:for\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?""")
     private val remember = Regex("""remember(?: that)?\s+(.+)""")
@@ -69,7 +70,7 @@ class NilaEngine {
             params = listOf(Param("query", ParamType.STRING)),
             permission = PermissionClass.READ,
         ),
-    ).associateBy { it.id }
+    ).plus(extraCapabilities).associateBy { it.id }
 
     fun respond(input: String): NilaResponse {
         val normalized = input.trim().lowercase()
@@ -123,13 +124,12 @@ class NilaEngine {
     fun execute(
         intent: NilaIntent,
         confirmed: Boolean = false,
-        registry: Map<String, CapabilityDescriptor> = capabilities,
     ): NilaResponse = when (intent) {
         // No assistant model yet, so conversation falls back to the capability list.
         is NilaIntent.Converse -> NilaResponse.Text(
             "I can calculate, set an alarm, remember a preference, compare mock food options, or open YouTube, Netflix, Instagram and BGMI."
         )
-        is NilaIntent.Call -> when (val check = checkCall(intent.call, registry)) {
+        is NilaIntent.Call -> when (val check = checkCall(intent.call, capabilities)) {
             is CallCheck.Rejected -> NilaResponse.Text("I can't do that. ${check.reason}.")
             is CallCheck.Missing -> NilaResponse.Text("I need the ${check.params.joinToString()} to do that.")
             is CallCheck.Ok ->
@@ -155,7 +155,7 @@ class NilaEngine {
                     Choice("Mani's Dum Biryani", "Chicken dum biryani · 4.4★", "₹219", "29 min"),
                 ),
             )
-            else -> error("Capability ${call.capabilityId} is registered but has no executor")
+            else -> NilaResponse.Text("I can't do that yet. Nothing was done.")
         }
     }
 

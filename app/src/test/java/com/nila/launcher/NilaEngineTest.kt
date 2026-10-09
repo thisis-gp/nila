@@ -1,7 +1,6 @@
 package com.nila.launcher
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -49,7 +48,6 @@ class NilaEngineTest {
 
     @Test
     fun commitCallWaitsForConfirmation() {
-        // No executor is registered for this tool, so running it throws. Only confirmation may reach that point.
         val order = CapabilityDescriptor(
             id = "place_order",
             description = "Place the order",
@@ -60,7 +58,7 @@ class NilaEngineTest {
             ),
             permission = PermissionClass.COMMIT,
         )
-        val registry = engine.capabilities + (order.id to order)
+        val engine = NilaEngine(listOf(order))
         val call = ToolCall("place_order", mapOf("total_paise" to 12345600, "merchant" to "Meghana Foods", "items" to "1 chicken biryani"))
 
         assertEquals(
@@ -69,11 +67,13 @@ class NilaEngineTest {
                 capability = order,
                 lines = listOf("Merchant" to "Meghana Foods", "Items" to "1 chicken biryani", "Total" to "₹1,23,456.00"),
             ),
-            engine.execute(NilaIntent.Call(call), registry = registry),
+            engine.execute(NilaIntent.Call(call)),
         )
-        assertThrows(IllegalStateException::class.java) {
-            engine.execute(NilaIntent.Call(call), confirmed = true, registry = registry)
-        }
+        // Confirmation keeps the engine's registry, so the tool is found; it has no executor and fails safely.
+        assertEquals(
+            NilaResponse.Text("I can't do that yet. Nothing was done."),
+            engine.execute(NilaIntent.Call(call), confirmed = true),
+        )
     }
 
     @Test
