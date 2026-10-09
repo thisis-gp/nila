@@ -1,15 +1,28 @@
 # NILA: decisions and open items
 
+## Finale build lock: 9 October 2026
+
+- **Build:** Android launcher with a declarative skill runtime. NILA generates validated skill manifests and trusted component trees, never executable code.
+- **Primary service:** Swiggy Food end to end. Instamart and Dineout prove reuse of the same MCP client and UI catalogue. Google Maps supports places and routes.
+- **Assistant:** Gemma 4 E2B through LiteRT-LM, using the GPU first.
+- **Tool router:** FunctionGemma 270M, fine-tuned for NILA's fixed English, Hindi and Malayalam tool schemas.
+- **Memory:** EmbeddingGemma 2 Text 270M with ObjectBox 5.4.2 structured storage and HNSW vector search.
+- **Voice:** Lakshmi is the voice identity. Use Android on-device speech recognition and offline TTS voices for the reliable build.
+- **Generated-skill demo:** the user asks NILA to build an expense tracker. The resulting skill requests SMS permission, stores derived transactions locally, renders trusted UI and can be disabled or deleted.
+- **Safety:** Read and Prepare may run automatically. Commit always stops for explicit confirmation. Vector retrieval cannot authorize actions.
+- **Pitch:** parked until the primary phone demo passes.
+- **Compliance:** disclose the pre-event scaffold to an organiser and preserve repository history.
+
 ## Decisions
 - **Track:** Open Innovation (any domain, local/open-source model at the core).
 - **Product:** NILA, an intent-first phone. Phase 1 is an Android launcher (the hackathon build). Phase 2 is the NILA Runtime. Phase 3 is an independent NILA OS, not a skin on Android.
 - **Tagline:** "Say it. Skip the apps." (title slide). The closing line is "Don't open an app. Say what you need."
-- **Brand:** the colours come from the website: `#151513` near-black, `#d9df36` lime, `#f2f0e9` off-white, `#e84619` orange. The logo is a dark circle with a lime "N" (website-vercel/public/favicon.svg).
+- **Brand:** the colours come from the website: `#151513` near-black, `#d9df36` lime, `#f2f0e9` off-white, `#e84619` orange. The logo is a dark circle with a lime "N" (`website-vercel/public/favicon.svg`).
 - **Deck:** Canva https://www.canva.com/d/snrXma0kTsJy39r. It's the purple template with humanized copy. Footers say "NILA" only, with no "iQOO Hackathon 2026" and no "Grand Finale".
 - **Team split:** equal, with Gurupriyan leading.
   - Gurupriyan (lead): architecture, integration, the confirmation and permission step, reviewing all work, the final demo.
   - Devananda: launcher screens, choice cards, person mode, the deck.
-  - Habis: the on-phone model that understands requests, the food and ride provider connections, ranking, testing.
+  - Habis: on-device models, Swiggy and Maps adapters, vector memory, skill validation and evaluation.
 - **Writing rules:** humanize all external text, with no em dashes and no jargon. Don't mention Gurupriyan's workplace (Claro / Nova Benefits) in submissions.
 
 ## Submission form answers (final)
@@ -43,10 +56,17 @@ We chose this problem because we live it. Ordering food, booking a ride or texti
 
 **Still to fill:** video walkthrough URL, deck upload (PDF), Android and LLM proficiency levels (pick honestly).
 
-## Open items
-- [ ] Canva: delete slides 14 to 18 (leftover template: Company Overview, Our Solutions, Our Services, Market Analysis, Get in touch).
-- [ ] Canva: replace the clip art on slide 6 (leopard), slide 7 (green sticker) and slide 9 (lotus).
-- [ ] Verify the claims before judging: "works offline" (slide 9), the model running on the phone (slides 8 and 9), the demo running as the iQOO 15 home screen.
-- [ ] Is NILA in the Grand Finale or the idea round? (This decides whether "Grand Finale" goes back on the slides.)
-- [ ] JIMI's City Battle placement isn't recorded. Add it to the team slide and form if it placed.
-- [ ] Build the actual Android launcher (Phase 1).
+## Open items during the build
+
+- [ ] Ask an organiser whether the pre-event scaffold may be used and record the answer.
+- [ ] Confirm the loan iQOO 15 RAM and available storage.
+- [ ] Confirm Swiggy OAuth and redirect behavior on the event network.
+- [ ] Download and verify offline speech packs for English, Hindi and Malayalam.
+- [ ] Measure every on-device claim before adding it to the submission.
+
+## Parked pitch items
+
+- Canva cleanup and replacement artwork.
+- Final verified performance claims.
+- JIMI City Battle placement.
+- Video walkthrough, final PDF and proficiency-level answers.

@@ -1,127 +1,147 @@
-# NILA — Hackathon Team Brief
+# NILA finale team brief
 
-## One-line idea
+## What we are building
 
-NILA is an intent-first launcher today and an independent mobile operating system tomorrow: people say what they need, services compete behind the scenes, and the right temporary interface appears only when a decision or confirmation is required.
+NILA is an intent-first Android launcher. The user asks for an outcome, NILA chooses an allowed capability, shows an interface when a decision helps, and asks before any consequential action.
 
-## The problem
+The finale demonstration has two connected parts:
 
-Smartphones force users to translate simple intentions into app workflows. To order dinner, send a document, book a ride, or message someone, people must decide which app to open, navigate different interfaces, repeat preferences, and manually compare options.
+1. Use Swiggy's real MCP ecosystem to find and prepare food, grocery and dining actions.
+2. Let the user ask NILA to create an expense-tracker skill, including its permission request, local data and reusable interface.
 
-The phone understands taps but not outcomes. The user is the integration layer.
+The launcher is Phase 1. A reusable NILA runtime and an independent operating system come later.
 
-## Product thesis
+## Product rules
 
-Apps do not disappear technically; they become services. NILA replaces permanent app navigation with:
+- Answer when the result is simple.
+- Generate trusted UI when the user needs to compare, review or edit.
+- Open the full app when immersion matters.
+- Read and prepare automatically.
+- Commit only after explicit confirmation.
+- Never present fixture, simulated or inferred data as real.
+- Never execute model-generated code.
 
-1. **Natural intent** — speak or type the outcome.
-2. **Service orchestration** — discover and compare eligible providers.
-3. **Generated interface** — show cards, maps, media, or controls only when useful.
-4. **Human confirmation** — require approval before messages, purchases, payments, or sensitive sharing.
+## Locked technology
 
-Core line: **Conversation when you ask. Interface when you choose.**
+- Kotlin, Jetpack Compose and JDK 17.
+- Gemma 4 E2B for conversation and skill planning.
+- Fine-tuned FunctionGemma 270M for tool routing.
+- EmbeddingGemma 2 Text 270M for memory retrieval.
+- LiteRT-LM with GPU acceleration first.
+- ObjectBox 5.4.2 for local structured and vector storage.
+- Android on-device SpeechRecognizer and offline TextToSpeech.
+- Lakshmi as NILA's voice identity.
+- Swiggy Food, Instamart and Dineout MCP.
+- Google Maps MCP.
+- Android platform APIs for phone-owned actions.
 
-## Example demo
+## What a generated skill means
 
-User: “Chicken biryani under ₹250, delivered within 30 minutes.”
+A skill is a validated manifest assembled from NILA's existing tools, data sources and Compose components. It can be installed, inspected, disabled and deleted. It cannot add executable code or request a permission that the APK does not declare.
 
-NILA extracts constraints, searches a mock or ONDC-compatible catalogue, and generates comparable cards showing item, final price, rating, and ETA. The user selects one option and confirms payment with a fingerprint. No food-delivery interface is opened.
+The expense tracker is the first generated skill. It demonstrates that NILA can create a persistent personal capability without creating another app.
 
-Second micro-demo: select Rahul and say, “Tell Rahul I’ll reach by 6:30.” NILA clearly changes from Assistant to Person mode, prepares the message, and waits for Send confirmation.
+## Primary demo
 
-## What makes it different
+1. Ask Lakshmi for chicken biryani for three under ₹800 before 8 PM.
+2. Show the FunctionGemma tool decision.
+3. Search Swiggy Food and render comparable cards.
+4. Choose an item and prepare the cart.
+5. Show the exact provider, address, items and price.
+6. Stop for biometric confirmation.
+7. Show the action in local history.
+8. Search one Instamart item and one Dineout slot through the same capability system.
+9. Ask NILA to build an expense tracker.
+10. Review its permissions, create the skill and show the generated dashboard.
 
-- Not a chatbot: it generates visual decision surfaces.
-- Not a super-app: providers stay independent and compete through open protocols.
-- Not permanently an Android layer: the launcher is Phase 1 only.
-- Not a fully autonomous agent: NILA searches automatically but asks before consequential actions.
-- Not another app store: the core unit is an intent, not an installed application.
+## Ownership
 
-## Roadmap
+### Gurupriyan
 
-### Phase 1 — NILA Launcher
+- Own the runtime architecture and integration branch.
+- Implement Read, Prepare and Commit enforcement.
+- Implement confirmation and biometric flow.
+- Coordinate Office Kit evidence and device checks.
+- Review pull requests and run the final demonstration.
 
-Hackathon prototype on Android. Conversational home, intent parser, generated result cards, people/model modes, and explicit confirmation.
+### Devananda
 
-### Phase 2 — NILA Runtime
+- Build the Compose launcher from the approved HTML direction.
+- Build the trusted component catalogue.
+- Build Swiggy search, comparison, cart and tracking surfaces.
+- Build My Skills, permission review and expense-dashboard surfaces.
+- Capture screenshots for every UI pull request.
 
-An open service registry, personal context layer, permissions, action history, and provider adapters independent of fixed app screens.
+### Habis
 
-### Phase 3 — NILA OS
+- Integrate and fine-tune FunctionGemma.
+- Integrate Gemma 4 E2B and EmbeddingGemma 2 through LiteRT-LM.
+- Build the Swiggy and Maps adapters.
+- Build ObjectBox memory and retrieval.
+- Build the skill manifest validator and expense extraction pipeline.
+- Maintain multilingual routing and retrieval evaluations.
 
-A native operating system designed around intent. This is not an Android skin or permanent launcher.
+## Work order
 
-## MVP architecture
+Do not wait for every layer to be finished.
 
-```text
-Voice / text input
-        ↓
-On-device intent parser
-        ↓
-Structured intent + constraints
-        ↓
-Service router / provider adapters
-        ↓
-Normalized results
-        ↓
-Generated UI cards
-        ↓
-Permission policy
-        ↓
-User confirmation → transaction
-```
+1. Gurupriyan creates the typed capability and response contracts.
+2. Devananda builds against fixed fixture objects using those contracts.
+3. Habis returns the same contracts from models and providers.
+4. Gurupriyan connects the branches and enforces confirmation.
 
-For the hackathon, use a mock food catalogue or ONDC sandbox/reference integration. Do not claim production ONDC onboarding unless it is actually completed.
+The fixture path stays available and is labelled clearly. It protects the presentation from network failure without being represented as a real result.
 
-## Safety model
+## Shared contracts to freeze first
 
-- **Read:** search, filter, compare — automatic.
-- **Prepare:** draft messages, plans, carts — user reviews.
-- **Commit:** purchase, pay, send, or share data — strong confirmation.
+- `NilaIntent`
+- `ToolCall`
+- `CapabilityDescriptor`
+- `PermissionClass`
+- `NormalizedResult`
+- `TrustedComponent`
+- `SkillManifest`
+- `MemoryRecord`
+- `ActionReceipt`
 
-## PPT structure — 10 slides
+Keep these contracts small. Add fields only when a working flow needs them.
 
-1. **Hook:** “Your intention is simple. Your phone makes it complicated.”
-2. **Problem:** the multi-app journey for one biryani order.
-3. **Insight:** users should express outcomes, not operate workflows.
-4. **Solution:** NILA and the line “The phone after apps.”
-5. **Demo flow:** intention → comparison → confirmation → tracking.
-6. **Interaction model:** Talk / Show / Act.
-7. **Privacy:** on-device understanding and three permission levels.
-8. **Architecture:** intent parser, service router, generated UI, action policy.
-9. **Roadmap:** Launcher → Runtime → independent OS.
-10. **Close:** “Don’t open an app. Say what you need.”
+## Pull request rules
 
-## Suggested team split
+- Branch as `owner/short-topic`.
+- Keep one problem per pull request.
+- Start new behavior with one failing test.
+- Include the exact build or test command and result.
+- Include screenshots for visible changes.
+- State whether data is real, fixture or simulated.
+- Do not push directly to `main`.
 
-- **Product/story:** problem validation, pitch script, competitor positioning.
-- **Android:** launcher shell, conversation UI, people/model switch, generated cards.
-- **AI/orchestration:** structured intent extraction, provider selection, model fallback.
-- **Service integration:** mock/ONDC catalogue, normalization, ordering state machine.
-- **Design/demo:** brand, PPT, screen recording, website, demo choreography.
+## Scope cuts
 
-## Claims to avoid
+- No custom ROM.
+- No arbitrary app or APK generation.
+- No real payment integration.
+- No unofficial food, ride or messaging API.
+- No general multi-agent framework.
+- No cloud memory.
+- No pitch polishing until the primary demo is stable.
 
-- “There will be zero UI.” Use **no permanent app interfaces**.
-- “Apps no longer exist.” Say they become headless services.
-- “Everything runs on-device” unless every model and query actually does.
-- “Integrated with every app/provider.” Name only implemented integrations.
-- “Fully autonomous.” Emphasize partial autonomy and confirmation.
-- “We built a complete OS.” The hackathon deliverable is the launcher proof; the independent OS is the roadmap.
+## What to show judges
 
-## Visual direction
+- The launcher running as Home on the iQOO 15.
+- Local model inference with measured device latency.
+- A real Swiggy search and visible transaction boundary.
+- A skill created from a natural-language request.
+- Semantic recall from local memory.
+- Permission denial and safe recovery.
+- Office Kit used throughout the build.
 
-Near-black graphite, electric cyan, ultraviolet, and restrained amber. Use optical glass, fluid service cards, a living intelligence core, and motion that shows many apps collapsing into one intent. Avoid generic robots, glowing brains, and cluttered cyberpunk visuals.
+## Current risks
 
-## 60-second pitch
+- The organiser must confirm how the pre-event scaffold may be used.
+- Swiggy authentication or network access can fail on site.
+- Offline Hindi and Malayalam speech packs may not be installed.
+- Keeping all models resident may exceed the loan device's practical memory budget.
+- SMS access may require additional device settings and is restricted for store distribution.
 
-“To order one meal, we open an app, search, filter, compare, check delivery, choose payment, and confirm. Our intention was only one sentence. NILA is an intent-first launcher that lets people say the outcome they want. It searches services, generates the right temporary interface, and asks before anything consequential happens. We begin as an Android launcher to prove the interaction model. Then we build the service runtime and, ultimately, an independent operating system designed around intentions instead of apps. NILA is the phone after apps.”
-
-## Immediate deliverables
-
-- Working launcher interaction prototype
-- One reliable end-to-end food-ordering demo
-- 10-slide pitch deck
-- 60-second demo video backup
-- Architecture diagram and privacy explanation
-- Marketing website
+Use the fallback paths in `HACKATHON.md`; do not hide a failure or change the claim.

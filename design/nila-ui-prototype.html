@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NILA interface prototype</title>
+  <style>
+    :root {
+      --ink: #151513;
+      --ink-2: #20201d;
+      --ink-3: #2c2c27;
+      --paper: #f2f0e9;
+      --muted: #aaa99f;
+      --line: #3c3c35;
+      --outline: #66645c;
+      --lime: #d9df36;
+      --orange: #e84619;
+      --danger: #ff6b61;
+      --radius: 22px;
+      font-family: Inter, Manrope, "Segoe UI", Arial, sans-serif;
+      color: var(--paper);
+      background: #d9d7cf;
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; }
+    button, input, select { font: inherit; }
+    button { color: inherit; }
+    .studio { min-height: 100vh; display: grid; grid-template-columns: 260px minmax(430px, 1fr) 280px; }
+    .rail, .notes { height: 100vh; position: sticky; top: 0; overflow: auto; padding: 24px 18px; color: var(--ink); background: var(--paper); }
+    .rail { border-right: 1px solid #bab8af; }
+    .notes { border-left: 1px solid #bab8af; }
+    .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 25px; font-size: 18px; font-weight: 850; letter-spacing: -.04em; }
+    .brand-mark { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 50%; background: var(--ink); color: var(--lime); }
+    .rail-label, .eyebrow { font: 700 10px/1.2 ui-monospace, "SFMono-Regular", Consolas, monospace; letter-spacing: .13em; text-transform: uppercase; }
+    .screen-list { display: grid; gap: 5px; margin-top: 10px; }
+    .screen-link { width: 100%; min-height: 39px; padding: 8px 10px; display: flex; gap: 10px; align-items: center; border: 1px solid transparent; border-radius: 10px; background: transparent; color: #636159; text-align: left; cursor: pointer; }
+    .screen-link span { width: 21px; color: #929087; font: 600 10px ui-monospace, monospace; }
+    .screen-link:hover { border-color: #c5c2b8; }
+    .screen-link.active { color: var(--ink); background: var(--lime); }
+    .screen-link.active span { color: var(--ink); }
+    .stage { min-height: 100vh; padding: 42px; display: grid; place-items: center; background: radial-gradient(circle at 50% 20%, #eeece5, #d0cec5 75%); }
+    .device-wrap { display: grid; gap: 13px; justify-items: center; }
+    .device-caption { color: #5d5b54; font: 650 11px ui-monospace, monospace; letter-spacing: .06em; }
+    .phone { width: 390px; height: 844px; position: relative; overflow: hidden; border: 8px solid #090909; border-radius: 48px; background: var(--ink); color: var(--paper); box-shadow: 0 32px 85px rgba(21,21,19,.3), 14px 14px 0 var(--lime); }
+    .phone::before { content: ""; position: absolute; z-index: 20; top: 9px; left: 50%; width: 92px; height: 24px; transform: translateX(-50%); border-radius: 20px; background: #070707; }
+    #phoneScreen { height: 100%; }
+    .statusbar { height: 45px; position: absolute; z-index: 15; inset: 0 0 auto; padding: 13px 20px 0; display: flex; justify-content: space-between; color: #dbd9d1; font: 650 10px ui-monospace, monospace; pointer-events: none; }
+    .screen { height: 100%; position: relative; overflow-y: auto; scrollbar-width: none; padding: 58px 20px 104px; background: var(--ink); }
+    .screen::-webkit-scrollbar { display: none; }
+    .screen.light { color: var(--ink); background: var(--paper); }
+    .screen.lime { color: var(--ink); background: var(--lime); }
+    .topline { min-height: 36px; display: grid; grid-template-columns: 36px minmax(0, 1fr) 36px; align-items: center; gap: 10px; margin-bottom: 24px; }
+    .topline > :nth-child(2) { text-align: center; }
+    .wordmark { font-size: 15px; font-weight: 900; letter-spacing: .17em; }
+    .avatar, .icon-button { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: transparent; cursor: pointer; }
+    .light .icon-button { border-color: #bfbbb0; }
+    .title { margin: 0; max-width: 330px; font-size: 36px; line-height: .98; letter-spacing: -.055em; font-weight: 680; text-wrap: balance; }
+    .title.big { font-size: 52px; }
+    .subtitle { margin: 12px 0 0; max-width: 31ch; color: var(--muted); font-size: 14px; line-height: 1.5; }
+    .light .subtitle, .lime .subtitle { color: #58574f; }
+    .section { margin-top: 26px; }
+    .section-head { margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; }
+    .section-head a { color: var(--lime); font-size: 11px; }
+    .light .section-head a, .lime .section-head a { color: var(--ink); text-decoration: underline; }
+    .stack { display: grid; gap: 9px; }
+    .card { padding: 16px; border: 1px solid var(--outline); border-radius: 18px; background: var(--ink-2); }
+    .light .card { border-color: #cbc8be; background: #e9e7df; }
+    .card.selected { border-color: var(--lime); box-shadow: inset 3px 0 0 var(--lime); }
+    .card-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .card-row.middle { align-items: center; }
+    .card h3, .card p { margin: 0; }
+    .card h3 { font-size: 14px; }
+    .card p { margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+    .light .card p { color: #6d6a62; }
+    .meta { color: var(--muted); font: 600 10px ui-monospace, monospace; }
+    .price { font: 750 14px ui-monospace, monospace; white-space: nowrap; }
+    .tag { display: inline-flex; align-items: center; min-height: 22px; padding: 4px 7px; border-radius: 20px; background: var(--lime); color: var(--ink); font: 800 8px ui-monospace, monospace; letter-spacing: .08em; }
+    .tag.orange { color: var(--ink); background: var(--orange); }
+    .tag.ghost { color: var(--muted); background: var(--ink-3); }
+    .button { width: 100%; min-height: 50px; padding: 12px 16px; border: 0; border-radius: 15px; background: var(--lime); color: var(--ink); font-weight: 800; cursor: pointer; }
+    .button.dark { background: var(--ink); color: var(--paper); }
+    .button.orange { background: var(--orange); color: var(--ink); }
+    .button.secondary { border: 1px solid var(--outline); color: var(--paper); background: transparent; }
+    .light .button.secondary { border-color: #aaa79e; color: var(--ink); }
+    .button-row { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+    .composer { min-height: 58px; padding: 8px 8px 8px 15px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--outline); border-radius: 21px; background: #f7f5ee; color: #56544d; }
+    .composer span { flex: 1; font-size: 12px; }
+    .mic { display: grid; width: 42px; height: 42px; place-items: center; border: 0; border-radius: 50%; background: var(--lime); color: var(--ink); cursor: pointer; }
+    .home-composer { position: sticky; z-index: 8; bottom: 0; margin-top: 14px; }
+    .chips { display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none; }
+    .chip { flex: 0 0 auto; min-height: 36px; padding: 8px 12px; border: 1px solid var(--outline); border-radius: 30px; background: transparent; color: #dedcd4; font-size: 10px; cursor: pointer; }
+    .chip:hover { border-color: var(--lime); }
+    .greeting { margin: 28px 0 20px; }
+    .greeting .eyebrow { color: var(--lime); }
+    .greeting h1 { margin: 9px 0 0; max-width: 300px; font-size: 38px; line-height: 1; letter-spacing: -.052em; font-weight: 620; }
+    .summary { padding: 16px; border-radius: 20px; background: var(--paper); color: var(--ink); }
+    .summary strong { display: block; margin: 7px 0 4px; font-size: 20px; letter-spacing: -.025em; }
+    .summary p { margin: 0; color: #65635c; font-size: 11px; line-height: 1.45; }
+    .summary-actions { margin-top: 14px; display: flex; gap: 7px; }
+    .mini-action { padding: 8px 10px; border: 1px solid #aaa79e; border-radius: 10px; background: transparent; color: var(--ink); font-size: 10px; font-weight: 750; cursor: pointer; }
+    .bottom-nav { height: 74px; position: absolute; z-index: 12; inset: auto 10px 10px; padding: 8px 10px; display: grid; grid-template-columns: repeat(5, 1fr); border: 1px solid var(--outline); border-radius: 24px; background: rgba(30,30,27,.98); box-shadow: 0 10px 30px #0008; }
+    .bottom-nav button { min-width: 0; border: 0; border-radius: 15px; background: transparent; color: #aaa89f; font-size: 8px; cursor: pointer; }
+    .bottom-nav b { height: 24px; display: grid; place-items: center; margin-bottom: 2px; font-size: 17px; font-weight: 500; }
+    .bottom-nav button.active { color: var(--lime); background: #d9df360c; }
+    .ui-icon { width: 20px; height: 20px; display: inline-block; vertical-align: middle; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .ui-icon.solid { fill: currentColor; stroke: none; }
+    .orb-stage { min-height: 580px; display: grid; place-items: center; align-content: center; text-align: center; }
+    .orb { width: 180px; height: 180px; position: relative; display: grid; place-items: center; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #f2f09d, var(--lime) 35%, #6d7217 75%, #292b0a); box-shadow: 0 0 80px #d9df364f; animation: breathe 2.4s ease-in-out infinite; }
+    .orb::after { content: ""; width: 205px; height: 205px; position: absolute; border: 1px solid #d9df3659; border-radius: 50%; }
+    @keyframes breathe { 50% { transform: scale(1.055); box-shadow: 0 0 110px #d9df3678; } }
+    .transcript { max-width: 300px; margin: 55px auto 0; font-size: 23px; line-height: 1.16; letter-spacing: -.025em; }
+    .wave { height: 26px; margin-top: 24px; display: flex; gap: 4px; align-items: center; justify-content: center; }
+    .wave i { width: 3px; height: 8px; border-radius: 4px; background: var(--lime); animation: wave 1s ease-in-out infinite alternate; }
+    .wave i:nth-child(2), .wave i:nth-child(6) { height: 18px; animation-delay: -.25s; }
+    .wave i:nth-child(3), .wave i:nth-child(5) { height: 25px; animation-delay: -.5s; }
+    @keyframes wave { to { transform: scaleY(.35); opacity: .45; } }
+    .answer-block { margin-top: 55px; }
+    .answer-number { margin: 12px 0; color: var(--lime); font-size: 76px; line-height: .95; letter-spacing: -.08em; font-weight: 700; }
+    .equation { padding-bottom: 20px; border-bottom: 1px solid var(--line); color: var(--muted); }
+    .canvas { margin-top: 25px; padding: 16px; border-radius: 22px; background: var(--paper); color: var(--ink); }
+    .canvas-map { height: 168px; position: relative; overflow: hidden; border-radius: 15px; background: #d7d5cb; }
+    .canvas-map::before { content: ""; position: absolute; inset: -15px; background: repeating-linear-gradient(30deg, transparent 0 27px, #b9b7ae 28px 30px), repeating-linear-gradient(115deg, transparent 0 42px, #c4c1b7 43px 46px); }
+    .route { width: 170px; height: 90px; position: absolute; top: 35px; left: 72px; border: 4px solid var(--orange); border-color: var(--orange) transparent transparent var(--orange); border-radius: 60% 0 0; transform: rotate(-8deg); }
+    .pin { position: absolute; z-index: 2; width: 17px; height: 17px; border: 4px solid var(--ink); border-radius: 50%; background: var(--lime); }
+    .pin.a { left: 68px; bottom: 35px; } .pin.b { right: 72px; top: 33px; background: var(--orange); }
+    .timeline { margin-top: 13px; display: grid; gap: 0; }
+    .timeline-row { padding: 11px 0; display: grid; grid-template-columns: 46px 12px 1fr; gap: 8px; border-bottom: 1px solid #cbc8be; font-size: 11px; }
+    .timeline-row:last-child { border: 0; }
+    .dot { width: 9px; height: 9px; margin-top: 2px; border-radius: 50%; background: var(--orange); }
+    .filterbar { margin: 16px 0 12px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 7px; }
+    .filter { padding: 9px 5px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--muted); text-align: center; font-size: 9px; }
+    .food-card { padding: 0; overflow: hidden; }
+    .food-art { height: 95px; position: relative; overflow: hidden; background: radial-gradient(circle at 18% 35%, #f6d069 0 3px, transparent 4px), radial-gradient(circle at 72% 58%, #dc7f23 0 5px, transparent 6px), radial-gradient(circle at 38% 75%, #faf0af 0 4px, transparent 5px), linear-gradient(145deg, #9a3e1c, #efaa43); }
+    .food-art::before { content: ""; position: absolute; width: 150px; height: 150px; right: -12px; top: -28px; border: 18px double #f4d17466; border-radius: 50%; }
+    .food-art::after { content: "BIRYANI"; position: absolute; right: 12px; bottom: 8px; color: #fff9; font: 800 24px ui-monospace, monospace; letter-spacing: -.08em; }
+    .food-copy { padding: 14px; }
+    .score { display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid var(--lime); border-radius: 50%; color: var(--lime); font: 700 11px ui-monospace, monospace; }
+    .order-line { padding: 13px 0; display: flex; justify-content: space-between; border-bottom: 1px solid var(--line); font-size: 12px; }
+    .total { padding: 17px 0; display: flex; justify-content: space-between; font-size: 19px; font-weight: 800; }
+    .consent-box { margin: 20px 0; padding: 15px; border: 1px solid #e8461977; border-radius: 15px; background: #e8461914; }
+    .consent-box p { margin: 7px 0 0; color: #d0cec5; font-size: 11px; line-height: 1.45; }
+    .fingerprint { width: 116px; height: 116px; margin: 28px auto; display: grid; place-items: center; border: 1px solid #d9df3666; border-radius: 50%; color: var(--lime); font-size: 53px; box-shadow: 0 0 50px #d9df3628; }
+    .success-mark { width: 96px; height: 96px; margin: 70px 0 28px; display: grid; place-items: center; border-radius: 50%; background: var(--lime); color: var(--ink); font-size: 43px; }
+    .receipt { margin-top: 28px; padding: 18px; border: 1px dashed #706e65; border-radius: 17px; }
+    .person { display: flex; align-items: center; gap: 12px; }
+    .person-photo { width: 47px; height: 47px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; background: #c4c1b7; color: var(--ink); font-weight: 800; }
+    .unread { width: 8px; height: 8px; border-radius: 50%; background: var(--orange); }
+    .draft { margin-top: 22px; padding: 18px; border-radius: 20px 20px 5px 20px; background: var(--paper); color: var(--ink); font-size: 16px; line-height: 1.4; }
+    .memory-card { min-height: 125px; display: flex; flex-direction: column; justify-content: space-between; }
+    .memory-source { display: flex; justify-content: space-between; color: var(--muted); font-size: 9px; }
+    .tool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+    .tool { min-height: 118px; padding: 14px; display: flex; flex-direction: column; justify-content: space-between; border: 1px solid var(--line); border-radius: 17px; background: var(--ink-2); }
+    .tool-icon { font-size: 25px; }
+    .tool strong { font-size: 12px; }
+    .tool small { color: var(--muted); font-size: 9px; }
+    .app-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px 10px; }
+    .app-tile { border: 0; background: transparent; text-align: center; cursor: pointer; }
+    .app-icon { width: 54px; height: 54px; margin: auto; display: grid; place-items: center; border: 1px solid var(--outline); border-radius: 17px; background: var(--ink-2); font-size: 23px; }
+    .app-icon img { width: 25px; height: 25px; }
+    .app-icon.youtube { background: #ff0033; border-color: #ff0033; }
+    .app-icon.youtube img, .app-icon.instagram img { filter: brightness(0) invert(1); }
+    .app-icon.netflix { background: #090909; }
+    .app-icon.spotify { background: #1ed760; border-color: #1ed760; }
+    .app-icon.instagram { background: linear-gradient(145deg,#833ab4,#fd1d1d 55%,#fcb045); border: 0; }
+    .app-tile small { display: block; margin-top: 7px; color: #d1cfc6; font-size: 9px; }
+    .activity-item { position: relative; padding-left: 22px; }
+    .activity-item::before { content: ""; width: 8px; height: 8px; position: absolute; top: 20px; left: 0; border-radius: 50%; background: var(--lime); }
+    .activity-item.warning::before { background: var(--orange); }
+    .setting { min-height: 58px; padding: 12px 0; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+    .setting strong { display: block; font-size: 12px; }
+    .setting small { color: var(--muted); font-size: 9px; }
+    .toggle { width: 42px; height: 24px; position: relative; border-radius: 20px; background: var(--ink-3); }
+    .toggle::after { content: ""; width: 18px; height: 18px; position: absolute; top: 3px; left: 3px; border-radius: 50%; background: #85837a; }
+    .toggle.on { background: var(--lime); }
+    .toggle.on::after { left: 21px; background: var(--ink); }
+    .progress { height: 5px; overflow: hidden; border-radius: 5px; background: var(--ink-3); }
+    .progress i { display: block; width: 78%; height: 100%; background: var(--lime); }
+    .notes h2 { margin: 16px 0 8px; font-size: 25px; line-height: 1; letter-spacing: -.04em; }
+    .notes p { color: #69675f; font-size: 12px; line-height: 1.55; }
+    .spec { margin: 22px 0; padding-top: 16px; border-top: 1px solid #c7c4ba; }
+    .swatches { display: flex; gap: 6px; }
+    .swatch { width: 31px; height: 31px; border: 1px solid #9d9a91; border-radius: 50%; }
+    .review-tip { padding: 12px; border-radius: 12px; background: var(--lime); color: var(--ink); font-size: 11px; line-height: 1.45; }
+    @media (max-width: 1000px) {
+      .studio { grid-template-columns: 220px 1fr; }
+      .notes { display: none; }
+    }
+    @media (max-width: 680px) {
+      .studio { display: block; background: var(--ink); }
+      .rail { height: auto; position: static; padding: 14px; border: 0; }
+      .brand, .rail-label { display: none; }
+      .screen-list { display: flex; overflow-x: auto; }
+      .screen-link { flex: 0 0 auto; width: auto; }
+      .stage { min-height: 0; padding: 0; background: var(--ink); }
+      .phone { width: 100%; height: 100dvh; border: 0; border-radius: 0; box-shadow: none; }
+      .phone::before { display: none; }
+      .device-caption { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) { .orb, .wave i { animation: none; } }
+  </style>
+</head>
+<body>
+  <main class="studio">
+    <aside class="rail">
+      <div class="brand"><span class="brand-mark">N</span>NILA</div>
+      <div class="rail-label">Interface map · 15 screens</div>
+      <nav class="screen-list" id="screenList" aria-label="Prototype screens"></nav>
+    </aside>
+
+    <section class="stage">
+      <div class="device-wrap">
+        <div class="phone" aria-label="NILA phone prototype">
+          <div class="statusbar"><span>9:41</span><span>● ● 78%</span></div>
+          <div id="phoneScreen"></div>
+        </div>
+        <div class="device-caption">CLICK THROUGH · ALL DATA IS DEMO DATA</div>
+      </div>
+    </section>
+
+    <aside class="notes">
+      <div class="eyebrow">Design direction</div>
+      <h2>Quiet intelligence</h2>
+      <p>NILA behaves like the phone itself. It answers directly, creates an interface only when choice helps, and opens an immersive app when the full experience matters.</p>
+      <div class="spec">
+        <div class="rail-label">Palette</div>
+        <div class="swatches" style="margin-top:10px">
+          <i class="swatch" style="background:#151513"></i><i class="swatch" style="background:#d9df36"></i><i class="swatch" style="background:#f2f0e9"></i><i class="swatch" style="background:#e84619"></i>
+        </div>
+      </div>
+      <div class="spec">
+        <div class="rail-label">Interaction rule</div>
+        <p>Answer when simple.<br>Generate UI when choice helps.<br>Redirect when immersion matters.<br>Act only with consent.</p>
+      </div>
+      <div class="review-tip">Review the information hierarchy and flow first. Motion, illustrations and final spacing can change after the core direction is approved.</div>
+    </aside>
+  </main>
+
+  <script>
+    const screens = [
+      ['welcome', 'Welcome'], ['permissions', 'Permission centre'], ['home', 'Home'],
+      ['voice', 'Voice mode'], ['answer', 'Simple answer'], ['canvas', 'Generated canvas'],
+      ['food', 'Food comparison'], ['order', 'Prepared order'], ['result', 'Action result'],
+      ['people', 'People & messages'], ['memory', 'Memory'], ['capabilities', 'Capabilities'],
+      ['apps', 'Immersive apps'], ['activity', 'Activity & approvals'], ['settings', 'Settings']
+    ];
+    let active = 'welcome';
+
+    const iconMarkup = {
+      home: '<path d="M3 10.5 12 3l9 7.5v9a1.5 1.5 0 0 1-1.5 1.5H15v-6H9v6H4.5A1.5 1.5 0 0 1 3 19.5z"/>',
+      people: '<circle cx="9" cy="8" r="3"/><path d="M3.5 20v-1.5A5.5 5.5 0 0 1 9 13a5.5 5.5 0 0 1 5.5 5.5V20M16 5.5a3 3 0 0 1 0 5.8M17 14a5 5 0 0 1 3.5 4.8V20"/>',
+      nila: '<path d="m12 2 1.65 5.05L19 8.7l-5.35 1.65L12 16l-1.65-5.65L5 8.7l5.35-1.65z"/><path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
+      activity: '<path d="M12 8v5l3 2"/><circle cx="12" cy="12" r="9"/><path d="m8 12 2 2 4-5"/>',
+      apps: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
+      mic: '<rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/>',
+      close: '<path d="m6 6 12 12M18 6 6 18"/>',
+      back: '<path d="m15 18-6-6 6-6"/>',
+      more: '<circle cx="5" cy="12" r="1" class="solid"/><circle cx="12" cy="12" r="1" class="solid"/><circle cx="19" cy="12" r="1" class="solid"/>',
+      search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+      plus: '<path d="M12 5v14M5 12h14"/>',
+      check: '<path d="m5 12 4 4L19 6"/>',
+      map: '<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3zM9 3v15M15 6v15"/>',
+      gallery: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m5 18 5-5 3 3 2-2 4 4"/>',
+      game: '<path d="M8 8h8a6 6 0 0 1 5.5 8.4l-.4.9a2.5 2.5 0 0 1-4.2.7l-1.4-1.8h-7L7.1 18a2.5 2.5 0 0 1-4.2-.7l-.4-.9A6 6 0 0 1 8 8Z"/><path d="M7 11v4M5 13h4M16.5 12h.01M18.5 14h.01"/>',
+      fingerprint: '<path d="M7 10a5 5 0 0 1 10 0c0 5-1 8-3 11M4 10a8 8 0 0 1 16 0c0 2-.1 4-.5 6M10 10a2 2 0 1 1 4 0c0 5-.6 7.5-2 11M7 14c-.2 2.5-.8 4.5-1.8 6M4 14c-.2 1.2-.5 2.3-1 3.5"/>'
+    };
+    const uiIcon = (name, size=20) => `<svg class="ui-icon" width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true">${iconMarkup[name] || iconMarkup.nila}</svg>`;
+    const nav = current => `<nav class="bottom-nav" aria-label="Primary">
+      ${[['home','home','Home'],['people','people','People'],['voice','nila','NILA'],['activity','activity','Activity'],['apps','apps','Apps']].map(([id,glyph,label]) =>
+        `<button class="${current===id?'active':''}" data-go="${id}"><b>${uiIcon(glyph,19)}</b>${label}</button>`).join('')}
+    </nav>`;
+    const headerBar = (title='NILA', action='GP', iconName='') => `<div class="topline"><span></span><span class="wordmark">${title}</span><button class="avatar" data-go="settings" aria-label="Settings">${iconName ? uiIcon(iconName,18) : action}</button></div>`;
+    const back = title => `<div class="topline"><button class="icon-button" data-go="home" aria-label="Back">${uiIcon('back')}</button><span class="eyebrow">${title}</span><button class="icon-button" data-go="activity" aria-label="Activity">${uiIcon('more')}</button></div>`;
+
+    const views = {
+      welcome: () => `<section class="screen lime">
+        <div class="topline"><span></span><span class="wordmark">NILA</span><span class="eyebrow">01 / 03</span></div>
+        <div style="margin-top:95px"><div class="brand-mark" style="width:72px;height:72px;font-size:34px">N</div>
+        <h1 class="title big" style="margin-top:28px">Your phone,<br>without the hunt.</h1>
+        <p class="subtitle">Ask in English, हिंदी or മലയാളം. NILA understands the outcome, prepares the action and keeps you in control.</p></div>
+        <div style="position:absolute;left:18px;right:18px;bottom:28px"><button class="button dark" data-go="permissions">Set up NILA →</button><p class="meta" style="text-align:center;color:#55540f">PRIVATE BY DESIGN · ON YOUR DEVICE</p></div>
+      </section>`,
+      permissions: () => `<section class="screen light">${back('SETUP · 02 / 03')}
+        <h1 class="title">Let NILA help,<br>one permission at a time.</h1><p class="subtitle">You can change every permission later. Sending, paying and booking always require confirmation.</p>
+        <div class="section stack">
+          ${[['●','Microphone','For private voice requests','Allowed'],['▣','Notifications','Read and summarise updates','Review'],['◎','Contacts & messages','Find people and prepare drafts','Review'],['◷','Alarms','Create alarms using Android','Allowed']].map(x=>`<div class="card"><div class="card-row"><span style="font-size:22px">${x[0]}</span><div style="flex:1"><h3>${x[1]}</h3><p>${x[2]}</p></div><span class="tag ${x[3]==='Review'?'ghost':''}">${x[3]}</span></div></div>`).join('')}
+        </div><button class="button dark" style="margin-top:18px" data-go="home">Continue to NILA</button>
+      </section>`,
+      home: () => `<section class="screen">${headerBar()}
+        <div class="greeting"><div class="eyebrow">FRIDAY · BENGALURU</div><h1>Good morning,<br>Gurupriyan.</h1></div>
+        <div class="summary"><span class="eyebrow">WHILE YOU WERE AWAY</span><strong>5 messages need you.</strong><p>Two are from people you usually reply to quickly. Nothing urgent was detected.</p><div class="summary-actions"><button class="mini-action" data-go="people">Show messages</button><button class="mini-action">Summarise aloud</button></div></div>
+        <div class="section"><div class="section-head"><span class="eyebrow">TRY SOMETHING</span><a data-go="capabilities">What can NILA do?</a></div><div class="chips"><button class="chip" data-go="food">Order dinner</button><button class="chip" data-go="answer">Calculate</button><button class="chip">Set an alarm</button><button class="chip" data-go="canvas">Plan a trip</button></div></div>
+        <div class="section stack"><div class="card"><div class="card-row"><div><span class="meta">NEXT</span><h3 style="margin-top:5px">Design review · 11:30</h3><p>Studio call with Devananda and Habis</p></div><span class="price">42m</span></div></div></div>
+        <div class="home-composer composer">${uiIcon('nila',17)}<span>What do you want to do?</span><button class="mic" data-go="voice" aria-label="Talk to NILA">${uiIcon('mic',19)}</button></div>${nav('home')}
+      </section>`,
+      voice: () => `<section class="screen"><div class="topline"><button class="icon-button" data-go="home" aria-label="Close">${uiIcon('close')}</button><span class="eyebrow">LISTENING · ENGLISH + മലയാളം</span><span></span></div>
+        <div class="orb-stage"><div class="orb">N</div><p class="transcript">“Find chicken biryani for three under ₹800...”</p><div class="wave">${'<i></i>'.repeat(7)}</div><p class="meta" style="margin-top:14px">TAP TO FINISH</p></div>
+        <button class="button secondary" data-go="food">Use this request</button>
+      </section>`,
+      answer: () => `<section class="screen">${back('ANSWER')}
+        <div class="answer-block"><span class="eyebrow">18% OF ₹4,250</span><div class="answer-number">₹765</div><div class="equation">4,250 × 0.18 = 765</div></div>
+        <div class="section"><span class="eyebrow">YOU MAY WANT</span><div class="stack" style="margin-top:10px"><div class="card"><div class="card-row"><div><h3>Add this as a tip</h3><p>Prepare ₹765 in your calculator</p></div><span>→</span></div></div><div class="card"><div class="card-row"><div><h3>Split the full amount</h3><p>Tell me how many people</p></div><span>→</span></div></div></div></div>
+        <div class="home-composer composer">${uiIcon('nila',17)}<span>Ask a follow-up</span><button class="mic" data-go="voice">${uiIcon('mic',19)}</button></div>${nav('home')}
+      </section>`,
+      canvas: () => `<section class="screen light">${back('GENERATED FOR THIS REQUEST')}
+        <h1 class="title">Reach the venue<br>before 5:15.</h1><p class="subtitle">I generated a route view because the trade-offs are easier to compare visually.</p>
+        <div class="canvas"><div class="canvas-map"><i class="route"></i><i class="pin a"></i><i class="pin b"></i></div><div class="timeline"><div class="timeline-row"><b>4:22</b><i class="dot"></i><span>Walk 4 min to Indiranagar Metro</span></div><div class="timeline-row"><b>4:31</b><i class="dot"></i><span>Metro toward Challaghatta · 5 stops</span></div><div class="timeline-row"><b>5:08</b><i class="dot"></i><span>Arrive · 7 minutes to spare</span></div></div></div>
+        <div class="button-row" style="margin-top:12px"><button class="button dark">Start route</button><button class="button secondary">Other options</button></div>
+      </section>`,
+      food: () => `<section class="screen">${back('FOOD · 12 OPTIONS')}
+        <h1 class="title">Two strong matches.</h1><p class="subtitle">For three people, under ₹800, arriving before 8 PM. Provider results are simulated.</p>
+        <div class="filterbar"><span class="filter">Under ₹800</span><span class="filter">Before 8 PM</span><span class="filter">Serves 3</span></div>
+        <div class="stack"><div class="card food-card selected"><div class="food-art"></div><div class="food-copy"><div class="card-row"><div><span class="tag">BEST FIT</span><h3 style="margin-top:8px">Meghana Foods</h3><p>Boneless chicken biryani · 4.6 ★ · 24 min</p></div><div><div class="score">94</div><div class="price" style="margin-top:8px">₹717</div></div></div></div></div>
+        <div class="card"><div class="card-row"><div><h3>Mani’s Dum Biryani</h3><p>Chicken dum biryani · 4.4 ★ · 29 min</p></div><div class="price">₹657 →</div></div></div></div>
+        <button class="button" style="margin-top:14px" data-go="order">Choose best fit</button>${nav('home')}
+      </section>`,
+      order: () => `<section class="screen">${back('PREPARED · NOT ORDERED')}
+        <span class="tag orange">CONFIRMATION REQUIRED</span><h1 class="title" style="margin-top:16px">Review the exact action.</h1>
+        <div class="section"><div class="order-line"><span>3 × Boneless chicken biryani</span><b>₹657</b></div><div class="order-line"><span>Delivery and taxes</span><b>₹60</b></div><div class="order-line"><span>Deliver to</span><b>Home</b></div><div class="order-line"><span>Provider</span><b>Mock provider</b></div><div class="total"><span>Total</span><span>₹717</span></div></div>
+        <div class="consent-box"><span class="eyebrow" style="color:#ff6a42">NILA WILL</span><p>Prepare this simulated order and record your approval. No real payment or order will occur in the prototype.</p></div>
+        <div class="fingerprint">${uiIcon('fingerprint',58)}</div><button class="button" data-go="result">Confirm with fingerprint</button><button class="button secondary" style="margin-top:8px" data-go="food">Change order</button>
+      </section>`,
+      result: () => `<section class="screen"><div class="success-mark">${uiIcon('check',46)}</div><span class="eyebrow" style="color:var(--lime)">SIMULATION COMPLETE</span><h1 class="title" style="margin-top:12px">Prepared.<br>You stayed in control.</h1><p class="subtitle">The demo stopped before a real provider or payment. This is the exact boundary NILA protects.</p>
+        <div class="receipt"><div class="card-row"><span class="meta">ACTION ID</span><b class="meta">NILA-2048</b></div><div class="order-line"><span>Meghana Foods</span><b>₹717</b></div><div class="order-line"><span>Approved</span><b>9:44 AM</b></div><div class="order-line"><span>Data shared</span><b>None</b></div></div>
+        <button class="button" style="margin-top:20px" data-go="home">Back home</button><button class="button secondary" style="margin-top:8px" data-go="activity">View activity</button>
+      </section>`,
+      people: () => `<section class="screen">${headerBar('PEOPLE','', 'plus')}<h1 class="title">Five messages<br>need you.</h1><p class="subtitle">NILA grouped updates by person, not by messaging app.</p>
+        <div class="section stack"><div class="card selected"><div class="person"><div class="person-photo">A</div><div style="flex:1"><div class="card-row"><h3>Arjun Menon</h3><i class="unread"></i></div><p>“Are we still meeting at the studio?”</p><span class="meta">WHATSAPP · 4 MIN</span></div></div></div><div class="card"><div class="person"><div class="person-photo">D</div><div><h3>Devananda</h3><p>Sent 3 launcher references</p><span class="meta">MESSAGES · 21 MIN</span></div></div></div></div>
+        <div class="draft">Running a little late. I’ll be at the studio by 6:30.</div><p class="meta" style="margin:8px 4px 16px">DRAFTED IN YOUR USUAL TONE · NOT SENT</p><div class="button-row"><button class="button">Review & send</button><button class="button secondary">Edit</button></div>${nav('people')}
+      </section>`,
+      memory: () => `<section class="screen">${back('MEMORY · ON DEVICE')}<h1 class="title">What NILA<br>remembers.</h1><p class="subtitle">Every memory has a source. You can change or forget it at any time.</p>
+        <div class="section stack"><div class="card memory-card selected"><div><span class="tag">FOOD</span><h3 style="margin-top:12px">Vegetarian food on Fridays</h3><p>Used only while comparing meals.</p></div><div class="memory-source"><span>YOU SAID THIS</span><span>2 DAYS AGO · ⋯</span></div></div><div class="card memory-card"><div><span class="tag ghost">TRAVEL</span><h3 style="margin-top:12px">Prefer metro when it saves 10+ minutes</h3><p>Suggested from three confirmed choices.</p></div><div class="memory-source"><span>INFERRED · REVIEWABLE</span><span>12 SEP · ⋯</span></div></div></div><button class="button secondary" style="margin-top:14px">＋ Add a memory</button>
+      </section>`,
+      capabilities: () => `<section class="screen">${back('CAPABILITIES')}<h1 class="title">What NILA<br>can use.</h1><p class="subtitle">Native phone tools and installed services appear in one trusted registry.</p>
+        <div class="section tool-grid">${[['◷','Alarms','Android · Ready'],['▤','Messages','Android · Limited'],['⌁','Food','Mock MCP · Demo'],['⌖','Routes','Maps · Ready'],['＋','Calculator','Native · Offline'],['◇','Memory','Local · Private'],['♫','Music','Redirect'],['□','Calendar','Permission needed']].map((x,i)=>`<div class="tool"><span class="tool-icon">${x[0]}</span><div><strong>${x[1]}</strong><small>${x[2]}</small></div><span class="tag ${i===2?'orange':'ghost'}">${i===2?'SIMULATED':i===7?'SET UP':'AVAILABLE'}</span></div>`).join('')}</div>${nav('apps')}
+      </section>`,
+      apps: () => `<section class="screen">${headerBar('IMMERSIVE','', 'search')}<h1 class="title">Some experiences<br>deserve the full screen.</h1><p class="subtitle">Movies, games and social feeds open in their own experience. NILA gets you there.</p>
+        <div class="section app-grid">
+          <button class="app-tile"><span class="app-icon youtube"><img src="assets/youtube.svg" alt=""></span><small>YouTube</small></button>
+          <button class="app-tile"><span class="app-icon netflix"><img src="assets/netflix.svg" alt=""></span><small>Netflix</small></button>
+          <button class="app-tile"><span class="app-icon instagram"><img src="assets/instagram.svg" alt=""></span><small>Instagram</small></button>
+          <button class="app-tile"><span class="app-icon spotify"><img src="assets/spotify.svg" alt=""></span><small>Spotify</small></button>
+          <button class="app-tile"><span class="app-icon">${uiIcon('game',25)}</span><small>BGMI</small></button>
+          <button class="app-tile"><span class="app-icon">${uiIcon('map',25)}</span><small>Maps</small></button>
+          <button class="app-tile"><span class="app-icon">${uiIcon('gallery',25)}</span><small>Gallery</small></button>
+          <button class="app-tile"><span class="app-icon">${uiIcon('apps',25)}</span><small>All apps</small></button>
+        </div>
+        <div class="section card"><span class="eyebrow">ASK INSTEAD</span><h3 style="margin-top:10px">“Play the next episode of…”</h3><p>NILA can take you directly to the right experience.</p></div>${nav('apps')}
+      </section>`,
+      activity: () => `<section class="screen">${headerBar('ACTIVITY','', 'search')}<h1 class="title">Everything NILA<br>did for you.</h1><div class="chips" style="margin-top:18px"><button class="chip">All</button><button class="chip">Prepared</button><button class="chip">Approved</button></div>
+        <div class="section stack"><div class="card activity-item"><span class="tag">APPROVED</span><h3 style="margin-top:9px">Food order simulation</h3><p>Meghana Foods · ₹717 · No data shared</p><span class="meta">TODAY · 9:44 AM</span></div><div class="card activity-item"><span class="tag ghost">COMPLETED</span><h3 style="margin-top:9px">Alarm set for 6:30 AM</h3><p>Sent to Android Clock</p><span class="meta">YESTERDAY · 10:18 PM</span></div><div class="card activity-item warning"><span class="tag orange">CANCELLED</span><h3 style="margin-top:9px">Message to Arjun</h3><p>You changed your mind before sending</p><span class="meta">MONDAY · 5:52 PM</span></div></div>${nav('activity')}
+      </section>`,
+      settings: () => `<section class="screen">${back('SETTINGS')}<h1 class="title">NILA is yours.</h1><p class="subtitle">Language, voice, privacy and intelligence stay understandable.</p>
+        <div class="section"><span class="eyebrow">LANGUAGE & VOICE</span><div class="setting"><div><strong>Languages</strong><small>English · हिंदी · മലയാളം</small></div><span>›</span></div><div class="setting"><div><strong>NILA voice</strong><small>Lakshmi · on-device candidate</small></div><button class="mini-action">Preview</button></div></div>
+        <div class="section"><span class="eyebrow">PRIVACY</span><div class="setting"><div><strong>Keep memory on device</strong><small>Nothing syncs to a server</small></div><i class="toggle on"></i></div><div class="setting"><div><strong>Always confirm commits</strong><small>Pay, send, book, delete or share</small></div><i class="toggle on"></i></div><div class="setting"><div><strong>Permission centre</strong><small>4 allowed · 2 limited</small></div><span>›</span></div></div>
+        <div class="section card"><div class="card-row"><div><span class="eyebrow">ON-DEVICE AI</span><h3 style="margin-top:8px">Ready</h3><p>Function router + conversational model</p></div><span class="tag">PRIVATE</span></div><div class="progress" style="margin-top:14px"><i></i></div><p>2.1 GB of local model storage</p></div>
+      </section>`
+    };
+
+    function render() {
+      document.getElementById('screenList').innerHTML = screens.map(([id,label], i) =>
+        `<button class="screen-link ${id===active?'active':''}" data-go="${id}"><span>${String(i+1).padStart(2,'0')}</span>${label}</button>`).join('');
+      document.getElementById('phoneScreen').innerHTML = views[active]();
+      document.querySelectorAll('[data-go]').forEach(button => button.addEventListener('click', () => {
+        const target = button.dataset.go;
+        if (views[target]) { active = target; render(); }
+      }));
+    }
+    render();
+  </script>
+</body>
+</html>
