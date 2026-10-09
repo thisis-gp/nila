@@ -24,6 +24,14 @@ class NilaEngineTest {
     }
 
     @Test
+    fun parsesDottedMeridiemFromSpeech() {
+        // Android's recognizer transcribed "six thirty PM" as "6:30 p.m." on the iQOO 15.
+        assertEquals(NilaResponse.Alarm(18, 30), engine.respond("set an alarm for 6:30 p.m."))
+        assertEquals(NilaResponse.Alarm(6, 30), engine.respond("set an alarm for 6:30 a.m."))
+        assertEquals(NilaResponse.Alarm(19, 0), engine.respond("Set an alarm for 7p.m."))
+    }
+
+    @Test
     fun createsFoodComparison() {
         val response = engine.respond("Order chicken biryani under 250")
         assertTrue(response is NilaResponse.Choices)

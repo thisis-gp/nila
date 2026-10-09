@@ -30,7 +30,8 @@ class NilaEngine {
     )
 
     fun respond(input: String): NilaResponse {
-        val normalized = input.trim().lowercase()
+        // Speech recognizers write "6:30 p.m."; fold a.m./p.m. into am/pm so the time is not misread.
+        val normalized = input.trim().lowercase().replace(Regex("""(?<=[\d\s])([ap])\.\s?m\.?"""), "$1m")
         if (normalized.isBlank()) return NilaResponse.Text("Tell me what you want to do.")
 
         percentage.find(normalized)?.let { match ->
