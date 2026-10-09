@@ -96,10 +96,18 @@ private fun zeptoProductTurn(
     context: Context,
     coroutineScope: kotlinx.coroutines.CoroutineScope,
     appendTurn: (Turn) -> Unit,
+    desiredSize: String? = null,
 ): Turn {
     val deviceId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
         ?: "nila-device"
-    val cheapest = products.sortedBy { it.priceInPaisa }.take(6)
+    val desiredNormalized = desiredSize?.let { normalizedSize(it) }
+    val cheapest = products.sortedWith(
+        compareByDescending<ZeptoProduct> { product ->
+            desiredNormalized != null && normalizedSize(product.packSize)?.let { (unit, value) ->
+                unit == desiredNormalized.first && kotlin.math.abs(value - desiredNormalized.second) < 1.0
+            } == true
+        }.thenBy { it.priceInPaisa },
+    ).take(6)
     val productChoices = cheapest.map { product ->
         AsyncChoice(
             title = product.name,
@@ -259,33 +267,37 @@ private fun NilaApp(resumeVersion: Int) {
                     val newAddress = pending.client.listSavedAddresses().firstOrNull { it.id !in before }
                         ?: error("Address was saved but could not be found again.")
                     pending.client.selectSavedAddress(newAddress.id)
-                    pending.client.searchProducts(pending.item)
+                    val parsed = parseOrderItem(pending.item)
+                    pending.client.searchProducts(parsed.searchQuery) to parsed.desiredSize
                 }
                 withContext(Dispatchers.Main) {
                     outcome.fold(
-                        onSuccess = { products -> turns += zeptoProductTurn(pending.item, products, pending.client, context, scope) { t -> turns += t } },
+                        onSuccess = { (products, desiredSize) -> turns += zeptoProductTurn(pending.item, products, pending.client, context, scope, { t -> turns += t }, desiredSize) },
                         onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
                     )
                 }
             }
             return
         }
-        if (prompt.lowercase().startsWith("buy ")) {
-            val item = prompt.substring("buy ".length).trim()
-            val category = classifyShoppingIntent(item)
-            input = ""
-            if (category == ShoppingCategory.FOOD) {
-                turns += Turn(
-                    prompt,
-                    NilaResponse.GroupedChoices(
-                        "\"$item\" is a restaurant order — Zepto doesn't do food:",
-                        listOf(swiggyPendingGroup(category)),
-                    ),
-                )
-                return
-            }
-            turns += Turn(prompt, NilaResponse.Text("Checking your Zepto delivery address..."))
-            scope.launch(Dispatchers.IO) {
+        val orderItem = extractOrderItem(prompt)
+        if (orderItem != null) {
+            val category = classifyShoppingIntent(orderItem)
+            val isOldFoodDemo = prompt.lowercase().startsWith("order ") && category == ShoppingCategory.FOOD
+            if (!isOldFoodDemo) {
+                input = ""
+                if (category == ShoppingCategory.FOOD) {
+                    turns += Turn(
+                        prompt,
+                        NilaResponse.GroupedChoices(
+                            "\"$orderItem\" is a restaurant order — Zepto doesn't do food:",
+                            listOf(swiggyPendingGroup(category)),
+                        ),
+                    )
+                    return
+                }
+                val item = orderItem
+                turns += Turn(prompt, NilaResponse.Text("Checking your Zepto delivery address..."))
+                scope.launch(Dispatchers.IO) {
                 val client = ZeptoMcpClient(zeptoAuth)
                 val outcome = runCatching { client.listSavedAddresses() }
                 outcome.fold(
@@ -299,13 +311,14 @@ private fun NilaApp(resumeVersion: Int) {
                             val addressChoices = addresses.map { address ->
                                 AsyncChoice(address.label.ifBlank { "Saved address" }, address.addressLine, "", "") {
                                     scope.launch(Dispatchers.IO) {
+                                        val parsed = parseOrderItem(item)
                                         val searchOutcome = runCatching {
                                             client.selectSavedAddress(address.id)
-                                            client.searchProducts(item)
+                                            client.searchProducts(parsed.searchQuery)
                                         }
                                         withContext(Dispatchers.Main) {
                                             searchOutcome.fold(
-                                                onSuccess = { products -> turns += zeptoProductTurn(item, products, client, context, scope) { t -> turns += t } },
+                                                onSuccess = { products -> turns += zeptoProductTurn(item, products, client, context, scope, { t -> turns += t }, parsed.desiredSize) },
                                                 onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
                                             )
                                         }
@@ -326,6 +339,7 @@ private fun NilaApp(resumeVersion: Int) {
                 )
             }
             return
+            }
         }
         input = ""
         val pendingIndex = turns.size
