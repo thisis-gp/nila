@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -51,6 +53,14 @@ class MainActivity : ComponentActivity() {
 }
 
 private data class Turn(val user: String, val response: NilaResponse)
+
+private val Ink = Color(0xFF151513)
+private val Panel = Color(0xFF22221F)
+private val CardInk = Color(0xFF2D2D29)
+private val Paper = Color(0xFFF2F0E9)
+private val Muted = Color(0xFFAAA99F)
+private val Lime = Color(0xFFD9DF36)
+private val Orange = Color(0xFFE84619)
 
 @Composable
 private fun NilaApp() {
@@ -74,26 +84,39 @@ private fun NilaApp() {
 
     MaterialTheme(
         colorScheme = MaterialTheme.colorScheme.copy(
-            primary = Color(0xFFD9DF36),
-            onPrimary = Color(0xFF151513),
-            background = Color(0xFF151513),
-            surface = Color(0xFF22221F),
-            onSurface = Color(0xFFF2F0E9),
+            primary = Lime,
+            onPrimary = Ink,
+            background = Ink,
+            surface = Panel,
+            onSurface = Paper,
         )
     ) {
         Surface(Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xFF151513))
+                    .background(Ink)
                     .imePadding()
                     .padding(20.dp),
             ) {
-                Text("NILA", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black)
-                Text("Say what you need.", color = Color(0xFFD9DF36))
-                Spacer(Modifier.height(16.dp))
+                NilaHeader()
+                Spacer(Modifier.height(24.dp))
 
                 if (turns.isEmpty()) {
+                    Text(
+                        "Your phone,\nwithout the hunt.",
+                        fontSize = 36.sp,
+                        lineHeight = 36.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "Ask for an outcome. NILA answers, creates a useful view, or opens the full experience.",
+                        modifier = Modifier.padding(top = 12.dp, bottom = 20.dp),
+                        color = Muted,
+                        lineHeight = 20.sp,
+                    )
+                    DemoSummary()
+                    Spacer(Modifier.height(20.dp))
                     DemoPrompts(::submit)
                 }
 
@@ -105,9 +128,11 @@ private fun NilaApp() {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("YOU", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                             Text(turn.user, style = MaterialTheme.typography.titleMedium)
-                            ResponseView(turn.response, context) { message ->
-                                turns += Turn("Confirmation", NilaResponse.Text(message))
-                            }
+                            ResponseView(
+                                response = turn.response,
+                                context = context,
+                                prepare = engine::prepare,
+                            ) { label, next -> turns += Turn(label, next) }
                         }
                     }
                 }
@@ -119,9 +144,51 @@ private fun NilaApp() {
                     placeholder = { Text("What do you want to do?") },
                     singleLine = true,
                     keyboardActions = KeyboardActions(onDone = { submit() }),
-                    trailingIcon = { Button(onClick = { submit() }) { Text("Ask") } },
+                    trailingIcon = { Button(onClick = { submit() }) { Text("Go") } },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun NilaHeader() {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier.size(36.dp).background(Lime, RoundedCornerShape(18.dp)),
+                contentAlignment = Alignment.Center,
+            ) { Text("N", color = Ink, fontWeight = FontWeight.Black) }
+            Text(
+                "NILA",
+                modifier = Modifier.padding(start = 10.dp),
+                fontWeight = FontWeight.Black,
+                letterSpacing = 2.sp,
+            )
+        }
+        Text("ON DEVICE", color = Lime, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+@Composable
+private fun DemoSummary() {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Panel),
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("PRIVATE BY DESIGN", color = Lime, style = MaterialTheme.typography.labelSmall)
+            Text("You decide before NILA acts.", modifier = Modifier.padding(top = 8.dp), fontWeight = FontWeight.Bold)
+            Text(
+                "This demo uses local rules and simulated provider results. Sending, paying and booking always stop for confirmation.",
+                modifier = Modifier.padding(top = 5.dp),
+                color = Muted,
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
     }
 }
@@ -140,14 +207,19 @@ private fun DemoPrompts(onSelect: (String) -> Unit) {
             Button(
                 onClick = { onSelect(prompt) },
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2D2D29)),
+                colors = ButtonDefaults.buttonColors(containerColor = CardInk),
             ) { Text(prompt, color = Color.White) }
         }
     }
 }
 
 @Composable
-private fun ResponseView(response: NilaResponse, context: Context, addStatus: (String) -> Unit) {
+private fun ResponseView(
+    response: NilaResponse,
+    context: Context,
+    prepare: (Choice) -> NilaResponse.Confirmation,
+    addTurn: (String, NilaResponse) -> Unit,
+) {
     when (response) {
         is NilaResponse.Text -> Text(response.value)
         is NilaResponse.Remember -> Text("I'll remember: ${response.fact}")
@@ -162,8 +234,8 @@ private fun ResponseView(response: NilaResponse, context: Context, addStatus: (S
                 putExtra(AlarmClock.EXTRA_SKIP_UI, true)
             }
             runCatching { context.startActivity(intent) }
-                .onSuccess { addStatus("Alarm request sent to Android.") }
-                .onFailure { addStatus("No alarm application is available.") }
+                .onSuccess { addTurn("Action result", NilaResponse.Text("Alarm request sent to Android.")) }
+                .onFailure { addTurn("Action result", NilaResponse.Text("No alarm application is available.")) }
         }
         is NilaResponse.OpenApp -> ActionCard(
             title = response.name,
@@ -173,15 +245,43 @@ private fun ResponseView(response: NilaResponse, context: Context, addStatus: (S
             val launch = context.packageManager.getLaunchIntentForPackage(response.packageName)
                 ?: Intent(Intent.ACTION_VIEW, Uri.parse(response.fallbackUrl))
             runCatching { context.startActivity(launch) }
-                .onFailure { addStatus("${response.name} could not be opened.") }
+                .onFailure { addTurn("Action result", NilaResponse.Text("${response.name} could not be opened.")) }
         }
         is NilaResponse.Choices -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(response.intro)
             response.items.forEach { item ->
-                ActionCard(item.title, "${item.detail} · ${item.eta}", "Choose ${item.price}") {
-                    addStatus("Prepared ${item.title} for ${item.price}. Demo only: nothing was ordered.")
+                ActionCard(item.title, "${item.detail} · ${item.eta}", "Review ${item.price}") {
+                    addTurn("Prepared action", prepare(item))
                 }
             }
+        }
+        is NilaResponse.Confirmation -> ConfirmationCard(response) {
+            addTurn(
+                "Action result",
+                NilaResponse.Text("Simulation complete. No order was placed and no payment or data was shared."),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ConfirmationCard(response: NilaResponse.Confirmation, onConfirm: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF321F19)),
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("CONFIRMATION REQUIRED", color = Orange, style = MaterialTheme.typography.labelSmall)
+            Text(response.title, fontWeight = FontWeight.Bold)
+            Text(response.detail, color = Muted, style = MaterialTheme.typography.bodySmall)
+            Text(response.price, color = Paper, style = MaterialTheme.typography.titleLarge)
+            Text(
+                "Demo only. This stops before a real provider, order or payment.",
+                color = Muted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(onClick = onConfirm, modifier = Modifier.fillMaxWidth()) { Text("Confirm simulation") }
         }
     }
 }
@@ -190,7 +290,7 @@ private fun ResponseView(response: NilaResponse, context: Context, addStatus: (S
 private fun ActionCard(title: String, detail: String, action: String, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF292925)),
+        colors = CardDefaults.cardColors(containerColor = CardInk),
         shape = RoundedCornerShape(16.dp),
     ) {
         Row(

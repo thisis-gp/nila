@@ -15,6 +15,7 @@ sealed interface NilaResponse {
     data class Alarm(val hour: Int, val minute: Int) : NilaResponse
     data class OpenApp(val name: String, val packageName: String, val fallbackUrl: String) : NilaResponse
     data class Choices(val intro: String, val items: List<Choice>) : NilaResponse
+    data class Confirmation(val title: String, val detail: String, val price: String) : NilaResponse
     data class Remember(val fact: String) : NilaResponse
 }
 
@@ -74,5 +75,11 @@ class NilaEngine {
             "I can calculate, set an alarm, remember a preference, compare mock food options, or open YouTube, Netflix, Instagram and BGMI."
         )
     }
+
+    fun prepare(choice: Choice) = NilaResponse.Confirmation(
+        title = "Review ${choice.title}",
+        detail = "${choice.detail} · ${choice.eta}",
+        price = choice.price,
+    )
 }
 

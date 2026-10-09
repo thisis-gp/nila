@@ -31,6 +31,20 @@ class NilaEngineTest {
     }
 
     @Test
+    fun preparesFoodChoiceWithoutOrdering() {
+        val choices = engine.respond("Order chicken biryani under 250") as NilaResponse.Choices
+
+        assertEquals(
+            NilaResponse.Confirmation(
+                title = "Review Meghana Foods",
+                detail = "Chicken boneless biryani · 4.6★ · 24 min",
+                price = "₹239",
+            ),
+            engine.prepare(choices.items.first()),
+        )
+    }
+
+    @Test
     fun remembersExplicitFact() {
         assertEquals(
             NilaResponse.Remember("I prefer vegetarian food on Fridays"),
