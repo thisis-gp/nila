@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.AlarmClock
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -54,13 +55,13 @@ class MainActivity : ComponentActivity() {
 
 private data class Turn(val user: String, val response: NilaResponse)
 
-private val Ink = Color(0xFF151513)
-private val Panel = Color(0xFF22221F)
-private val CardInk = Color(0xFF2D2D29)
-private val Paper = Color(0xFFF2F0E9)
-private val Muted = Color(0xFFAAA99F)
-private val Lime = Color(0xFFD9DF36)
-private val Orange = Color(0xFFE84619)
+internal val Ink = Color(0xFF151513)
+internal val Panel = Color(0xFF22221F)
+internal val CardInk = Color(0xFF2D2D29)
+internal val Paper = Color(0xFFF2F0E9)
+internal val Muted = Color(0xFFAAA99F)
+internal val Lime = Color(0xFFD9DF36)
+internal val Orange = Color(0xFFE84619)
 
 @Composable
 private fun NilaApp() {
@@ -69,6 +70,12 @@ private fun NilaApp() {
     val turns = remember { mutableStateListOf<Turn>() }
     var input by remember { mutableStateOf("") }
     val memory = remember { context.getSharedPreferences("nila_memory", Context.MODE_PRIVATE) }
+    val navigation = remember { NilaNavigation(NilaScreen.Home) }
+    var screen by remember { mutableStateOf(navigation.current) }
+
+    fun open(destination: NilaScreen) {
+        screen = navigation.open(destination)
+    }
 
     fun submit(prompt: String = input) {
         if (prompt.isBlank()) return
@@ -82,6 +89,8 @@ private fun NilaApp() {
         input = ""
     }
 
+    BackHandler(enabled = navigation.canGoBack) { screen = navigation.back() }
+
     MaterialTheme(
         colorScheme = MaterialTheme.colorScheme.copy(
             primary = Lime,
@@ -92,67 +101,83 @@ private fun NilaApp() {
         )
     ) {
         Surface(Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Ink)
-                    .imePadding()
-                    .padding(20.dp),
-            ) {
-                NilaHeader()
-                Spacer(Modifier.height(24.dp))
-
-                if (turns.isEmpty()) {
-                    Text(
-                        "Your phone,\nwithout the hunt.",
-                        fontSize = 36.sp,
-                        lineHeight = 36.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        "Ask for an outcome. NILA answers, creates a useful view, or opens the full experience.",
-                        modifier = Modifier.padding(top = 12.dp, bottom = 20.dp),
-                        color = Muted,
-                        lineHeight = 20.sp,
-                    )
-                    DemoSummary()
-                    Spacer(Modifier.height(20.dp))
-                    DemoPrompts(::submit)
-                }
-
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+            if (screen == NilaScreen.Home) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Ink)
+                        .imePadding()
+                        .padding(20.dp),
                 ) {
-                    items(turns) { turn ->
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("YOU", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                            Text(turn.user, style = MaterialTheme.typography.titleMedium)
-                            ResponseView(
-                                response = turn.response,
-                                context = context,
-                                prepare = engine::prepare,
-                            ) { label, next -> turns += Turn(label, next) }
+                    NilaHeader { open(NilaScreen.Settings) }
+                    Spacer(Modifier.height(24.dp))
+
+                    if (turns.isEmpty()) {
+                        Text(
+                            "Your phone,\nwithout the hunt.",
+                            fontSize = 36.sp,
+                            lineHeight = 36.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "Ask for an outcome. NILA answers, creates a useful view, or opens the full experience.",
+                            modifier = Modifier.padding(top = 12.dp, bottom = 20.dp),
+                            color = Muted,
+                            lineHeight = 20.sp,
+                        )
+                        DemoSummary()
+                        Spacer(Modifier.height(14.dp))
+                        HomeCatalogueLinks(::open)
+                        Spacer(Modifier.height(14.dp))
+                        DemoPrompts(::submit)
+                    }
+
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        items(turns) { turn ->
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("YOU", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                Text(turn.user, style = MaterialTheme.typography.titleMedium)
+                                ResponseView(
+                                    response = turn.response,
+                                    context = context,
+                                    prepare = engine::prepare,
+                                ) { label, next -> turns += Turn(label, next) }
+                            }
                         }
                     }
-                }
 
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("What do you want to do?") },
-                    singleLine = true,
-                    keyboardActions = KeyboardActions(onDone = { submit() }),
-                    trailingIcon = { Button(onClick = { submit() }) { Text("Go") } },
-                )
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("What do you want to do?") },
+                        singleLine = true,
+                        keyboardActions = KeyboardActions(onDone = { submit() }),
+                        trailingIcon = { Button(onClick = { submit() }) { Text("Go") } },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    BottomNavigation(::open)
+                }
+            } else {
+                NilaScreenCatalogue(
+                    screen = screen,
+                    onOpen = ::open,
+                    onBack = { screen = navigation.back() },
+                ) { app ->
+                    val launch = context.packageManager.getLaunchIntentForPackage(app.packageName)
+                        ?: Intent(Intent.ACTION_VIEW, Uri.parse(app.fallbackUrl))
+                    runCatching { context.startActivity(launch) }.isSuccess
+                }
             }
         }
     }
 }
 
 @Composable
-private fun NilaHeader() {
+private fun NilaHeader(onSettings: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -170,7 +195,28 @@ private fun NilaHeader() {
                 letterSpacing = 2.sp,
             )
         }
-        Text("ON DEVICE", color = Lime, style = MaterialTheme.typography.labelSmall)
+        Button(onClick = onSettings, contentPadding = ButtonDefaults.TextButtonContentPadding) {
+            Text("Settings", style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+@Composable
+private fun HomeCatalogueLinks(onOpen: (NilaScreen) -> Unit) {
+    Text("TRUSTED UI", style = MaterialTheme.typography.labelSmall, color = Muted)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf(
+            NilaScreen.Food to "Compare",
+            NilaScreen.Answer to "Answer",
+            NilaScreen.GeneratedCanvas to "Canvas",
+        ).forEach { (screen, label) ->
+            Button(
+                onClick = { onOpen(screen) },
+                modifier = Modifier.weight(1f),
+                contentPadding = ButtonDefaults.TextButtonContentPadding,
+                colors = ButtonDefaults.buttonColors(containerColor = CardInk),
+            ) { Text(label, fontSize = 11.sp) }
+        }
     }
 }
 
