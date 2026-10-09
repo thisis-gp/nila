@@ -108,6 +108,12 @@ class VoiceListener(
         })
     }
 
+    /** Ends listening but keeps what was heard: the recognizer delivers its final text to onFinal. */
+    fun finish() {
+        recognizer?.stopListening()
+    }
+
+    /** Cancels listening and discards anything heard. */
     fun stop() {
         recognizer?.destroy()
         recognizer = null
@@ -117,7 +123,8 @@ class VoiceListener(
 }
 
 /**
- * Language chip and mic for the chat input. Partial words go to [onPartial]; the final text is sent with [onFinal].
+ * Language chip and mic for the chat input. Tap to listen; tap again, or pause, to send.
+ * Partial words go to [onPartial]; the final text is sent with [onFinal].
  * Failures go to [onMessage] so the user always knows why listening stopped.
  */
 @Composable
@@ -165,18 +172,23 @@ fun VoiceMic(onPartial: (String) -> Unit, onFinal: (String) -> Unit, onMessage: 
             },
             enabled = !listening,
             modifier = Modifier.semantics { contentDescription = "Voice language: $languageName. Tap to change." },
-        ) { Text(voiceChipLabel(tag), color = Muted, fontSize = 14.sp) }
+        ) {
+            // While listening the chip becomes the live status, so it is clear the mic is on.
+            if (listening) Text("Listening…", color = Lime, fontSize = 14.sp)
+            else Text(voiceChipLabel(tag), color = Muted, fontSize = 14.sp)
+        }
         IconButton(onClick = {
             when {
-                listening -> { listener.stop(); listening = false }
+                // A second tap means "I'm done": send what was heard instead of throwing it away.
+                listening -> listener.finish()
                 ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED -> listen()
                 else -> askPermission.launch(Manifest.permission.RECORD_AUDIO)
             }
         }) {
             Icon(
-                painterResource(if (listening) LucideR.drawable.lucide_ic_mic_off else LucideR.drawable.lucide_ic_mic),
-                contentDescription = if (listening) "Stop listening" else "Speak",
-                tint = if (listening) Orange else Paper,
+                painterResource(LucideR.drawable.lucide_ic_mic),
+                contentDescription = if (listening) "Finish speaking" else "Speak",
+                tint = if (listening) Lime else Paper,
             )
         }
     }
