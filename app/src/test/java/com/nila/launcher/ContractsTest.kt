@@ -39,11 +39,13 @@ class ContractsTest {
     }
 
     @Test
-    fun paiseAcceptsOnlyWholeNumbers() {
+    fun paiseAcceptsOnlyNonNegativeWholeNumbers() {
         val pay = CapabilityDescriptor("pay", "Pay", listOf(Param("amount", ParamType.PAISE)), PermissionClass.COMMIT)
         val payRegistry = mapOf(pay.id to pay)
         assertTrue(checkCall(ToolCall("pay", mapOf("amount" to 23900)), payRegistry) is CallCheck.Ok)
         assertTrue(checkCall(ToolCall("pay", mapOf("amount" to 239.0)), payRegistry) is CallCheck.Rejected)
+        assertTrue(checkCall(ToolCall("pay", mapOf("amount" to -1)), payRegistry) is CallCheck.Rejected)
+        assertTrue(checkCall(ToolCall("pay", mapOf("amount" to Long.MIN_VALUE)), payRegistry) is CallCheck.Rejected)
     }
 
     @Test

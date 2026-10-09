@@ -8,7 +8,7 @@ enum class PermissionClass { READ, PREPARE, COMMIT }
 /** Every result and component says where its data came from, so fixtures are never shown as real. */
 enum class DataSource { REAL, FIXTURE, SIMULATED }
 
-/** PAISE is a whole-number amount of money in paise, shown to people as rupees. */
+/** PAISE is a whole, non-negative amount of money in paise, shown to people as rupees. */
 enum class ParamType { STRING, INT, NUMBER, BOOLEAN, PAISE }
 
 /** [label] is the name people see, for example on a confirmation card. */
@@ -53,7 +53,7 @@ fun checkCall(call: ToolCall, registry: Map<String, CapabilityDescriptor>): Call
             ParamType.INT -> value is Int
             ParamType.NUMBER -> value is Number
             ParamType.BOOLEAN -> value is Boolean
-            ParamType.PAISE -> value is Int || value is Long
+            ParamType.PAISE -> (value is Int || value is Long) && (value as Number).toLong() >= 0
         }
         if (!typeOk) return CallCheck.Rejected("Argument $name must be ${param.type}")
     }
