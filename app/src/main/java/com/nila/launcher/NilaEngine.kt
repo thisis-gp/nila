@@ -162,8 +162,23 @@ class NilaEngine {
     private fun confirmation(call: ToolCall, capability: CapabilityDescriptor) = NilaResponse.NeedsConfirmation(
         call = call,
         capability = capability,
-        lines = capability.params.mapNotNull { param -> call.args[param.name]?.let { param.name to it.toString() } },
+        lines = capability.params.mapNotNull { param -> call.args[param.name]?.let { param.label to display(param.type, it) } },
     )
+
+    /** Formats a validated argument for people. Paise become rupees in Indian grouping, such as ₹1,23,456.00. */
+    private fun display(type: ParamType, value: Any): String = when (type) {
+        ParamType.PAISE -> rupees((value as Number).toLong())
+        else -> value.toString()
+    }
+
+    // Grouped by hand: JVM and Android locale data disagree on Indian grouping.
+    private fun rupees(paise: Long): String {
+        val sign = if (paise < 0) "-" else ""
+        val whole = (kotlin.math.abs(paise) / 100).toString()
+        val grouped = if (whole.length <= 3) whole
+        else whole.dropLast(3).reversed().chunked(2).joinToString(",").reversed() + "," + whole.takeLast(3)
+        return "$sign₹$grouped.${(kotlin.math.abs(paise) % 100).toString().padStart(2, '0')}"
+    }
 
     /** 24-hour value, or null when invalid. With am/pm, only 1-12 is accepted. */
     private fun alarmHour(hour: Int, meridiem: String?): Int? = when (meridiem) {

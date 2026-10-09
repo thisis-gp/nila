@@ -53,17 +53,21 @@ class NilaEngineTest {
         val order = CapabilityDescriptor(
             id = "place_order",
             description = "Place the order",
-            params = listOf(Param("merchant", ParamType.STRING), Param("items", ParamType.STRING), Param("total_paise", ParamType.INT)),
+            params = listOf(
+                Param("merchant", ParamType.STRING, label = "Merchant"),
+                Param("items", ParamType.STRING, label = "Items"),
+                Param("total_paise", ParamType.PAISE, label = "Total"),
+            ),
             permission = PermissionClass.COMMIT,
         )
         val registry = engine.capabilities + (order.id to order)
-        val call = ToolCall("place_order", mapOf("total_paise" to 23900, "merchant" to "Meghana Foods", "items" to "1 chicken biryani"))
+        val call = ToolCall("place_order", mapOf("total_paise" to 12345600, "merchant" to "Meghana Foods", "items" to "1 chicken biryani"))
 
         assertEquals(
             NilaResponse.NeedsConfirmation(
                 call = call,
                 capability = order,
-                lines = listOf("merchant" to "Meghana Foods", "items" to "1 chicken biryani", "total_paise" to "23900"),
+                lines = listOf("Merchant" to "Meghana Foods", "Items" to "1 chicken biryani", "Total" to "₹1,23,456.00"),
             ),
             engine.execute(NilaIntent.Call(call), registry = registry),
         )

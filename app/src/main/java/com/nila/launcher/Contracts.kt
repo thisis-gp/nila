@@ -8,9 +8,11 @@ enum class PermissionClass { READ, PREPARE, COMMIT }
 /** Every result and component says where its data came from, so fixtures are never shown as real. */
 enum class DataSource { REAL, FIXTURE, SIMULATED }
 
-enum class ParamType { STRING, INT, NUMBER, BOOLEAN }
+/** PAISE is a whole-number amount of money in paise, shown to people as rupees. */
+enum class ParamType { STRING, INT, NUMBER, BOOLEAN, PAISE }
 
-data class Param(val name: String, val type: ParamType, val required: Boolean = true)
+/** [label] is the name people see, for example on a confirmation card. */
+data class Param(val name: String, val type: ParamType, val required: Boolean = true, val label: String = name)
 
 data class CapabilityDescriptor(
     val id: String,
@@ -51,6 +53,7 @@ fun checkCall(call: ToolCall, registry: Map<String, CapabilityDescriptor>): Call
             ParamType.INT -> value is Int
             ParamType.NUMBER -> value is Number
             ParamType.BOOLEAN -> value is Boolean
+            ParamType.PAISE -> value is Int || value is Long
         }
         if (!typeOk) return CallCheck.Rejected("Argument $name must be ${param.type}")
     }
