@@ -2,6 +2,7 @@ package com.nila.launcher
 
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.util.UUID
 
 data class Choice(
     val title: String,
@@ -36,12 +37,25 @@ sealed interface NilaResponse {
     data class AsyncChoices(val intro: String, val items: List<AsyncChoice>) : NilaResponse
     /** Results grouped by provider (Zepto, Swiggy Instamart, ...), each collapsible, for comparing multiple MCPs side by side. */
     data class GroupedChoices(val intro: String, val groups: List<ProviderGroup>) : NilaResponse
+    data class Confirmation(val title: String, val detail: String, val price: String) : NilaResponse
     data class Remember(val fact: String) : NilaResponse
+    /**
+     * A validated Commit call that has not run. [lines] are the call's own values, so the user sees exactly
+     * what Confirm authorizes. Pass [token] to NilaEngine.confirm after the user approves; it works once.
+     */
+    data class NeedsConfirmation(
+        val token: String,
+        val call: ToolCall,
+        val capability: CapabilityDescriptor,
+        val lines: List<Pair<String, String>>,
+    ) : NilaResponse
 }
 
-class NilaEngine {
+/** [extraCapabilities] join the built-in tools. Routing, checking and confirmation all use the same registry. */
+class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
     private val percentage = Regex("""(\d+(?:\.\d+)?)\s*%\s*(?:of)?\s*(\d+(?:\.\d+)?)""")
     private val alarm = Regex("""alarm\s+(?:for\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?""")
+    private val remember = Regex("""remember(?: that)?\s+(.+)""")
     private val apps = mapOf(
         "youtube" to Triple("YouTube", "com.google.android.youtube", "https://youtube.com"),
         "netflix" to Triple("Netflix", "com.netflix.mediaclient", "https://netflix.com"),
@@ -49,10 +63,44 @@ class NilaEngine {
         "bgmi" to Triple("BGMI", "com.pubg.imobile", "https://www.battlegroundsmobileindia.com"),
     )
 
+    /** The tools a router may call. FunctionGemma will receive these same schemas. */
+    val capabilities = listOf(
+        CapabilityDescriptor(
+            id = "create_alarm",
+            description = "Set an alarm. Give the hour as the user said it and meridiem (am or pm) only if they said one.",
+            params = listOf(
+                Param("hour", ParamType.INT),
+                Param("minute", ParamType.INT),
+                Param("meridiem", ParamType.STRING, required = false),
+            ),
+            permission = PermissionClass.PREPARE,
+            androidPermissions = setOf("com.android.alarm.permission.SET_ALARM"),
+        ),
+        CapabilityDescriptor(
+            id = "open_app",
+            description = "Open an immersive app: ${apps.keys.joinToString()}",
+            params = listOf(Param("app", ParamType.STRING)),
+            permission = PermissionClass.READ,
+        ),
+        CapabilityDescriptor(
+            id = "remember_fact",
+            description = "Store a fact the user explicitly asked NILA to remember",
+            params = listOf(Param("fact", ParamType.STRING)),
+            permission = PermissionClass.PREPARE,
+        ),
+        CapabilityDescriptor(
+            id = "search_food",
+            description = "Find and compare food options",
+            params = listOf(Param("query", ParamType.STRING)),
+            permission = PermissionClass.READ,
+        ),
+    ).plus(extraCapabilities).associateBy { it.id }
+
     fun respond(input: String): NilaResponse {
         val normalized = input.trim().lowercase()
         if (normalized.isBlank()) return NilaResponse.Text("Tell me what you want to do.")
 
+        // Deterministic fast path: exact arithmetic never goes through a router.
         percentage.find(normalized)?.let { match ->
             val rate = match.groupValues[1].toBigDecimal()
             val amount = match.groupValues[2].toBigDecimal()
@@ -60,40 +108,122 @@ class NilaEngine {
             return NilaResponse.Text("${match.groupValues[1]}% of ${match.groupValues[2]} is ${result.stripTrailingZeros().toPlainString()}")
         }
 
+        return execute(route(input))
+    }
+
+    // ponytail: keyword router standing in for FunctionGemma; swap in the model behind the same NilaIntent output.
+    fun route(input: String): NilaIntent {
+        val normalized = input.trim().lowercase()
+
+        // The router only extracts what was said; run() converts and validates the time.
         alarm.find(normalized)?.let { match ->
-            var hour = match.groupValues[1].toInt()
-            val minute = match.groupValues[2].ifBlank { "0" }.toInt()
-            val meridiem = match.groupValues[3]
-            if (hour !in 0..23 || minute !in 0..59 || (meridiem.isNotEmpty() && hour !in 1..12)) {
-                return NilaResponse.Text("That alarm time is not valid.")
-            }
-            if (meridiem == "pm" && hour < 12) hour += 12
-            if (meridiem == "am" && hour == 12) hour = 0
-            return NilaResponse.Alarm(hour, minute)
+            val args = mutableMapOf<String, Any>(
+                "hour" to match.groupValues[1].toInt(),
+                "minute" to match.groupValues[2].ifBlank { "0" }.toInt(),
+            )
+            match.groupValues[3].ifEmpty { null }?.let { args["meridiem"] = it }
+            return NilaIntent.Call(ToolCall("create_alarm", args))
         }
 
-        Regex("""remember(?: that)?\s+(.+)""").find(normalized)?.let {
-            val originalFact = input.substring(input.lowercase().indexOf(it.groupValues[1]))
-            return NilaResponse.Remember(originalFact.trim())
+        remember.find(normalized)?.let {
+            val fact = input.substring(input.lowercase().indexOf(it.groupValues[1])).trim()
+            return NilaIntent.Call(ToolCall("remember_fact", mapOf("fact" to fact)))
         }
 
-        apps.entries.firstOrNull { (keyword) -> normalized.contains(keyword) }?.value?.let { app ->
-            return NilaResponse.OpenApp(app.first, app.second, app.third)
+        apps.keys.firstOrNull(normalized::contains)?.let { app ->
+            return NilaIntent.Call(ToolCall("open_app", mapOf("app" to app)))
         }
 
         if (listOf("food", "biryani", "dinner", "lunch").any(normalized::contains)) {
-            return NilaResponse.Choices(
+            return NilaIntent.Call(ToolCall("search_food", mapOf("query" to input.trim())))
+        }
+
+        return NilaIntent.Converse(input)
+    }
+
+    /**
+     * Validates a routed intent at the boundary, then maps it to a response. Never trusts router output.
+     * Commit calls stop at NeedsConfirmation and run only through [confirm].
+     */
+    fun execute(
+        intent: NilaIntent,
+    ): NilaResponse = when (intent) {
+        // No assistant model yet, so conversation falls back to the capability list.
+        is NilaIntent.Converse -> NilaResponse.Text(
+            "I can calculate, set an alarm, remember a preference, compare mock food options, or open YouTube, Netflix, Instagram and BGMI."
+        )
+        is NilaIntent.Call -> when (val check = checkCall(intent.call, capabilities)) {
+            is CallCheck.Rejected -> NilaResponse.Text("I can't do that. ${check.reason}.")
+            is CallCheck.Missing -> NilaResponse.Text("I need the ${check.params.joinToString()} to do that.")
+            is CallCheck.Ok ->
+                if (check.capability.needsConfirmation) confirmation(check.call, check.capability)
+                else run(check.call)
+        }
+    }
+
+    private fun run(call: ToolCall): NilaResponse {
+        val args = call.args
+        return when (call.capabilityId) {
+            "create_alarm" -> alarmHour(args["hour"] as Int, args["meridiem"] as String?)
+                ?.takeIf { (args["minute"] as Int) in 0..59 }
+                ?.let { NilaResponse.Alarm(it, args["minute"] as Int) }
+                ?: NilaResponse.Text("That alarm time is not valid.")
+            "open_app" -> apps[args["app"]]?.let { NilaResponse.OpenApp(it.first, it.second, it.third) }
+                ?: NilaResponse.Text("I can't open that app.")
+            "remember_fact" -> NilaResponse.Remember(args["fact"] as String)
+            "search_food" -> NilaResponse.Choices(
                 intro = "I found two mock options that fit the request. Nothing has been ordered.",
                 items = listOf(
                     Choice("Meghana Foods", "Chicken boneless biryani · 4.6★", "₹239", "24 min"),
                     Choice("Mani's Dum Biryani", "Chicken dum biryani · 4.4★", "₹219", "29 min"),
                 ),
             )
+            else -> NilaResponse.Text("I can't do that yet. Nothing was done.")
         }
-
-        return NilaResponse.Text(
-            "I can calculate, set an alarm, remember a preference, compare mock food options, or open YouTube, Netflix, Instagram and BGMI."
-        )
     }
-}
 
+    // ponytail: pending confirmations live in memory; a process restart drops them, which fails safe.
+    private val pending = mutableMapOf<String, ToolCall>()
+
+    /** Runs a pending Commit call once. A reused or unknown token runs nothing. */
+    fun confirm(token: String): NilaResponse {
+        val call = pending.remove(token) ?: return NilaResponse.Text("This confirmation was already used. Nothing was done.")
+        val check = checkCall(call, capabilities)
+        return if (check is CallCheck.Ok) run(check.call) else NilaResponse.Text("That action is no longer valid. Nothing was done.")
+    }
+
+    private fun confirmation(call: ToolCall, capability: CapabilityDescriptor) = NilaResponse.NeedsConfirmation(
+        token = UUID.randomUUID().toString().also { pending[it] = call },
+        call = call,
+        capability = capability,
+        lines = capability.params.mapNotNull { param -> call.args[param.name]?.let { param.label to display(param.type, it) } },
+    )
+
+    /** Formats a validated argument for people. Paise become rupees in Indian grouping, such as ₹1,23,456.00. */
+    private fun display(type: ParamType, value: Any): String = when (type) {
+        ParamType.PAISE -> rupees((value as Number).toLong())
+        else -> value.toString()
+    }
+
+    // Grouped by hand: JVM and Android locale data disagree on Indian grouping. checkCall guarantees paise >= 0.
+    private fun rupees(paise: Long): String {
+        val whole = (paise / 100).toString()
+        val grouped = if (whole.length <= 3) whole
+        else whole.dropLast(3).reversed().chunked(2).joinToString(",").reversed() + "," + whole.takeLast(3)
+        return "₹$grouped.${(paise % 100).toString().padStart(2, '0')}"
+    }
+
+    /** 24-hour value, or null when invalid. With am/pm, only 1-12 is accepted. */
+    private fun alarmHour(hour: Int, meridiem: String?): Int? = when (meridiem) {
+        null -> hour.takeIf { it in 0..23 }
+        "am" -> hour.takeIf { it in 1..12 }?.rem(12)
+        "pm" -> hour.takeIf { it in 1..12 }?.let { it % 12 + 12 }
+        else -> null
+    }
+
+    fun prepare(choice: Choice) = NilaResponse.Confirmation(
+        title = "Review ${choice.title}",
+        detail = "${choice.detail} · ${choice.eta}",
+        price = choice.price,
+    )
+}
