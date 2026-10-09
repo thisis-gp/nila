@@ -24,6 +24,25 @@ class NilaEngineTest {
     }
 
     @Test
+    fun routesAlarmToToolCall() {
+        assertEquals(
+            NilaIntent.Call(ToolCall("create_alarm", mapOf("hour" to 18, "minute" to 30))),
+            engine.route("Set an alarm for 6:30 pm")
+        )
+    }
+
+    @Test
+    fun rejectsInvalidAlarmTime() {
+        assertEquals(NilaResponse.Text("That alarm time is not valid."), engine.respond("Set an alarm for 25:00"))
+    }
+
+    @Test
+    fun rejectsUnregisteredToolCall() {
+        val response = engine.execute(NilaIntent.Call(ToolCall("place_order", mapOf("cart" to "1"))))
+        assertEquals(NilaResponse.Text("I can't do that. Unknown tool place_order."), response)
+    }
+
+    @Test
     fun createsFoodComparison() {
         val response = engine.respond("Order chicken biryani under 250")
         assertTrue(response is NilaResponse.Choices)
