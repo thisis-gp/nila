@@ -65,6 +65,7 @@ A generated skill may use only manifest-declared permissions and registered capa
 
 Target: Saturday 10:00.
 
+- Confirm the organiser's ruling on the pre-event scaffold and record it.
 - Pair Office Kit and establish the event branch.
 - Build, install and select NILA as the home launcher.
 - Load FunctionGemma on the iQOO phone.

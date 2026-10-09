@@ -14,6 +14,7 @@ Sources:
 - Guide and scoring detail: https://iqoo-delhi.reskilll.com/guide
 - Terms: https://iqoo-delhi.reskilll.com/terms
 
+The terms say submission work must be original work created during the event, while pre-event idea drafting is allowed. This repository contains a pre-event scaffold and design prototype. Keep its history intact, disclose it to an organiser, and record the answer in the team channel. Do not rewrite history or imply that earlier code was written during the finale.
 
 ## Test device
 
@@ -142,7 +143,6 @@ Every durable memory stores its source, type, confidence, sensitivity, timestamp
 - MCP server scopes may be broader than NILA's policy. NILA applies its own Read, Prepare and Commit gate before every tool call.
 - Generated UI is declarative. Never run model-generated Kotlin, JavaScript or downloaded executable code.
 - Report measured device results only. Vendor and comparable-device numbers are references.
-
 ## Verification: 9 October 2026
 
 These checks confirm or correct the stack above. Decisions that follow from them are in `DECISIONS.md` under "Integration decisions".

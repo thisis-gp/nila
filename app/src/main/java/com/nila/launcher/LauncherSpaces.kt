@@ -99,6 +99,12 @@ internal fun suggestedHomeApps(apps: List<InstalledApp>): List<String> {
     return suggested.distinct().take(8)
 }
 
+internal fun reconcileHomePins(
+    savedPins: Set<String>?,
+    installedPackages: Set<String>,
+    suggestedPackages: List<String>,
+): List<String> = (savedPins?.toList() ?: suggestedPackages).filter(installedPackages::contains)
+
 // NILA's presence moved off this dock entirely: a character shrunk to icon size and
 // parked in a utility tray read as "a feature bolted on" no matter how it was drawn.
 // She now stands full-body on the home screen itself, next to her speech-bubble pill
@@ -136,6 +142,7 @@ private fun DockIcon(icon: Int, label: String, onClick: () -> Unit, tint: Color 
 internal fun HomeSpace(
     apps: List<InstalledApp>,
     pinnedPackages: List<String>,
+    resumeVersion: Int,
     nilaMood: MascotMood,
     onOpenNila: () -> Unit,
     onOpenApp: (InstalledApp) -> Unit,
@@ -143,7 +150,7 @@ internal fun HomeSpace(
     onOpenSettings: () -> Unit,
 ) {
     val context = LocalContext.current
-    val wallpaper = remember { runCatching { WallpaperManager.getInstance(context).drawable }.getOrNull() }
+    val wallpaper = remember(context, resumeVersion) { runCatching { WallpaperManager.getInstance(context).drawable }.getOrNull() }
     var greeting by rememberSaveable { mutableStateOf(true) }
     var resting by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {

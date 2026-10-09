@@ -11,6 +11,7 @@
 - **Generated-skill demo:** the user asks NILA to build an expense tracker. The resulting skill requests SMS permission, stores derived transactions locally, renders trusted UI and can be disabled or deleted.
 - **Safety:** Read and Prepare may run automatically. Commit always stops for explicit confirmation. Vector retrieval cannot authorize actions.
 - **Pitch:** parked until the primary phone demo passes.
+- **Compliance:** disclose the pre-event scaffold to an organiser and preserve repository history.
 
 ## Decisions
 - **Track:** Open Innovation (any domain, local/open-source model at the core).
@@ -75,6 +76,9 @@ We chose this problem because we live it. Ordering food, booking a ride or texti
 - [ ] Write Hindi and Malayalam routing examples plus a held-out test set.
 - [ ] Test Malayalam speech recognition on the iQOO 15 with networking disabled.
 - [ ] Get a Maps Grounding Lite API key.
+## Open items during the build
+
+- [ ] Ask an organiser whether the pre-event scaffold may be used and record the answer.
 - [ ] Confirm the loan iQOO 15 RAM and available storage.
 - [ ] Confirm Swiggy OAuth and redirect behavior on the event network.
 - [ ] Download and verify offline speech packs for English, Hindi and Malayalam.

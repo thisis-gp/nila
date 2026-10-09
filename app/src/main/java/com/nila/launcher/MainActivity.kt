@@ -47,6 +47,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,9 +66,16 @@ import androidx.compose.ui.unit.sp
 import com.composables.icons.lucide.R as LucideR
 
 class MainActivity : ComponentActivity() {
+    private var resumeVersion by mutableIntStateOf(0)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { NilaApp() }
+        setContent { NilaApp(resumeVersion) }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        resumeVersion++
     }
 }
 
@@ -82,17 +90,27 @@ internal val Lime = Color(0xFFD9DF36)
 internal val Orange = Color(0xFFE84619)
 
 @Composable
-private fun NilaApp() {
+private fun NilaApp(resumeVersion: Int) {
     val context = LocalContext.current
     val engine = remember { NilaEngine() }
     val turns = remember { mutableStateListOf<Turn>() }
     var input by remember { mutableStateOf("") }
-    val installedApps = remember(context) { loadInstalledApps(context) }
+    val installedApps = remember(context, resumeVersion) { loadInstalledApps(context) }
     val launcherPreferences = remember(context) { context.getSharedPreferences("nila_launcher", Context.MODE_PRIVATE) }
     val pinnedPackages = remember(installedApps, launcherPreferences) {
+        val installedPackages = installedApps.mapTo(mutableSetOf()) { it.packageName }
         mutableStateListOf<String>().apply {
-            addAll(launcherPreferences.getStringSet("home_pins", null)?.toList() ?: suggestedHomeApps(installedApps))
+            addAll(
+                reconcileHomePins(
+                    savedPins = launcherPreferences.getStringSet("home_pins", null),
+                    installedPackages = installedPackages,
+                    suggestedPackages = suggestedHomeApps(installedApps),
+                )
+            )
         }
+    }
+    LaunchedEffect(installedApps) {
+        launcherPreferences.edit().putStringSet("home_pins", pinnedPackages.toSet()).apply()
     }
     val memory = remember { context.getSharedPreferences("nila_memory", Context.MODE_PRIVATE) }
     var rememberedFact by remember { mutableStateOf(memory.getString("fact", null)) }
@@ -168,6 +186,7 @@ private fun NilaApp() {
                 HomeSpace(
                     apps = installedApps,
                     pinnedPackages = pinnedPackages,
+                    resumeVersion = resumeVersion,
                     nilaMood = nilaMood,
                     onOpenNila = { open(NilaScreen.Nila) },
                     onOpenApp = { app -> launchInstalledApp(context, app.packageName) },
