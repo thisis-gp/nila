@@ -1,0 +1,218 @@
+name: Codex review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-review-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/codex review'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pr_number: ${{ steps.context.outputs.pr_number }}
+      head_sha: ${{ steps.context.outputs.head_sha }}
+    steps:
+      - name: Resolve PR context for comment-triggered review
+        id: pr
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: context.issue.number,
+            });
+            if (pr.head.repo?.full_name !== context.repo.owner + '/' + context.repo.repo ||
+                !['OWNER', 'MEMBER', 'COLLABORATOR'].includes(pr.author_association)) {
+              throw new Error('Manual Codex review requires a trusted, same-repository PR author.');
+            }
+            core.setOutput('number', String(pr.number));
+            core.setOutput('head_sha', pr.head.sha);
+            core.setOutput('base_sha', pr.base.sha);
+      - name: Set review context
+        id: context
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || steps.pr.outputs.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.pr.outputs.head_sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || steps.pr.outputs.base_sha }}
+        run: |
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/pull/${{ steps.context.outputs.pr_number }}/head
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch base and verify reviewed commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha || github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ steps.context.outputs.head_sha }}
+        run: |
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.extraheader="$AUTH_HEADER" fetch --no-tags origin "$BASE_SHA"
+          unset AUTH_HEADER GH_TOKEN
+          git update-ref refs/remotes/review/base FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          if git cat-file -e refs/remotes/review/base:.github/codex/prompts/review.md 2>/dev/null; then
+            git show refs/remotes/review/base:.github/codex/prompts/review.md > .nila-review-prompt.md
+          else
+            cp .github/codex/prompts/review.md .nila-review-prompt.md
+          fi
+          if git cat-file -e refs/remotes/review/base:.github/codex/prompts/review-output.schema.json 2>/dev/null; then
+            git show refs/remotes/review/base:.github/codex/prompts/review-output.schema.json > .nila-review-schema.json
+          else
+            cp .github/codex/prompts/review-output.schema.json .nila-review-schema.json
+          fi
+      - name: Run read-only Codex review
+        id: codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .nila-review-prompt.md
+          output-file: codex-review.json
+          sandbox: read-only
+          codex-args: '["--output-schema", ".nila-review-schema.json"]'
+          model: gpt-5.4-mini
+          effort: low
+          safety-strategy: drop-sudo
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-review-${{ steps.context.outputs.pr_number }}-${{ steps.context.outputs.head_sha }}
+          path: codex-review.json
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: review
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-review-${{ needs.review.outputs.pr_number }}-${{ needs.review.outputs.head_sha }}
+          path: review
+      - name: Validate and post review
+        id: result
+        uses: actions/github-script@v7
+        env:
+          REVIEW_FILE: review/codex-review.json
+          PR_NUMBER: ${{ needs.review.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.review.outputs.head_sha }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const review = JSON.parse(fs.readFileSync(process.env.REVIEW_FILE, 'utf8'));
+            if (!review || !['clean', 'findings'].includes(review.verdict) ||
+                typeof review.summary !== 'string' || review.summary.length > 100 ||
+                !Array.isArray(review.findings) || review.findings.length > 10 ||
+                (review.verdict === 'clean' && review.findings.length !== 0) ||
+                (review.verdict === 'findings' && review.findings.length === 0)) {
+              throw new Error('Malformed or ambiguous Codex review; refusing approval or merge.');
+            }
+            const severities = new Set(['P0', 'P1', 'P2', 'P3']);
+            for (const finding of review.findings) {
+              if (!finding || !severities.has(finding.severity) ||
+                  typeof finding.file !== 'string' || !finding.file || finding.file.length > 180 ||
+                  !Number.isInteger(finding.line) || finding.line < 1 ||
+                  typeof finding.finding !== 'string' || !finding.finding || finding.finding.length > 240 ||
+                  typeof finding.fix !== 'string' || !finding.fix || finding.fix.length > 160) {
+                throw new Error('Malformed Codex finding; refusing approval or merge.');
+              }
+            }
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: issue_number });
+            if (pr.head.sha !== process.env.HEAD_SHA || pr.state !== 'open') {
+              throw new Error('PR head changed or PR closed; refusing to publish a stale review.');
+            }
+            const marker = '<!-- nila-codex-review -->';
+            const body = review.findings.length
+              ? `${marker}\n## Codex review — findings\n\n${review.findings.map(f => `- **${f.severity}** \`${f.file}:${f.line}\` — ${f.finding} Fix: ${f.fix}`).join('\n')}`
+              : `${marker}\n## Codex review — clean\n\nNo actionable findings. ${review.summary}`;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number, per_page: 100 });
+            const prior = comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
+            if (prior) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: prior.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+            core.setOutput('clean', review.verdict === 'clean' ? 'true' : 'false');
+            core.setOutput('head_sha', process.env.HEAD_SHA);
+      - name: Wait for Android CI and approve clean review
+        if: steps.result.outputs.clean == 'true'
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ needs.review.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.review.outputs.head_sha }}
+        with:
+          script: |
+            const pull_number = Number(process.env.PR_NUMBER);
+            const head_sha = process.env.HEAD_SHA;
+            let android;
+            for (let attempt = 0; attempt < 40; attempt++) {
+              const { data: workflows } = await github.rest.actions.listRepoWorkflows(context.repo);
+              const workflow = workflows.workflows.find(item => item.path === '.github/workflows/android.yml');
+              if (!workflow) throw new Error('Android CI workflow not found; refusing approval and auto-merge.');
+              const { data } = await github.rest.actions.listWorkflowRuns({
+                ...context.repo,
+                workflow_id: workflow.id,
+                head_sha,
+                event: 'pull_request',
+                per_page: 100,
+              });
+              android = data.workflow_runs.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+              if (android?.status === 'completed') break;
+              await new Promise(resolve => setTimeout(resolve, 15000));
+            }
+            if (!android || android.status !== 'completed' || android.conclusion !== 'success') {
+              throw new Error('Android CI did not pass; refusing approval and auto-merge.');
+            }
+            const { data: jobs } = await github.rest.actions.listJobsForWorkflowRun({
+              ...context.repo,
+              run_id: android.id,
+              per_page: 100,
+            });
+            if (!jobs.jobs.some(job => job.name === 'test' && job.conclusion === 'success')) {
+              throw new Error('Android test job did not pass; refusing approval and auto-merge.');
+            }
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number });
+            if (pr.head.sha !== head_sha || pr.state !== 'open') {
+              throw new Error('PR head changed or PR closed; refusing approval and auto-merge.');
+            }
+            await github.rest.pulls.createReview({
+              ...context.repo,
+              pull_number,
+              commit_id: head_sha,
+              event: 'APPROVE',
+              body: 'Codex review clean; Android CI passed.',
+            });
+      - name: Enable GitHub auto-merge for clean review
+        if: steps.result.outputs.clean == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.review.outputs.pr_number }}
+          REVIEWED_SHA: ${{ needs.review.outputs.head_sha }}
+        run: |
+          test "$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq .head.sha)" = "$REVIEWED_SHA"
+          gh pr merge "$PR_NUMBER" --auto --squash
