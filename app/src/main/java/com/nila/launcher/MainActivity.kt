@@ -445,7 +445,7 @@ private fun NilaApp(resumeVersion: Int) {
             // Never render the raw key: it would sit in the chat scrollback (and any screenshot) for
             // the rest of the session. Only the redacted turn and a generic status reach the UI.
             tavilyAuth.apiKey = prompt.trim()
-            turns += Turn("Web search key", NilaResponse.Text("Web search connected. Try \"search for <something>\"."))
+            turns += Turn("Web search key", NilaResponse.Text("Web search connected. Try asking anything, or \"search for <something>\"."))
             input = ""
             return
         }
