@@ -94,7 +94,9 @@ fun noteText(text: String): String? = noteLead.find(text)?.let { text.substring(
 private val callLead = Regex("""^\s*(please\s+)?(call|phone|dial|ring)\s+(to\s+)?""", RegexOption.IGNORE_CASE)
 
 /** "call Mom" → "Mom"; "dial 98450 12345" → "98450 12345". Null when no one was named. */
-fun callTarget(text: String): String? = callLead.find(text)?.let { text.substring(it.range.last + 1).trim().trimEnd('.', '!', '?') }?.takeIf { it.isNotBlank() }
+fun callTarget(text: String): String? = callLead.find(text)?.let { text.substring(it.range.last + 1).trim().trimEnd('.', '!', '?') }
+    // "ring mode" and "ring tone" are about sound, not calling someone named "mode" (seen on the iQOO 15).
+    ?.takeIf { it.isNotBlank() && !Regex("""^(mode|tone|volume)\b""", RegexOption.IGNORE_CASE).containsMatchIn(it) }
 
 /** Digits of a phone number, or null when [who] is a name. */
 fun phoneNumber(who: String): String? = who.filter { it.isDigit() || it == '+' }.takeIf { it.count(Char::isDigit) >= 3 }
