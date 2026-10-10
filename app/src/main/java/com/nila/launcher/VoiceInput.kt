@@ -32,6 +32,7 @@ import androidx.core.content.ContextCompat
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.sqrt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
@@ -107,7 +108,7 @@ class EndOfSpeech(private val threshold: Double = 900.0, private val quietMs: In
  * Records one spoken request from the microphone as WAV. Stops on its own after the speaker pauses, at
  * [MAX_CLIP_MS], or when [stopRequested] turns true. Returns null when nobody spoke.
  */
-@SuppressLint("MissingPermission") // VoiceMic checks RECORD_AUDIO before calling.
+@SuppressLint("MissingPermission") // VoiceCapture.toggle checks RECORD_AUDIO before calling.
 suspend fun recordSpeech(stopRequested: () -> Boolean): ByteArray? = withContext(Dispatchers.IO) {
     val minBuffer = AudioRecord.getMinBufferSize(VOICE_SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
     val chunk = ShortArray(VOICE_SAMPLE_RATE * CHUNK_MS / 1000)
@@ -139,7 +140,7 @@ suspend fun recordSpeech(stopRequested: () -> Boolean): ByteArray? = withContext
 
 enum class VoiceState { IDLE, LISTENING, UNDERSTANDING }
 
-/** Where one spoken request is: the chat mic and the listening layer both read it. */
+/** Where one spoken request is: the agent screen's mic, chip and inline listening state all read it. */
 interface VoiceCapture {
     val state: VoiceState
     val tag: String
@@ -147,6 +148,9 @@ interface VoiceCapture {
 
     /** Starts listening, or, while listening, stops and sends what was said. */
     fun toggle()
+
+    /** Stops listening and drops whatever was being recorded or transcribed, e.g. when the person starts typing. */
+    fun cancel()
 
     fun nextLanguage()
 }
@@ -170,6 +174,8 @@ fun rememberVoiceCapture(
     var currentTag by remember { mutableStateOf(prefs.getString(LANGUAGE_KEY, null) ?: AUTO_LANGUAGE.tag) }
     var currentState by remember { mutableStateOf(VoiceState.IDLE) }
     var stopRequested by remember { mutableStateOf(false) }
+    // Each recording gets a number; cancel() moves past it so a late transcript from it is ignored.
+    val session = remember { AtomicInteger() }
     val currentLanguageName = (chipLanguages.firstOrNull { it.tag == currentTag } ?: AUTO_LANGUAGE).name
     val latestFinal by rememberUpdatedState(onFinal)
     val latestMessage by rememberUpdatedState(onMessage)
@@ -178,14 +184,17 @@ fun rememberVoiceCapture(
         onListenStart()
         stopRequested = false
         currentState = VoiceState.LISTENING
+        val mine = session.incrementAndGet()
         scope.launch {
-            val clip = recordSpeech { stopRequested }
+            val clip = recordSpeech { stopRequested || session.get() != mine }
+            if (session.get() != mine) return@launch
             if (clip == null) {
                 currentState = VoiceState.IDLE
                 return@launch latestMessage("I didn't hear anything. Tap the mic and try again, or type instead.")
             }
             currentState = VoiceState.UNDERSTANDING
             val text = runCatching { transcribe(clip, currentLanguageName.takeUnless { currentTag == AUTO_LANGUAGE.tag }) }.getOrNull()?.trim()
+            if (session.get() != mine) return@launch
             currentState = VoiceState.IDLE
             if (text.isNullOrBlank()) latestMessage("I couldn't understand that. Try again, or type instead.") else latestFinal(text)
         }
@@ -209,6 +218,12 @@ fun rememberVoiceCapture(
             }
         }
 
+        override fun cancel() {
+            if (currentState == VoiceState.IDLE) return
+            session.incrementAndGet()
+            currentState = VoiceState.IDLE
+        }
+
         override fun nextLanguage() {
             currentTag = nextVoiceLanguage(currentTag)
             prefs.edit().putString(LANGUAGE_KEY, currentTag).apply()
@@ -216,16 +231,9 @@ fun rememberVoiceCapture(
     }
 }
 
-/** Language chip and mic for the chat input. Tap to speak; pause or tap again to send. */
+/** Language chip and mic for the agent's input bar. [onMic] starts listening, or stops it while listening. */
 @Composable
-fun VoiceMic(
-    transcribe: suspend (wav: ByteArray, languageName: String?) -> String?,
-    onFinal: (String) -> Unit,
-    onMessage: (String) -> Unit,
-    onListenStart: () -> Unit = {},
-) {
-    val voice = rememberVoiceCapture(transcribe, onFinal, onMessage, onListenStart)
-
+fun VoiceMic(voice: VoiceCapture, onMic: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         TextButton(
             onClick = voice::nextLanguage,
@@ -239,7 +247,7 @@ fun VoiceMic(
                 VoiceState.IDLE -> Text(voiceChipLabel(voice.tag), color = Muted, fontSize = 14.sp)
             }
         }
-        IconButton(onClick = voice::toggle) {
+        IconButton(onClick = onMic) {
             Icon(
                 painterResource(LucideR.drawable.lucide_ic_mic),
                 contentDescription = if (voice.state == VoiceState.LISTENING) "Finish speaking" else "Speak",

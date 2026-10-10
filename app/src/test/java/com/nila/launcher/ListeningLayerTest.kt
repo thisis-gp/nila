@@ -21,4 +21,12 @@ class ListeningLayerTest {
         assertNull(highlighted("Find"))
         assertNull(highlighted(""))
     }
+
+    @Test
+    fun labelFollowsTheVoiceState() {
+        assertEquals("LISTENING", listeningLabel(VoiceState.LISTENING, heard = null))
+        assertEquals("UNDERSTANDING", listeningLabel(VoiceState.UNDERSTANDING, heard = null))
+        assertEquals("HEARD YOU", listeningLabel(VoiceState.IDLE, heard = "Order biryani"))
+        assertEquals("READY", listeningLabel(VoiceState.IDLE, heard = null))
+    }
 }
