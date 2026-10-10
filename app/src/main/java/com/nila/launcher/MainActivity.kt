@@ -94,7 +94,7 @@ class MainActivity : ComponentActivity() {
 }
 
 data class Turn(val user: String, val response: NilaResponse)
-private data class ActiveZeptoSession(val client: ZeptoMcpClient, val addressLabel: String)
+private data class ActiveZeptoSession(val client: ZeptoMcpClient, val addressId: String, val addressLabel: String)
 
 /** Builds the quantity-stepper turn for a Zepto search result. Prepare-tier only: setCartQuantity never places or pays for an order. */
 private fun zeptoProductTurn(
@@ -240,31 +240,51 @@ private fun NilaApp(resumeVersion: Int) {
                                     }
                                 }
                             }
+                            // The cart's items were searched/added under activeZeptoSession's store (a saved
+                            // address silently picked on the first "buy"). Zepto is hyperlocal — a different
+                            // store's catalog can have different stock/prices — so checkout must CONFIRM that
+                            // same address, not offer a fresh pick that would swap the store under the cart.
                             val proceed = AsyncChoice("Proceed to checkout", "Confirm delivery address and total", "", "") {
-                                scope.launch(Dispatchers.IO) {
-                                    val addresses = runCatching { client.listSavedAddresses() }.getOrElse { emptyList() }
-                                    withContext(Dispatchers.Main) {
-                                        if (addresses.isEmpty()) {
-                                            turns += Turn("Zepto", NilaResponse.Text("No saved delivery address — add one in the Zepto app, then proceed again."))
-                                        } else {
-                                            val addressChoices = addresses.map { address ->
-                                                AsyncChoice(address.label.ifBlank { "Saved address" }, address.addressLine, "", "") {
-                                                    scope.launch(Dispatchers.IO) {
-                                                        val selectOutcome = runCatching { client.selectSavedAddress(address.id) }
-                                                        withContext(Dispatchers.Main) {
-                                                            activeZeptoSession = ActiveZeptoSession(client, address.label.ifBlank { "Saved address" })
-                                                            selectOutcome.fold(
-                                                                onSuccess = {
-                                                                    turns += Turn("Zepto", NilaResponse.Text("Delivering to ${address.label.ifBlank { "this address" }}. Total ₹%.2f. NILA stops here — open Zepto to pay and finish the order:".format(total / 100.0)))
-                                                                    turns += Turn("Zepto", NilaResponse.OpenApp("Zepto", "com.zeptoconsumerapp", "https://www.zeptonow.com"))
-                                                                },
-                                                                onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
-                                                            )
+                                val session = activeZeptoSession
+                                if (session != null) {
+                                    turns += Turn("Zepto", NilaResponse.Text("Delivering to ${session.addressLabel}. Total ₹%.2f. NILA stops here — open Zepto to pay and finish the order:".format(total / 100.0)))
+                                    turns += Turn("Zepto", NilaResponse.OpenApp("Zepto", "com.zeptoconsumerapp", "https://www.zeptonow.com"))
+                                } else {
+                                    // Cart was viewed cold (no "buy" this session) — we don't know the store yet.
+                                    // Let the user pick one, then re-check the cart under it: items may differ.
+                                    scope.launch(Dispatchers.IO) {
+                                        val addresses = runCatching { client.listSavedAddresses() }.getOrElse { emptyList() }
+                                        withContext(Dispatchers.Main) {
+                                            if (addresses.isEmpty()) {
+                                                turns += Turn("Zepto", NilaResponse.Text("No saved delivery address — add one in the Zepto app, then proceed again."))
+                                            } else {
+                                                val addressChoices = addresses.map { address ->
+                                                    AsyncChoice(address.label.ifBlank { "Saved address" }, address.addressLine, "", "") {
+                                                        scope.launch(Dispatchers.IO) {
+                                                            val outcome2 = runCatching {
+                                                                client.selectSavedAddress(address.id)
+                                                                client.viewCartItems()
+                                                            }
+                                                            withContext(Dispatchers.Main) {
+                                                                activeZeptoSession = ActiveZeptoSession(client, address.id, address.label.ifBlank { "Saved address" })
+                                                                outcome2.fold(
+                                                                    onSuccess = { freshItems ->
+                                                                        val freshTotal = freshItems.sumOf { it.priceInPaisa.toLong() * it.quantity }
+                                                                        if (freshItems.isEmpty()) {
+                                                                            turns += Turn("Zepto", NilaResponse.Text("None of the cart items are available for delivery to ${address.label.ifBlank { "this address" }}. Try adding items again from here."))
+                                                                        } else {
+                                                                            turns += Turn("Zepto", NilaResponse.Text("Delivering to ${address.label.ifBlank { "this address" }}. Total ₹%.2f. NILA stops here — open Zepto to pay and finish the order:".format(freshTotal / 100.0)))
+                                                                            turns += Turn("Zepto", NilaResponse.OpenApp("Zepto", "com.zeptoconsumerapp", "https://www.zeptonow.com"))
+                                                                        }
+                                                                    },
+                                                                    onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
+                                                                )
+                                                            }
                                                         }
                                                     }
                                                 }
+                                                turns += Turn("Zepto", NilaResponse.AsyncChoices("Deliver to which address?", addressChoices))
                                             }
-                                            turns += Turn("Zepto", NilaResponse.AsyncChoices("Deliver to which address?", addressChoices))
                                         }
                                     }
                                 }
@@ -384,12 +404,12 @@ private fun NilaApp(resumeVersion: Int) {
                             ?: error("No saved Zepto address yet — add one in the Zepto app, then ask again.")
                         client.selectSavedAddress(defaultAddress.id)
                         val parsed = parseOrderItem(item)
-                        Triple(client.searchProducts(parsed.searchQuery), parsed.desiredSize, defaultAddress.label)
+                        Triple(client.searchProducts(parsed.searchQuery), parsed.desiredSize, defaultAddress)
                     }
                     withContext(Dispatchers.Main) {
                         outcome.fold(
-                            onSuccess = { (products, desiredSize, addressLabel) ->
-                                activeZeptoSession = ActiveZeptoSession(client, addressLabel.ifBlank { "Saved address" })
+                            onSuccess = { (products, desiredSize, defaultAddress) ->
+                                activeZeptoSession = ActiveZeptoSession(client, defaultAddress.id, defaultAddress.label.ifBlank { "Saved address" })
                                 turns += zeptoProductTurn(item, products, client, context, scope, { t -> turns += t }, desiredSize)
                             },
                             onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
