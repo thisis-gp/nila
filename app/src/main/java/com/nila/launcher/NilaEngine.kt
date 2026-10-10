@@ -289,9 +289,15 @@ class NilaEngine(
                     Choice("Mani's Dum Biryani", "Chicken dum biryani · 4.4★", "₹219", "29 min"),
                 ),
             )
-            "set_timer" -> ((args["hours"] as Int? ?: 0) * 3600 + (args["minutes"] as Int? ?: 0) * 60 + (args["seconds"] as Int? ?: 0))
-                .takeIf { it in 1..86_400 }?.let { Timer(it) }
-                ?: NilaResponse.Text("How long should the timer run? Try \"timer for 10 minutes\".")
+            "set_timer" -> {
+                val hours = args["hours"] as Int? ?: 0
+                val minutes = args["minutes"] as Int? ?: 0
+                val seconds = args["seconds"] as Int? ?: 0
+                val duration = hours.toLong() * 3600 + minutes.toLong() * 60 + seconds
+                duration.takeIf { hours >= 0 && minutes >= 0 && seconds >= 0 && it in 1..86_400 }
+                    ?.let { Timer(it.toInt()) }
+                    ?: NilaResponse.Text("How long should the timer run? Try \"timer for 10 minutes\".")
+            }
             "flashlight" -> Torch(args["on"] as Boolean)
             "open_camera" -> Camera(args["video"] as Boolean? ?: false)
             "add_note" -> Note(args["text"] as String)

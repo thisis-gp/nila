@@ -23,14 +23,18 @@ private val durationPart = Regex("""(\d+)\s*(hours?|hrs?|h|minutes?|mins?|m|seco
 fun timerSeconds(text: String): Int? {
     val parts = durationPart.findAll(text.lowercase()).toList()
     if (parts.isEmpty()) return null
-    return parts.sumOf { match ->
-        val value = match.groupValues[1].toInt()
-        when (match.groupValues[2].first()) {
-            'h' -> value * 3600
-            'm' -> value * 60
-            else -> value
+    var total = 0L
+    for (match in parts) {
+        val value = match.groupValues[1].toLongOrNull() ?: return null
+        val multiplier = when (match.groupValues[2].first()) {
+            'h' -> 3600L
+            'm' -> 60L
+            else -> 1L
         }
+        if (value > (86_400L - total) / multiplier) return null
+        total += value * multiplier
     }
+    return total.toInt()
 }
 
 /** "off", "disable" or "stop" anywhere means off; otherwise on. */

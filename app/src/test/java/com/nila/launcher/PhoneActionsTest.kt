@@ -21,7 +21,10 @@ class PhoneActionsTest {
         assertEquals(5400, timerSeconds("timer 1 hour 30 mins"))
         assertEquals(90, timerSeconds("90 seconds timer"))
         assertNull(timerSeconds("start a timer"))
+        assertNull(timerSeconds("timer for 1193047 hours"))
         assertEquals(Timer(600), respond("set a timer for 10 minutes"))
+        assertEquals("How long should the timer run? Try \"timer for 10 minutes\".",
+            (engine.execute(NilaIntent.Call(ToolCall("set_timer", mapOf("hours" to 1193047)))) as NilaResponse.Text).value)
         // No length: NILA asks instead of guessing.
         assertTrue((respond("start a timer") as NilaResponse.Text).value.startsWith("How long"))
     }
