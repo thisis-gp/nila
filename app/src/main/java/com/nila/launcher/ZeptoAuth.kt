@@ -55,6 +55,21 @@ class ZeptoAuth(context: Context) {
      * Call from a background thread, never from the main/Compose thread.
      */
     fun connect(launchContext: Context): Result<Unit> = runCatching {
+        // Same fixes as McpAuth: a foreground service keeps NILA out of Android's app freezer while
+        // the browser covers it, so the loopback below can still answer the redirect.
+        SignInKeepAlive.start(launchContext, "Zepto")
+        try {
+            signIn(launchContext)
+        } finally {
+            SignInKeepAlive.stop(launchContext)
+        }
+        // Back to NILA in front of the browser once signed in.
+        launchContext.startActivity(
+            Intent(launchContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+
+    private fun signIn(launchContext: Context) {
         ServerSocket(0, 0, InetAddress.getByName("localhost")).use { server ->
             server.soTimeout = 5 * 60_000
             val redirectUri = "http://localhost:${server.localPort}/callback"
@@ -116,34 +131,49 @@ class ZeptoAuth(context: Context) {
         return response.getString("client_id")
     }
 
-    /** Waits for the one GET /callback?... request the browser sends after login, then replies with a plain HTML page. */
+    /**
+     * Serves the loopback until a request carries the code (or an OAuth error). Chrome opens an empty
+     * preconnect socket first; reading only the first connection failed on it with "arrived empty"
+     * and closed the socket before the real redirect came.
+     */
     private fun awaitLoopbackCallback(server: ServerSocket): Uri {
-        server.accept().use { socket ->
-            val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
-            val requestLine = reader.readLine() ?: error("Zepto's login redirect arrived empty.")
-            val path = requestLine.split(" ").getOrNull(1) ?: error("Could not read Zepto's redirect.")
-            // Drain the rest of the request headers before responding, so the browser isn't still
-            // writing while we reply — some clients stall waiting for us to finish reading first.
-            while (true) {
-                val line = reader.readLine() ?: break
-                if (line.isEmpty()) break
-            }
-            // Relying on "Connection: close" + socket EOF to signal the response is done is fragile —
-            // some browsers kept the tab spinning even after we'd fully sent and closed. An explicit
-            // Content-Length is unambiguous, so Chrome stops loading as soon as the body is read.
-            val body = ("<html><body style=\"font-family:sans-serif;padding:24px\">" +
-                "Signed in to Zepto. You can close this tab and return to NILA.</body></html>").toByteArray(Charsets.UTF_8)
-            val headers = ("HTTP/1.1 200 OK\r\n" +
-                "Content-Type: text/html; charset=utf-8\r\n" +
-                "Content-Length: ${body.size}\r\n" +
-                "Connection: close\r\n\r\n").toByteArray(Charsets.US_ASCII)
-            socket.getOutputStream().apply {
-                write(headers)
-                write(body)
-                flush()
-            }
-            return Uri.parse("http://localhost:${server.localPort}$path")
+        while (true) {
+            val callback = server.accept().use { socket -> runCatching { readCallback(socket) }.getOrNull() }
+            if (callback != null && (callback.getQueryParameter("code") != null || callback.getQueryParameter("error") != null)) return callback
         }
+    }
+
+    /** Reads one request and answers it with a plain HTML page; null for a silent connection. */
+    private fun readCallback(socket: java.net.Socket): Uri? {
+        socket.soTimeout = SILENT_SOCKET_MS
+        val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
+        val requestLine = reader.readLine() ?: return null
+        val path = requestLine.split(" ").getOrNull(1) ?: return null
+        // Drain the rest of the request headers before responding, so the browser isn't still
+        // writing while we reply — some clients stall waiting for us to finish reading first.
+        while (true) {
+            val line = reader.readLine() ?: break
+            if (line.isEmpty()) break
+        }
+        // Relying on "Connection: close" + socket EOF to signal the response is done is fragile —
+        // some browsers kept the tab spinning even after we'd fully sent and closed. An explicit
+        // Content-Length is unambiguous, so Chrome stops loading as soon as the body is read.
+        val body = ("<html><body style=\"font-family:sans-serif;padding:24px\">" +
+            "Signed in to Zepto. You can close this tab and return to NILA.</body></html>").toByteArray(Charsets.UTF_8)
+        val headers = ("HTTP/1.1 200 OK\r\n" +
+            "Content-Type: text/html; charset=utf-8\r\n" +
+            "Content-Length: ${body.size}\r\n" +
+            "Connection: close\r\n\r\n").toByteArray(Charsets.US_ASCII)
+        socket.getOutputStream().apply {
+            write(headers)
+            write(body)
+            flush()
+        }
+        return Uri.parse("http://localhost$path")
+    }
+
+    private companion object {
+        const val SILENT_SOCKET_MS = 5_000
     }
 }
 
