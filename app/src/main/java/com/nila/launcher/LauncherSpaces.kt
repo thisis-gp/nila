@@ -1,5 +1,13 @@
 package com.nila.launcher
 
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -146,7 +154,7 @@ internal fun AppsSpace(
         filtered.firstOrNull()?.let(onOpenApp) ?: onAskNila(request)
     }
 
-    Column(Modifier.fillMaxSize().background(Night).padding(start = 20.dp, end = 20.dp, top = 12.dp)) {
+    Column(Modifier.fillMaxSize().closeOnPullDown(onBack).background(Night).padding(start = 20.dp, end = 20.dp, top = 12.dp)) {
         TopAction(label = "ALL APPS", onBack = onBack) {
             RoundButton(LucideR.drawable.lucide_ic_image, "Change wallpaper", onChangeWallpaper)
             RoundButton(LucideR.drawable.lucide_ic_settings, "Settings", onOpenSettings)
@@ -302,4 +310,49 @@ internal fun openMessaging(context: Context, compose: Boolean = false) {
         .onFailure {
             if (!compose) runCatching { context.startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:"))) }
         }
+}
+
+private const val PULL_TO_CLOSE_PX = 220f
+private const val FLING_TO_CLOSE_PX_PER_S = 2_400f
+
+/**
+ * Swipe down closes the drawer, as on other launchers: a pull while the app grid is already at its top
+ * (scroll the grid can't use) or a drag on the header. Without it the drawer only closed with its back button.
+ */
+@Composable
+private fun Modifier.closeOnPullDown(onClose: () -> Unit): Modifier {
+    val close by rememberUpdatedState(onClose)
+    val connection = remember {
+        object : NestedScrollConnection {
+            var pulled = 0f
+
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                pulled = if (available.y > 0f) pulled + available.y else 0f
+                if (pulled > PULL_TO_CLOSE_PX) {
+                    pulled = 0f
+                    close()
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                if (available.y > FLING_TO_CLOSE_PX_PER_S) close()
+                pulled = 0f
+                return Velocity.Zero
+            }
+        }
+    }
+    return nestedScroll(connection).pointerInput(Unit) {
+        var dragged = 0f
+        detectVerticalDragGestures(
+            onDragStart = { dragged = 0f },
+            onVerticalDrag = { _, amount ->
+                dragged += amount
+                if (dragged > PULL_TO_CLOSE_PX) {
+                    dragged = 0f
+                    close()
+                }
+            },
+        )
+    }
 }
