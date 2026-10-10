@@ -177,10 +177,23 @@ fun transcriptionPrompt(languageName: String?) = if (languageName == null) {
     // Auto: the speaker may use any of NILA's languages, or mix them in one sentence.
     "Transcribe this speech exactly as spoken. The speaker uses English, Hindi or Malayalam, and may mix them. " +
         "Write each language in its own script: Malayalam in Malayalam script, Hindi in Devanagari, English in Latin letters. " +
-        "Output only the transcript, with no answer, translation or notes."
+        "Output only the transcript, with no answer, translation or notes. If there is no clear speech, output exactly: NONE"
 } else {
     "Transcribe this speech exactly as spoken. The speaker most likely uses $languageName. " +
-        "Write it in that language's own script. Output only the transcript, with no answer, translation or notes."
+        "Write it in that language's own script. Output only the transcript, with no answer, translation or notes. " +
+        "If there is no clear speech, output exactly: NONE"
+}
+
+/**
+ * Null for a transcript that isn't something the person said: "NONE" for silence, or the labelled
+ * "English: … Hindi: … Malayalam: …" lines Gemma invented from background noise on the iQOO, which
+ * were then sent as a request.
+ */
+fun spokenTranscript(raw: String?): String? {
+    val text = raw?.trim().orEmpty()
+    if (text.isEmpty() || text.equals("NONE", ignoreCase = true)) return null
+    if (Regex("""(?im)^\s*(english|hindi|malayalam)\s*:""").containsMatchIn(text)) return null
+    return text
 }
 
 /** Exposes a capability's schema to LiteRT-LM. Execution stays in NilaEngine, never inside the model runtime. */
@@ -194,7 +207,12 @@ private class CapabilityTool(private val capability: CapabilityDescriptor) : Ope
  * loaded. Order per ARCHITECTURE.md: deterministic fast paths, then the router, then conversation.
  * Business rules and permissions stay in NilaEngine: model output is only a proposal checked by checkCall.
  */
-class NilaBrain(private val context: Context, private val engine: NilaEngine) {
+/** [facts] reads what the user asked NILA to remember, fresh for every chat reply. */
+class NilaBrain(
+    private val context: Context,
+    private val engine: NilaEngine,
+    private val facts: () -> List<MemoryFact>,
+) {
     var assistantState by mutableStateOf(ModelState.MISSING)
         private set
     var routerState by mutableStateOf(ModelState.MISSING)
@@ -261,9 +279,14 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         fun done(path: String, response: NilaResponse) = response.also {
             Log.i(TAG, "path=$path ms=${SystemClock.elapsedRealtime() - start} response=${it::class.simpleName}")
         }
-        fun answer(path: String, response: NilaResponse) = done(path, response).also { remember(input, it) }
+        // People and budget always come from the user's own words, whichever path chose search_food.
+        fun answer(path: String, response: NilaResponse) =
+            done(path, (response as? NilaResponse.FoodSearch)?.let { engine.foodConstraints(input, it) } ?: response).also { remember(input, it) }
         engine.calculate(input)?.let { return@withContext answer("calculator", it) }
         val keyword = engine.route(input)
+        if (keyword is NilaIntent.Call && keyword.call.capabilityId == REMEMBER && assistant != null) {
+            return@withContext answer("rules+gemma:$REMEMBER", rememberWithKind(input, engine.execute(keyword)))
+        }
         if (keyword is NilaIntent.Call) return@withContext answer("rules:${keyword.call.capabilityId}", engine.execute(keyword))
         if (!engine.isSmallTalk(input)) {
             // Any wording, follow-up or language: Gemma restates it as one plain command the rules understand.
@@ -272,7 +295,8 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
                 val routed = engine.route(command)
                 if (routed is NilaIntent.Call) return@withContext answer("rewrite:${routed.call.capabilityId}", engine.execute(routed))
             }
-            modelRoute(input)?.let { return@withContext answer("functiongemma", it) }
+            // Stock FunctionGemma scored 4.7% on NILA's 12 tools (training eval); with Gemma 4 loaded, chat picks the tool.
+            if (assistant == null) modelRoute(input)?.let { return@withContext answer("functiongemma", it) }
         }
         chat(input)?.let { answer("gemma", it) } ?: answer("fallback", engine.execute(NilaIntent.Converse(input)))
     }
@@ -292,7 +316,8 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         val raw = runCatching {
             model.createConversation(
                 ConversationConfig(
-                    systemInstruction = Contents.of(REWRITE),
+                    // With the user's facts, "play some music" can become "play arijit singh" from "I like Arijit Singh".
+                    systemInstruction = Contents.of(personaWith(REWRITE, facts())),
                     samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0),
                 ),
             ).use { conversation ->
@@ -303,6 +328,26 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         val command = cleanCommand(raw) ?: return null
         return command.takeIf { numbersSaid(it, groundingText(input, history.lastOrNull())) }
             .also { Log.i(TAG, if (it == null) "rewrite dropped: unsaid numbers" else "rewrite -> command (${it.length} chars)") }
+    }
+
+    /**
+     * "Remember …" is always saved in the user's own words; Gemma only names the fact's kind. If Gemma does
+     * not call remember_fact, the fact is still saved, as Other: the model decides the kind, never whether to save.
+     */
+    private fun rememberWithKind(input: String, saved: NilaResponse): NilaResponse {
+        if (saved !is NilaResponse.Remember) return saved
+        val proposed = runCatching {
+            assistant?.createConversation(
+                ConversationConfig(
+                    systemInstruction = Contents.of(PERSONA),
+                    samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0),
+                    tools = listOfNotNull(engine.capabilities[REMEMBER]).map { tool(CapabilityTool(it)) },
+                    automaticToolCalling = false,
+                ),
+            )?.use { it.sendMessage(input) }
+        }.getOrNull()?.toolCalls?.firstOrNull { it.name == REMEMBER }
+        trace("gemma remember kind=${proposed?.arguments?.get("kind") != null}")
+        return saved.copy(kind = MemoryKind.from(proposed?.arguments?.get("kind") as? String))
     }
 
     /**
@@ -380,7 +425,7 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         }.onFailure { Log.w(TAG, "transcribe failed", it) }.getOrNull()
             // Timing and size only: a transcript is what the user said and must never reach device logs.
             .also { Log.i(TAG, "transcribe ms=${SystemClock.elapsedRealtime() - start} bytes=${wav.size} chars=${it?.length ?: 0}") }
-            ?.takeIf { it.isNotBlank() }
+            .let(::spokenTranscript)
     }
 
     /**
@@ -388,14 +433,33 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
      * on ("im hungry get me some biryani" came back as chat on the iQOO 15). A proposed call goes through
      * the same [act] checks as FunctionGemma's, so chat never acts on its own.
      */
+    /**
+     * Answers a web question from the search results' own text, on the phone. Search services often return
+     * only pages, and a list of links was all NILA showed. Null when Gemma isn't loaded or has nothing to say.
+     */
+    suspend fun answerFromWeb(question: String, results: List<WebResult>): String? = withContext(llm) {
+        val model = assistant ?: return@withContext null
+        val context = results.take(WEB_RESULTS_READ).mapIndexed { i, r -> "${i + 1}. ${r.title}: ${r.snippet.take(WEB_SNIPPET_CHARS)}" }.joinToString("\n")
+        if (context.isBlank()) return@withContext null
+        runCatching {
+            model.createConversation(
+                ConversationConfig(
+                    systemInstruction = Contents.of(WEB_ANSWER),
+                    samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0),
+                ),
+            ).use { it.sendMessage("Question: $question\n\nSearch results:\n$context").contents.contents.filterIsInstance<Content.Text>().joinToString("") { t -> t.text }.trim() }
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+    }
+
     private fun chat(input: String): NilaResponse? {
         val model = assistant ?: return null
         val response = runCatching {
             model.createConversation(
                 ConversationConfig(
-                    systemInstruction = Contents.of(PERSONA),
+                    systemInstruction = Contents.of(personaWith(PERSONA, facts())),
                     initialMessages = history.flatMap { (user, nila) -> listOf(Message.user(user), Message.model(nila)) },
-                    samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.6),
+                    // A fresh seed per reply: with the default seed "tell me a joke" gave the same joke every time.
+                    samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.6, seed = kotlin.random.Random.nextInt()),
                     tools = engine.capabilities.values.map { tool(CapabilityTool(it)) },
                     automaticToolCalling = false,
                 ),
@@ -419,6 +483,7 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
     private companion object {
         const val TAG = "NilaBrain"
         const val HISTORY_TURNS = 4
+        const val REMEMBER = "remember_fact"
         const val ALARM_HELP = "I couldn't read that time, so no alarm is set. Try \"set an alarm for 1:30 pm\"."
         const val NO_ACTION_TAKEN = "I haven't done that. Chat can't take actions. To set an alarm, say a time like \"set an alarm for 1:30 pm\" and tap Set alarm on the card."
 
@@ -433,6 +498,13 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             permission = PermissionClass.READ,
         )
         /** NILA's phrasebook: every command the keyword rules understand. Gemma maps any wording onto one. */
+        const val WEB_RESULTS_READ = 5
+        const val WEB_SNIPPET_CHARS = 400
+        val WEB_ANSWER = """
+            Answer the question in two or three short, plain sentences using only the search results given.
+            Lead with the answer itself. If the results don't contain it, say you couldn't find it. No lists, no links.
+        """.trimIndent()
+
         val REWRITE = """
             You turn the user's new message into ONE command for NILA, a phone assistant, using the conversation for context.
             Pick from these commands and fill the <parts> with the user's own words, names and numbers, in English:
@@ -443,6 +515,10 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             schedule <title> <day> at <time> | take a note that <text> | show my notes
             call <name or number> | tell <name> <message>
             take me to <place> | <things> near me | search for <query>
+            order food <cooked dish or meal from a restaurant> | shop groceries <item to buy from a store>
+            Cooked dishes and meals are food: biryani, pizza, dosa, a paneer roll, dinner, lunch.
+            Things you cook with or keep at home are groceries: milk, eggs, bread, fruit, bananas, vegetables, rice, atta, oil, sugar, snacks, soap, detergent.
+            "buy milk" -> shop groceries milk. "we are out of eggs" -> shop groceries eggs. "buy dinner" -> order food dinner.
             play <song or artist> | pause the music | next song | previous song
             volume up | volume down | mute | vibrate mode | silent mode | ring mode
             open <wifi, bluetooth, battery, display, sound, location> settings | open <app name>
@@ -461,7 +537,7 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             draft a text message, search the web, play or pause music, change the volume or ring mode,
             open settings pages or any installed app, show alarms, tell the battery level,
             open YouTube, Netflix, Instagram or BGMI, order food on Swiggy, buy groceries on Zepto or Instamart,
-            show the route to a place or find places nearby, remember one fact, and calculate percentages.
+            show the route to a place or find places nearby, remember facts the user tells NILA, and calculate percentages.
             Questions are not requests: "is biryani healthy" or "what is Koramangala famous for" get a spoken answer, not a tool.
             Jokes, facts, advice and small talk are welcome: answer them yourself, briefly and warmly.
             For actions NILA has no tool for, such as payments outside a food or grocery order, say plainly that NILA cannot do that yet and name something it can do.

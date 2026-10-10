@@ -152,10 +152,8 @@ internal class GroceryFlow(
         )
         instamart.cart() // syncs Instamart's steppers with its real cart
         val instamartGroup = instamart.group(item, instamart.search(parsed.searchQuery, parsed.desiredSize), scope, onProblem)
-        val cheapest = listOf(zeptoGroup, instamartGroup)
-            .flatMap { group -> group.items.map { group.providerName to it } }
-            .minByOrNull { (_, product) -> product.price.filter { it.isDigit() || it == '.' }.toDoubleOrNull() ?: Double.MAX_VALUE }
-            ?.let { (provider, product) -> "Cheapest: $provider · ${product.price}" }
+        // Best value per litre or kilo, so a small cheap pack doesn't win over a bigger one.
+        val cheapest = cheapestLine(item, listOf(zeptoGroup, instamartGroup))
         return GroceryCard.Products(at, item, listOf(zeptoGroup, instamartGroup), cheapest).also { lastProducts = it }
     }
 

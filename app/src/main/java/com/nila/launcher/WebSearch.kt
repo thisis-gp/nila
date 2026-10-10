@@ -63,11 +63,32 @@ object TavilySearch {
     }
 }
 
-private val WEB_SEARCH_TRIGGERS = listOf("search for ", "search the web for ", "web search ", "look up ", "google ")
+/**
+ * Web answers with no key: DuckDuckGo's free Instant Answer API (abstract + related links). It has no full
+ * results page, so the caller always adds "open in browser". Tavily is used instead once the user adds a key.
+ */
+object InstantAnswer {
+    private const val URL = "https://api.duckduckgo.com/"
+    private const val MAX_RELATED = 4
+    private val http = okhttp3.OkHttpClient()
 
-/** Strips a leading web-search phrase and returns the query, or null if the prompt doesn't start with one. */
-fun extractWebSearchQuery(prompt: String): String? {
-    val lower = prompt.lowercase()
-    val trigger = WEB_SEARCH_TRIGGERS.firstOrNull { lower.startsWith(it) } ?: return null
-    return prompt.substring(trigger.length).trim().takeIf { it.isNotBlank() }
+    fun search(query: String): TavilySearch.Answer {
+        val url = "$URL?format=json&no_html=1&skip_disambig=1&q=" + java.net.URLEncoder.encode(query, "UTF-8")
+        val body = http.newCall(okhttp3.Request.Builder().url(url).header("User-Agent", "NILA-Launcher/0.1").build()).execute()
+            .use { it.body?.string().orEmpty() }
+        val json = JSONObject(body)
+        val related = json.optJSONArray("RelatedTopics") ?: JSONArray()
+        val items = (0 until related.length()).mapNotNull { i ->
+            val topic = related.optJSONObject(i) ?: return@mapNotNull null
+            val text = topic.optString("Text").ifBlank { return@mapNotNull null }
+            WebResult(text.substringBefore(" - ").take(80), topic.optString("FirstURL"), text)
+        }.take(MAX_RELATED)
+        val abstract = json.optString("AbstractText").ifBlank { null }
+        val source = json.optString("AbstractURL").ifBlank { null }
+        val lead = if (abstract != null && source != null) listOf(WebResult(json.optString("Heading").ifBlank { query }, source, abstract)) else emptyList()
+        return TavilySearch.Answer(abstract, lead + items)
+    }
 }
+
+/** A web question answered in a few sentences, with the pages it came from folded away underneath. */
+data class WebAnswer(val question: String, val answer: String, val sources: List<WebResult>) : NilaResponse

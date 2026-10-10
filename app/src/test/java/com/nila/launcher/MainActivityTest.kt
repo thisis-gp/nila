@@ -27,4 +27,11 @@ class MainActivityTest {
         assertTrue(isFollowUpTurn("Action result"))
         assertFalse(isFollowUpTurn("Set an alarm for 6:30 am"))
     }
+
+    @Test
+    fun cheapestLineSurvivesPercentInQueryAndPack() {
+        val milk = PickableProduct("Toned milk", "1 L · 3% fat", "₹54") {}
+        val line = cheapestLine("toned milk 3%", listOf(ProductProviderGroup("Zepto", "from ₹54", listOf(milk))))
+        assertTrue(line, line.contains("₹54 per litre"))
+    }
 }
