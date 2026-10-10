@@ -243,6 +243,12 @@ private fun NilaApp(resumeVersion: Int) {
                                 onSubmit = ::submit,
                                 context = context,
                                 prepare = engine::prepare,
+                                confirm = { token ->
+                                    // Replace the card with its result so the Confirm button cannot be tapped again.
+                                    val index = turns.indexOfFirst { (it.response as? NilaResponse.NeedsConfirmation)?.token == token }
+                                    val result = engine.confirm(token)
+                                    if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
+                                },
                             ) { label, next -> turns += Turn(label, next) }
                         }
                         NilaScreen.Home -> Unit
@@ -296,6 +302,7 @@ private fun AgentSpace(
     onSubmit: (String) -> Unit,
     context: Context,
     prepare: (Choice) -> NilaResponse.Confirmation,
+    confirm: (String) -> Unit,
     addTurn: (String, NilaResponse) -> Unit,
 ) {
     val lastWasConfirmation = turns.lastOrNull()?.response is NilaResponse.Confirmation
@@ -350,7 +357,7 @@ private fun AgentSpace(
                     if (index == turns.lastIndex && isThinking) {
                         Text("NILA is thinking…", color = Muted, style = MaterialTheme.typography.bodyMedium)
                     } else {
-                        ResponseView(response = turn.response, context = context, prepare = prepare, addTurn = addTurn)
+                        ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, addTurn = addTurn)
                     }
                 }
             }
@@ -413,9 +420,16 @@ private fun ResponseView(
     response: NilaResponse,
     context: Context,
     prepare: (Choice) -> NilaResponse.Confirmation,
+    confirm: (String) -> Unit,
     addTurn: (String, NilaResponse) -> Unit,
 ) {
     when (response) {
+        // ponytail: plain tap confirms; biometric prompt comes with the confirmation flow.
+        is NilaResponse.NeedsConfirmation -> ActionCard(
+            title = response.capability.description,
+            detail = response.lines.joinToString("\n", postfix = "\nNothing happens until you confirm.") { (name, value) -> "$name: $value" },
+            action = "Confirm",
+        ) { confirm(response.token) }
         is NilaResponse.Text -> Text(response.value)
         is NilaResponse.Remember -> Text("I'll remember: ${response.fact}")
         is NilaResponse.Alarm -> ActionCard(

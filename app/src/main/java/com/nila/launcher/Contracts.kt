@@ -8,9 +8,11 @@ enum class PermissionClass { READ, PREPARE, COMMIT }
 /** Every result and component says where its data came from, so fixtures are never shown as real. */
 enum class DataSource { REAL, FIXTURE, SIMULATED }
 
-enum class ParamType { STRING, INT, NUMBER, BOOLEAN }
+/** PAISE is a whole, non-negative amount of money in paise, shown to people as rupees. */
+enum class ParamType { STRING, INT, NUMBER, BOOLEAN, PAISE }
 
-data class Param(val name: String, val type: ParamType, val required: Boolean = true)
+/** [label] is the name people see, for example on a confirmation card. */
+data class Param(val name: String, val type: ParamType, val required: Boolean = true, val label: String = name)
 
 data class CapabilityDescriptor(
     val id: String,
@@ -51,11 +53,13 @@ fun checkCall(call: ToolCall, registry: Map<String, CapabilityDescriptor>): Call
             ParamType.INT -> value is Int
             ParamType.NUMBER -> value is Number
             ParamType.BOOLEAN -> value is Boolean
+            ParamType.PAISE -> (value is Int || value is Long) && (value as Number).toLong() >= 0
         }
         if (!typeOk) return CallCheck.Rejected("Argument $name must be ${param.type}")
     }
     val missing = capability.params.filter { it.required && it.name !in call.args }.map { it.name }
-    return if (missing.isEmpty()) CallCheck.Ok(call, capability) else CallCheck.Missing(capability.id, missing)
+    // Ok carries a copy of the arguments: a caller's mutable map changing later cannot alter what was checked or shown.
+    return if (missing.isEmpty()) CallCheck.Ok(call.copy(args = call.args.toMap()), capability) else CallCheck.Missing(capability.id, missing)
 }
 
 /** Provider results in one shape so they can be compared. Money is in paise. */
