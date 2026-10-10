@@ -16,6 +16,7 @@ data class SettingsPage(val page: String) : NilaResponse
 data class LaunchApp(val name: String) : NilaResponse
 data object ShowAlarms : NilaResponse
 data object BatteryLevel : NilaResponse
+data object ShowNotes : NilaResponse
 
 val moreCapabilities = listOf(
     CapabilityDescriptor(
@@ -32,6 +33,7 @@ val moreCapabilities = listOf(
     CapabilityDescriptor("launch_app", "Open any installed app by name.", listOf(Param("name", ParamType.STRING)), PermissionClass.READ, label = "Open app"),
     CapabilityDescriptor("show_alarms", "Show the alarms set on this phone.", emptyList(), PermissionClass.READ, label = "Alarms"),
     CapabilityDescriptor("battery", "Tell the battery level and whether it is charging.", emptyList(), PermissionClass.READ, label = "Battery"),
+    CapabilityDescriptor("show_notes", "Show the notes the user saved.", emptyList(), PermissionClass.READ, label = "Notes"),
 )
 
 private fun Regex.after(text: String, group: Int) = find(text)?.groupValues?.get(group)?.trim()?.trimEnd('.', '!', '?')?.takeIf { it.isNotBlank() }
@@ -97,6 +99,7 @@ fun asksBattery(text: String) = Regex("""\bbattery\b""").containsMatchIn(text.lo
 
 /** The keyword route for these actions, in priority order; null when none matches. */
 fun moreActionCall(input: String): ToolCall? {
+    if (Regex("""\b(show|read|list|open|what are|what's in)\b.*\bnotes?\b""").containsMatchIn(input.lowercase())) return ToolCall("show_notes", emptyMap())
     settingsPage(input)?.let { return ToolCall("open_settings", mapOf("page" to it)) }
     if (wantsAlarmList(input)) return ToolCall("show_alarms", emptyMap())
     if (asksBattery(input)) return ToolCall("battery", emptyMap())
@@ -129,6 +132,7 @@ fun moreRun(call: ToolCall): NilaResponse? {
         "launch_app" -> LaunchApp(args["name"] as String)
         "show_alarms" -> ShowAlarms
         "battery" -> BatteryLevel
+        "show_notes" -> ShowNotes
         else -> null
     }
 }
