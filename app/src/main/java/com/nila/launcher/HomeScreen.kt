@@ -257,7 +257,7 @@ private fun DrawScope.drawOliveWallpaper() {
     )
 }
 
-private fun DrawScope.farthestCorner(point: Offset): Float =
+internal fun DrawScope.farthestCorner(point: Offset): Float =
     hypot(maxOf(point.x, size.width - point.x), maxOf(point.y, size.height - point.y))
 
 /** "Next alarm 6:30 am", with the weekday when it isn't today; null when Android reports no alarm. */

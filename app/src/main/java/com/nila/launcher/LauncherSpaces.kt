@@ -155,7 +155,7 @@ internal fun AppsSpace(
     }
 
     Column(Modifier.fillMaxSize().closeOnPullDown(onBack).background(Night).padding(start = 20.dp, end = 20.dp, top = 12.dp)) {
-        TopAction(label = "ALL APPS", onBack = onBack) {
+        TopAction(onBack = onBack, label = "ALL APPS") {
             RoundButton(LucideR.drawable.lucide_ic_image, "Change wallpaper", onChangeWallpaper)
             RoundButton(LucideR.drawable.lucide_ic_settings, "Settings", onOpenSettings)
         }
