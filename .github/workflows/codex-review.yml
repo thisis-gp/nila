@@ -46,7 +46,7 @@ jobs:
       - name: Fetch base and verify reviewed commit
         env:
           GH_TOKEN: ${{ github.token }}
-          BASE_SHA: ${{ steps.pr.outputs.base_sha || github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ steps.context.outputs.head_sha }}
         run: |
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
