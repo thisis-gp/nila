@@ -108,6 +108,7 @@ internal class McpAuth(private val provider: McpProvider) {
         // must match this run's exact callback URI — register after opening the
         // socket, not once-and-cache, and always with the real redirectUri.
         val server = runCatching { ServerSocket(0) }.getOrNull() ?: return null
+        trace(context, "start port=${server.localPort}")
         // Closed on every exit, cancellation included: a cancelled sign-in left this socket queueing redirects.
         try {
             return loginWith(context, server)
@@ -128,6 +129,7 @@ internal class McpAuth(private val provider: McpProvider) {
         // they'd run on the caller's dispatcher (Main, from rememberCoroutineScope)
         // and throw NetworkOnMainThreadException, silently swallowed by runCatching.
         val clientId = withContext(Dispatchers.IO) { registerClient(redirectUri) }
+        trace(context, "registered=${clientId != null}")
         if (clientId == null) {
             runCatching { server.close() }
             return null
@@ -147,16 +149,20 @@ internal class McpAuth(private val provider: McpProvider) {
             .build()
 
         CustomTabsIntent.Builder().build().launchUrl(context, authorizeUri)
+        trace(context, "tab opened")
 
         // Phone number + OTP sign-in takes minutes: Zomato's login finished after the old 90s wait had
         // already closed the loopback socket, and the tab hung on "Redirecting you back to the application".
         val code = withTimeoutOrNull(LOGIN_WAIT_MS) { awaitCallback(server, state) }
+        trace(context, "callback code=${code != null}")
         if (code == null) {
             runCatching { server.close() }
             return null
         }
 
-        val tokenJson = withContext(Dispatchers.IO) { exchangeCode(clientId, code, verifier, redirectUri) } ?: return null
+        val tokenJson = withContext(Dispatchers.IO) { exchangeCode(clientId, code, verifier, redirectUri) }
+        trace(context, "token=${tokenJson?.has("access_token")}")
+        tokenJson ?: return null
         val accessToken = tokenJson.optString("access_token").ifBlank { return null }
         val expiresIn = tokenJson.optLong("expires_in", provider.defaultLifetimeSeconds)
         val expiresAt = System.currentTimeMillis() + expiresIn * 1000
@@ -173,10 +179,19 @@ internal class McpAuth(private val provider: McpProvider) {
      * the real redirect: reading only the first connection waited on that silent socket forever while the
      * redirect with the code sat unaccepted in the queue. Silent or code-less connections are answered and skipped.
      */
+    private var appFiles: java.io.File? = null
+
+    // vivo drops app logcat; each sign-in step goes to files/auth.txt instead. No codes or tokens are written.
+    private fun trace(context: Context, step: String) {
+        appFiles = context.filesDir
+        runCatching { java.io.File(context.filesDir, "auth.txt").appendText("${provider.name} $step\n") }
+    }
+
     private suspend fun awaitCallback(server: ServerSocket, expectedState: String): String? =
         suspendCancellableCoroutine { cont ->
             cont.invokeOnCancellation { runCatching { server.close() } }
             Thread {
+                runCatching { java.io.File(appFiles, "auth.txt").appendText("${provider.name} accept thread\n") }
                 var code: String? = null
                 while (code == null && !server.isClosed) {
                     val socket = runCatching { server.accept() }.getOrNull() ?: break
