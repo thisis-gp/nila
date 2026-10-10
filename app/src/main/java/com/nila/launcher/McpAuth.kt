@@ -4,7 +4,13 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.browser.customtabs.CustomTabsIntent
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -38,6 +44,31 @@ internal val ZOMATO = McpProvider("Zomato", "https://mcp-server.zomato.com", "/r
 
 internal val SwiggyAuth = McpAuth(SWIGGY)
 internal val ZomatoAuth = McpAuth(ZOMATO)
+
+/**
+ * Runs sign-ins in a scope that outlives the screen that started them. While the browser tab is open the
+ * launcher's screen is torn down; a sign-in tied to it was cancelled before it listened for the redirect,
+ * so Zomato's "Redirecting you back" reached a socket nobody accepted.
+ */
+internal object SignIns {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** Bumped after every sign-in or sign-out, so screens re-read the stored sessions. */
+    var revision by mutableIntStateOf(0)
+        private set
+
+    fun start(auth: McpAuth, context: Context, onFailed: () -> Unit) {
+        scope.launch {
+            if (auth.login(context) == null) onFailed()
+            revision++
+        }
+    }
+
+    fun signOut(auth: McpAuth, context: Context) {
+        auth.logout(context)
+        revision++
+    }
+}
 
 /**
  * OAuth 2.1 + PKCE against an MCP auth server (Swiggy's first), using dynamic client
@@ -77,6 +108,15 @@ internal class McpAuth(private val provider: McpProvider) {
         // must match this run's exact callback URI — register after opening the
         // socket, not once-and-cache, and always with the real redirectUri.
         val server = runCatching { ServerSocket(0) }.getOrNull() ?: return null
+        // Closed on every exit, cancellation included: a cancelled sign-in left this socket queueing redirects.
+        try {
+            return loginWith(context, server)
+        } finally {
+            runCatching { server.close() }
+        }
+    }
+
+    private suspend fun loginWith(context: Context, server: ServerSocket): Session? {
         // 127.0.0.1, not "localhost": RFC 8252 §8.3 recommends the IP literal, and
         // Chrome's Private Network Access checks treat a public HTTPS page
         // redirecting to "localhost" more strictly than to the loopback literal —

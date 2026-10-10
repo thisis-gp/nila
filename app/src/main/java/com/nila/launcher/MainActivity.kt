@@ -157,8 +157,8 @@ private fun NilaApp(resumeVersion: Int) {
     val scope = rememberCoroutineScope()
     var isThinking by remember { mutableStateOf(false) }
     var justReplied by remember { mutableStateOf(false) }
-    var swiggySession by remember { mutableStateOf(SwiggyAuth.currentSession(context)) }
-    var zomatoSession by remember { mutableStateOf(ZomatoAuth.currentSession(context)) }
+    val swiggySession = remember(SignIns.revision) { SwiggyAuth.currentSession(context) }
+    val zomatoSession = remember(SignIns.revision) { ZomatoAuth.currentSession(context) }
     val foodFlow = remember { FoodFlow(context.applicationContext) }
 
     /** Runs one Swiggy step as its own chat turn, with the same thinking state as a typed request. */
@@ -408,30 +408,22 @@ private fun NilaApp(resumeVersion: Int) {
                                         detail = "Orders food · OAuth with PKCE · sign in again after 5 days",
                                         connected = swiggySession != null,
                                         onConnect = {
-                                            scope.launch {
-                                                swiggySession = SwiggyAuth.login(context)
-                                                if (swiggySession == null) Toast.makeText(context, "Swiggy sign-in didn't complete.", Toast.LENGTH_SHORT).show()
+                                            SignIns.start(SwiggyAuth, context) {
+                                                Toast.makeText(context.applicationContext, "Swiggy sign-in didn't complete.", Toast.LENGTH_SHORT).show()
                                             }
                                         },
-                                        onDisconnect = {
-                                            SwiggyAuth.logout(context)
-                                            swiggySession = null
-                                        },
+                                        onDisconnect = { SignIns.signOut(SwiggyAuth, context) },
                                     ),
                                     ServiceAccount(
                                         name = "Zomato",
                                         detail = "Compares your Swiggy cart with the same order on Zomato",
                                         connected = zomatoSession != null,
                                         onConnect = {
-                                            scope.launch {
-                                                zomatoSession = ZomatoAuth.login(context)
-                                                if (zomatoSession == null) Toast.makeText(context, "Zomato sign-in didn't complete.", Toast.LENGTH_SHORT).show()
+                                            SignIns.start(ZomatoAuth, context) {
+                                                Toast.makeText(context.applicationContext, "Zomato sign-in didn't complete.", Toast.LENGTH_SHORT).show()
                                             }
                                         },
-                                        onDisconnect = {
-                                            ZomatoAuth.logout(context)
-                                            zomatoSession = null
-                                        },
+                                        onDisconnect = { SignIns.signOut(ZomatoAuth, context) },
                                     ),
                                 ),
                             )
