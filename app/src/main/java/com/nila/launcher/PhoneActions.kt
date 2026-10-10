@@ -13,7 +13,11 @@ data class Torch(val on: Boolean) : NilaResponse
 /** [time] is null for an all-day event. */
 data class CalendarEvent(val title: String, val date: LocalDate, val time: LocalTime?) : NilaResponse
 data class Note(val text: String) : NilaResponse
-data class Camera(val video: Boolean) : NilaResponse
+data class Camera(val video: Boolean, val front: Boolean = false) : NilaResponse
+/** Pause, resume, stop or ask about NILA's own timer. */
+data class TimerControl(val action: String) : NilaResponse
+/** A note saved in NILA; the card offers to copy it into the phone's notes app too. */
+data class NoteSaved(val text: String) : NilaResponse
 /** [who] is a phone number or a contact name, as the user said it. */
 data class Call(val who: String) : NilaResponse
 
@@ -42,6 +46,23 @@ fun torchOn(text: String) = !Regex("""\b(off|disable|stop|switch off|turn off)\b
 
 /** True when the user asked for a video rather than a photo. */
 fun wantsVideo(text: String) = Regex("""\b(video|record)\b""").containsMatchIn(text.lowercase())
+
+/** "take a selfie" or "front camera": the camera should open facing the user. */
+fun wantsFront(text: String) = Regex("""\b(selfie|front camera|front-facing)\b""").containsMatchIn(text.lowercase())
+
+/** "pause the timer", "stop timer", "how much time is left" → the action; null when not about a running timer. */
+fun timerControl(text: String): String? {
+    val lower = text.lowercase()
+    return when {
+        // Needs "time" or "timer": "how much battery is left" is not about the timer.
+        Regex("""\b(how much|how long)\s+(time|longer)\b|\btime (left|remaining)\b|\btimer\b.*\b(left|remaining|status)\b""").containsMatchIn(lower) -> "status"
+        !Regex("""\btimer\b""").containsMatchIn(lower) -> null
+        Regex("""\b(pause|hold|freeze)\b""").containsMatchIn(lower) -> "pause"
+        Regex("""\b(resume|continue|unpause|restart)\b""").containsMatchIn(lower) -> "resume"
+        Regex("""\b(stop|cancel|end|dismiss|off|clear|reset)\b""").containsMatchIn(lower) -> "stop"
+        else -> null
+    }
+}
 
 private val weekdays = DayOfWeek.entries.associateBy { it.name.lowercase() }
 
@@ -109,4 +130,18 @@ fun eventWhen(date: LocalDate, time: LocalTime?): String {
         date.month.name.take(3).lowercase().replaceFirstChar { it.uppercase() },
     )
     return "$day, " + (time?.let { "%02d:%02d".format(it.hour, it.minute) } ?: "all day")
+}
+
+enum class DismissPlan { DISMISS_NEXT, SHOW_LIST, NOTHING_SET }
+
+/**
+ * Decides how to turn off an alarm when Android shows apps only the next enabled one. A specific time is
+ * dismissed only when it IS that next alarm; anything else opens the alarm list for the user to choose,
+ * because vivo's Clock removed other alarms when asked for a time it did not have.
+ */
+fun dismissPlan(hour: Int?, minute: Int, nextHour: Int?, nextMinute: Int?): DismissPlan = when {
+    nextHour == null -> if (hour == null) DismissPlan.NOTHING_SET else DismissPlan.SHOW_LIST
+    hour == null -> DismissPlan.DISMISS_NEXT
+    hour == nextHour && minute == nextMinute -> DismissPlan.DISMISS_NEXT
+    else -> DismissPlan.SHOW_LIST
 }

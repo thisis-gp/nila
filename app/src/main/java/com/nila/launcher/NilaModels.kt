@@ -395,7 +395,8 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             You turn the user's new message into ONE command for NILA, a phone assistant, using the conversation for context.
             Pick from these commands and fill the <parts> with the user's own words, names and numbers, in English:
             set an alarm for <time> | cancel the alarm for <time> | turn off my alarm | show my alarms
-            set a timer for <n> minutes | turn on the flashlight | turn off the flashlight
+            set a timer for <n> minutes | pause the timer | resume the timer | stop the timer | how much time is left
+            turn on the flashlight | turn off the flashlight
             open the camera | take a selfie | record a video
             schedule <title> <day> at <time> | take a note that <text> | show my notes
             call <name or number> | tell <name> <message>

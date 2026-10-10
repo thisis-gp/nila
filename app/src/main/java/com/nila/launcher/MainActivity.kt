@@ -828,21 +828,15 @@ private fun ResponseView(
         // Only reached if a dismissal was not confirmed through the card; it is never sent without confirmation.
         is NilaResponse.DismissAlarm -> Text("This alarm was not turned off.")
         // Torch, Camera and Note are done in performNow before they reach the chat.
-        is Torch, is Camera, is Note, is Directions, is MapSearch, is WebSearch, is PlayMusic, is MediaKey, is SoundChange,
+        is Torch, is Camera, is Note, is TimerControl, is Directions, is MapSearch, is WebSearch, is PlayMusic, is MediaKey, is SoundChange,
         is SettingsPage, is LaunchApp, ShowAlarms, BatteryLevel, ShowNotes -> Text("Done.")
         is Message -> MessageCard(response, context) { addTurn("Action result", NilaResponse.Text(it)) }
-        is Timer -> ActionCard(
-            title = "Timer %d:%02d".format(response.seconds / 60, response.seconds % 60),
-            detail = "Ready to ask the Clock app to start this timer.",
-            action = "Start timer",
-        ) {
-            val intent = Intent(AlarmClock.ACTION_SET_TIMER)
-                .putExtra(AlarmClock.EXTRA_LENGTH, response.seconds)
-                .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
-            runCatching { context.startActivity(intent) }
-                .onSuccess { addTurn("Action result", NilaResponse.Text("Timer request sent to the Clock app.")) }
-                .onFailure { addTurn("Action result", NilaResponse.Text("No timer app is available.")) }
-        }
+        is Timer -> TimerCard()
+        is NoteSaved -> ActionCard(
+            title = "Saved to your notes",
+            detail = "\"${response.text}\"\nSay \"show my notes\" to see them all.",
+            action = "Add to Notes app",
+        ) { addTurn("Action result", NilaResponse.Text(copyToNotesApp(context, response.text))) }
         is CalendarEvent -> ActionCard(
             title = response.title,
             detail = eventWhen(response.date, response.time) + "\nOpens your calendar to save it.",
@@ -870,7 +864,10 @@ private fun ResponseView(
                 putExtra(AlarmClock.EXTRA_SKIP_UI, true)
             }
             runCatching { context.startActivity(intent) }
-                .onSuccess { addTurn("Action result", NilaResponse.Text("Alarm request sent to Android.")) }
+                .onSuccess {
+                    returnToNila(context)
+                    addTurn("Action result", NilaResponse.Text("Alarm set for %02d:%02d in your Clock.".format(response.hour, response.minute)))
+                }
                 .onFailure { addTurn("Action result", NilaResponse.Text("No alarm application is available.")) }
         }
         is NilaResponse.OpenApp -> ActionCard(
@@ -1106,30 +1103,43 @@ internal fun tapOnce(consumed: java.util.concurrent.atomic.AtomicBoolean): Boole
  * or delete alarms directly, so this is a request: the Clock app may show its own screen to pick one.
  */
 private fun dismissAlarm(context: Context, alarm: NilaResponse.DismissAlarm): NilaResponse.Text {
-    val intent = Intent(AlarmClock.ACTION_DISMISS_ALARM).apply {
-        if (alarm.hour == null) {
-            putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_NEXT)
-        } else {
-            putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_TIME)
-            putExtra(AlarmClock.EXTRA_HOUR, alarm.hour)
-            putExtra(AlarmClock.EXTRA_MINUTES, alarm.minute)
+    // Android only tells apps the NEXT enabled alarm. vivo's Clock removed other alarms when asked to turn off
+    // a time it did not have, so NILA dismisses only an alarm it can see; otherwise the user picks in Clock.
+    val next = context.getSystemService(android.app.AlarmManager::class.java).nextAlarmClock?.let {
+        java.time.Instant.ofEpochMilli(it.triggerTime).atZone(java.time.ZoneId.systemDefault()).toLocalTime()
+    }
+    return when (dismissPlan(alarm.hour, alarm.minute, next?.hour, next?.minute)) {
+        DismissPlan.NOTHING_SET -> NilaResponse.Text("You have no alarm switched on, so there's nothing to turn off.")
+        DismissPlan.SHOW_LIST -> runCatching { context.startActivity(Intent(AlarmClock.ACTION_SHOW_ALARMS)) }.fold(
+            onSuccess = {
+                NilaResponse.Text(
+                    "I can only see your next alarm" + (next?.let { " (%02d:%02d)".format(it.hour, it.minute) } ?: "") +
+                        ", not one at %02d:%02d. I opened your alarms so you can turn the right one off.".format(alarm.hour, alarm.minute),
+                )
+            },
+            onFailure = { NilaResponse.Text("I couldn't open your alarms. Nothing was changed.") },
+        )
+        DismissPlan.DISMISS_NEXT -> {
+            val intent = Intent(AlarmClock.ACTION_DISMISS_ALARM).putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_NEXT)
+            val which = "%02d:%02d".format(next!!.hour, next.minute)
+            runCatching { context.startActivity(intent) }.fold(
+                onSuccess = { returnToNila(context); NilaResponse.Text("Asked the Clock app to turn off your $which alarm.") },
+                onFailure = { NilaResponse.Text("The Clock app on this phone can't turn off alarms for NILA. Nothing was changed.") },
+            )
         }
     }
-    val which = alarm.hour?.let { "the %02d:%02d alarm".format(it, alarm.minute) } ?: "your next alarm"
-    return runCatching { context.startActivity(intent) }.fold(
-        onSuccess = { NilaResponse.Text("Asked the Clock app to turn off $which. Check Clock if it asks you to pick one.") },
-        onFailure = { NilaResponse.Text("The Clock app on this phone can't turn off alarms for NILA. Nothing was changed.") },
-    )
 }
 
 /** Does harmless, reversible actions straight away and reports what happened; everything else is returned as is. */
 private fun performNow(context: Context, response: NilaResponse): NilaResponse = when (response) {
     is Torch -> NilaResponse.Text(setTorch(context, response.on))
-    is Camera -> runCatching {
-        val action = if (response.video) android.provider.MediaStore.INTENT_ACTION_VIDEO_CAMERA else android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA
-        context.startActivity(Intent(action))
-    }.fold({ NilaResponse.Text(if (response.video) "Opening the camera for video." else "Opening the camera.") }, { NilaResponse.Text("No camera app is available.") })
-    is Note -> NilaResponse.Text(saveNote(context, response.text))
+    is Camera -> runCatching { context.startActivity(cameraIntent(response)) }.fold(
+        { NilaResponse.Text(if (response.video) "Opening the camera to record video." else if (response.front) "Opening the front camera." else "Opening the camera.") },
+        { NilaResponse.Text("No camera app is available.") },
+    )
+    is Note -> { saveNote(context, response.text); NoteSaved(response.text) }
+    is Timer -> response.also { NilaTimer.start(context, it.seconds) }
+    is TimerControl -> NilaResponse.Text(controlTimer(response.action))
     is Directions -> openUri(context, "google.navigation:q=" + Uri.encode(response.place), "Opening directions to ${response.place}.", "No maps app is available.")
     is MapSearch -> openUri(context, "geo:0,0?q=" + Uri.encode(response.query), "Showing ${response.query} nearby in Maps.", "No maps app is available.")
     is WebSearch -> start(context, Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, response.query), "Searching the web for ${response.query}.", "No browser is available.")
@@ -1316,5 +1326,82 @@ private fun MessageCard(message: Message, context: Context, report: (String) -> 
             else -> askContacts.launch(android.Manifest.permission.READ_CONTACTS)
         }
     }
+}
+
+/**
+ * Video uses the recording request (vivo opened photo mode for the video-camera one). A selfie adds the
+ * front-camera hints most camera apps, vivo's included, honour; Android has no official extra for it.
+ */
+private fun cameraIntent(camera: Camera): Intent {
+    val intent = Intent(if (camera.video) android.provider.MediaStore.ACTION_VIDEO_CAPTURE else android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
+    if (camera.front) {
+        intent.putExtra("android.intent.extras.CAMERA_FACING", 1)
+            .putExtra("android.intent.extras.LENS_FACING_FRONT", 1)
+            .putExtra("android.intent.extra.USE_FRONT_CAMERA", true)
+            .putExtra("camerafacing", "front")
+    }
+    return intent
+}
+
+/** Brings NILA back after another app (the Clock) has taken a request, so the user stays in the chat. */
+private fun returnToNila(context: Context) {
+    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+        runCatching {
+            context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }, 900)
+}
+
+private fun controlTimer(action: String): String = when (action) {
+    "pause" -> if (NilaTimer.pause()) "Timer paused at ${timerText(NilaTimer.remainingMs)}." else "No timer is running."
+    "resume" -> if (NilaTimer.resume()) "Timer resumed: ${timerText(NilaTimer.remainingMs)} left." else "There's no paused timer."
+    "stop" -> if (NilaTimer.active) { NilaTimer.stop(); "Timer stopped." } else "No timer is running."
+    else -> when {
+        NilaTimer.ringing -> "Time's up. Say \"stop the timer\" to silence it."
+        NilaTimer.running -> "${timerText(NilaTimer.remainingMs)} left on the timer."
+        NilaTimer.remainingMs > 0 -> "Timer paused with ${timerText(NilaTimer.remainingMs)} left."
+        else -> "No timer is running."
+    }
+}
+
+/** The live timer in the chat: counts down, with Pause or Resume and Stop. */
+@Composable
+private fun TimerCard() {
+    val detail = when {
+        NilaTimer.ringing -> "Time's up!"
+        NilaTimer.running -> "Counting down"
+        NilaTimer.remainingMs > 0 -> "Paused"
+        else -> "Stopped"
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF292925)),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(timerText(NilaTimer.remainingMs), fontSize = 34.sp, fontWeight = FontWeight.Bold, color = if (NilaTimer.ringing) Orange else Paper)
+            Text(detail, color = Muted)
+            if (NilaTimer.active) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (!NilaTimer.ringing) {
+                        Button(onClick = { if (NilaTimer.running) NilaTimer.pause() else NilaTimer.resume() }) { Text(if (NilaTimer.running) "Pause" else "Resume") }
+                    }
+                    Button(onClick = { NilaTimer.stop() }) { Text("Stop") }
+                }
+            }
+        }
+    }
+}
+
+/** Copies a note into the phone's notes app: vivo Notes or Google Keep when installed, else the share sheet. */
+private fun copyToNotesApp(context: Context, text: String): String {
+    val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+    val app = listOf("com.vivo.notes" to "vivo Notes", "com.google.android.keep" to "Google Keep").firstOrNull { (pkg) ->
+        send.setPackage(pkg).resolveActivity(context.packageManager) != null
+    }
+    return runCatching {
+        if (app != null) context.startActivity(send.setPackage(app.first))
+        else context.startActivity(Intent.createChooser(send.setPackage(null), "Save note to"))
+    }.fold({ app?.let { "Opening ${it.second} with your note. Save it there." } ?: "Pick an app to save the note." }, { "No notes app is available." })
 }
 
