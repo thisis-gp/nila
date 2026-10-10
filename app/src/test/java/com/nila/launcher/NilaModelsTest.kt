@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.LocalTime
 
 class NilaModelsTest {
     private val engine = NilaEngine()
@@ -69,6 +70,50 @@ class NilaModelsTest {
         listOf("i'm hungry", "wake me up at 6", "high protein dinner", "open youtube").forEach {
             assertFalse(it, engine.isSmallTalk(it))
         }
+    }
+
+    @Test
+    fun alarmTimeReadsCommonWritingStyles() {
+        // On the iQOO 15 FunctionGemma turned "1:30" into hour = 130 and nothing could read it.
+        val oneThirty = mapOf("hour" to 1, "minute" to 30)
+        listOf("put an alarm on 1:30", "alarm at 1.30", "wake me at 1 30", "alarm at 130").forEach {
+            assertEquals(it, oneThirty, engine.alarmArgs(it))
+        }
+        assertEquals(mapOf("hour" to 13, "minute" to 30), engine.alarmArgs("alarm at 1330"))
+    }
+
+    @Test
+    fun alarmWithoutAmOrPmPicksTheNextOne() {
+        val call = NilaIntent.Call(ToolCall("create_alarm", mapOf("hour" to 1, "minute" to 30)))
+        // Asked at 05:51, "1:30" means this afternoon.
+        assertEquals(NilaResponse.Alarm(13, 30), NilaEngine(now = { LocalTime.of(5, 51) }).execute(call))
+        // Asked just after midnight, it means tonight at 01:30.
+        assertEquals(NilaResponse.Alarm(1, 30), NilaEngine(now = { LocalTime.of(0, 30) }).execute(call))
+        // A 24-hour time is taken as said.
+        assertEquals(NilaResponse.Alarm(18, 0), NilaEngine(now = { LocalTime.of(5, 51) }).execute(NilaIntent.Call(ToolCall("create_alarm", mapOf("hour" to 18)))))
+    }
+
+    @Test
+    fun keywordRulesCatchAlarmOnAndAt() {
+        assertTrue(engine.route("put an alarm on 1:30") is NilaIntent.Call)
+        assertTrue(engine.route("set alarm at 7") is NilaIntent.Call)
+    }
+
+    @Test
+    fun chatRepliesThatClaimAnActionAreCaught() {
+        listOf(
+            "I've set an alarm for 1:30 for you!",
+            "Done! Your alarm is set for 1:30.",
+            "Alarm set for 1:30.",
+            "I have ordered the biryani.",
+            "Your reminder has been scheduled.",
+        ).forEach { assertTrue(it, claimsAction(it)) }
+        listOf(
+            "I can set an alarm for you if you tell me the time.",
+            "NILA cannot turn on the flashlight right now, but I can set an alarm for you.",
+            "Hello! I'm NILA, your friendly assistant.",
+            "What time should I set it for?",
+        ).forEach { assertFalse(it, claimsAction(it)) }
     }
 
     @Test

@@ -105,6 +105,16 @@ private fun wholeNumber(value: Any): Long? = when (value) {
     else -> null
 }
 
+/**
+ * True when a chat reply says an action happened. Gemma only talks, so any such claim is false:
+ * it told a user "set an alarm for 1:30" was done when no alarm existed.
+ */
+fun claimsAction(reply: String): Boolean = Regex(
+    """(?i)\b(i'?ve|i have|i just|i went ahead|has been|have been|successfully|done)\b[^.!?]*\b(set|created|scheduled|ordered|placed|sent|booked|paid|called|turned on)\b""" +
+        """|(?i)\b(alarm|order|message|booking|reminder)\b[^.!?]*\b(is|has been) (now )?(set|placed|sent|confirmed|scheduled)\b""" +
+        """|(?i)^\s*(alarm|reminder) (set|scheduled)\b""",
+).containsMatchIn(reply)
+
 /** Exposes a capability's schema to LiteRT-LM. Execution stays in NilaEngine, never inside the model runtime. */
 private class CapabilityTool(private val capability: CapabilityDescriptor) : OpenApiTool {
     override fun getToolDescriptionJsonString() = toolSchemaJson(capability)
@@ -190,7 +200,14 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         if (!numbersGrounded(call.args, input)) return null.also { Log.i(TAG, "rejected ungrounded numbers ${call.args}") }
         return when (checkCall(call, engine.capabilities)) {
             // A Text result from a validated call is a refusal ("I can't open that app"); prefer conversation.
-            is CallCheck.Ok, is CallCheck.Missing -> engine.execute(NilaIntent.Call(call)).takeUnless { it is NilaResponse.Text }
+            is CallCheck.Ok, is CallCheck.Missing -> engine.execute(NilaIntent.Call(call)).let { result ->
+                when {
+                    result !is NilaResponse.Text -> result
+                    // A failed alarm must never reach Gemma: on the iQOO 15 it then claimed the alarm was set.
+                    capability.id == "create_alarm" -> NilaResponse.Text(ALARM_HELP)
+                    else -> null
+                }
+            }
             is CallCheck.Rejected -> null
         }
     }
@@ -207,7 +224,8 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             ).use { conversation ->
                 conversation.sendMessage(input).contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim()
             }
-        }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
+        }.getOrNull()?.takeIf { it.isNotBlank() }?.let { if (claimsAction(it)) NO_ACTION_TAKEN.also { Log.i(TAG, "replaced action claim: $it") } else it }
+            ?: return null
         history.addLast(input to reply)
         while (history.size > HISTORY_TURNS) history.removeFirst()
         return reply
@@ -216,6 +234,8 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
     private companion object {
         const val TAG = "NilaBrain"
         const val HISTORY_TURNS = 4
+        const val ALARM_HELP = "I couldn't read that time, so no alarm is set. Try \"set an alarm for 1:30 pm\"."
+        const val NO_ACTION_TAKEN = "I haven't done that. Chat can't take actions. To set an alarm, say a time like \"set an alarm for 1:30 pm\" and tap Set alarm on the card."
 
         /**
          * An escape hatch for FunctionGemma, which otherwise tends to pick some tool for every input

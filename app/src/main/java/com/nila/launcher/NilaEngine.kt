@@ -2,6 +2,7 @@ package com.nila.launcher
 
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.time.LocalTime
 import java.util.UUID
 
 data class Choice(
@@ -31,11 +32,17 @@ sealed interface NilaResponse {
 }
 
 /** [extraCapabilities] join the built-in tools. Routing, checking and confirmation all use the same registry. */
-class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
+/** [now] is injectable so tests can fix the time used to pick am or pm. */
+class NilaEngine(
+    extraCapabilities: List<CapabilityDescriptor> = emptyList(),
+    private val now: () -> LocalTime = { LocalTime.now() },
+) {
     private val percentage = Regex("""(\d+(?:\.\d+)?)\s*%\s*(?:of)?\s*(\d+(?:\.\d+)?)""")
-    private val alarm = Regex("""alarm\s+(?:for\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?""")
+    private val alarm = Regex("""alarm\s+(?:(?:for|at|on)\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?""")
     private val remember = Regex("""remember(?: that)?\s+(.+)""")
-    private val clockTime = Regex("""(?<![\d:])(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?!\d)""")
+    // "1:30", "1.30", "1 30" and "9 pm"; then compact "130" or "1330" as hours and minutes.
+    private val clockTime = Regex("""(?<![\d:.])(\d{1,2})(?:[:.\s](\d{2}))?\s*(am|pm)?(?![\d:.])""")
+    private val compactTime = Regex("""(?<!\d)(\d{1,2})(\d{2})\s*(am|pm)?(?!\d)""")
     private val smallTalk = Regex(
         """^\s*(hi+|hello|hey|namaste|thanks|thank you|good (morning|afternoon|evening|night)|who are you|what are you|what('?s| is) your name|what can you do|how are you|help)\b""",
     )
@@ -89,7 +96,8 @@ class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
      * replace the model's: FunctionGemma dropped "pm" and ":45" on the iQOO 15.
      */
     fun alarmArgs(input: String): Map<String, Any>? {
-        val match = clockTime.find(input.lowercase()) ?: return null
+        val text = input.lowercase()
+        val match = clockTime.find(text) ?: compactTime.find(text) ?: return null
         val args = mutableMapOf<String, Any>("hour" to match.groupValues[1].toInt(), "minute" to match.groupValues[2].ifBlank { "0" }.toInt())
         match.groupValues[3].ifEmpty { null }?.let { args["meridiem"] = it }
         return args
@@ -159,7 +167,7 @@ class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
     private fun run(call: ToolCall): NilaResponse {
         val args = call.args
         return when (call.capabilityId) {
-            "create_alarm" -> alarmHour(args["hour"] as Int, args["meridiem"] as String?)
+            "create_alarm" -> alarmHour(args["hour"] as Int, args["minute"] as Int? ?: 0, args["meridiem"] as String?)
                 // "Wake me up at 6" means 6:00.
                 ?.takeIf { (args["minute"] as Int? ?: 0) in 0..59 }
                 ?.let { NilaResponse.Alarm(it, args["minute"] as Int? ?: 0) }
@@ -210,11 +218,21 @@ class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
     }
 
     /** 24-hour value, or null when invalid. With am/pm, only 1-12 is accepted. */
-    private fun alarmHour(hour: Int, meridiem: String?): Int? = when (meridiem) {
-        null -> hour.takeIf { it in 0..23 }
+    private fun alarmHour(hour: Int, minute: Int, meridiem: String?): Int? = when (meridiem) {
+        null -> when (hour) {
+            in 1..12 -> nextOccurrence(hour, minute)
+            0, in 13..23 -> hour
+            else -> null
+        }
         "am" -> hour.takeIf { it in 1..12 }?.rem(12)
         "pm" -> hour.takeIf { it in 1..12 }?.let { it % 12 + 12 }
         else -> null
+    }
+
+    /** "1:30" with no am or pm means the next 1:30 to come: 13:30 when said at 05:51. */
+    private fun nextOccurrence(hour: Int, minute: Int): Int {
+        val morning = hour % 12
+        return if (LocalTime.of(morning, minute).isAfter(now())) morning else morning + 12
     }
 
     fun prepare(choice: Choice) = NilaResponse.Confirmation(
