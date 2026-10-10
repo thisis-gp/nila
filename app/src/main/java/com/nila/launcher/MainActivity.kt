@@ -155,13 +155,28 @@ private fun zeptoProductTurn(
     return Turn("Zepto", NilaResponse.ProductGroupChoices(cheapestLine(item, groups), groups))
 }
 
-/** "Cheapest on Swiggy Instamart · ₹34" across the providers that returned prices. */
+/**
+ * The best value across providers, by price per litre or kilo when packs differ: "₹17 for 200 ml" is not
+ * cheaper than "₹68 for 1 L". Falls back to the lowest price when a pack size can't be read.
+ */
 private fun cheapestLine(item: String, groups: List<ProductProviderGroup>): String {
-    val best = groups.flatMap { g -> g.items.map { g.providerName to it } }
-        .minByOrNull { (_, p) -> p.price.filter { it.isDigit() || it == '.' }.toDoubleOrNull() ?: Double.MAX_VALUE }
-        ?: return "Options for \"$item\" — tap + to add:"
-    return "Cheapest for \"$item\": ${best.first} · ${best.second.price} (${best.second.detail.substringBefore(" · ")})"
+    val offers = groups.flatMap { g -> g.items.map { g.providerName to it } }
+    fun rupees(p: PickableProduct) = p.price.filter { it.isDigit() || it == '.' }.toDoubleOrNull()
+    val perUnit = offers.mapNotNull { (provider, p) ->
+        val price = rupees(p) ?: return@mapNotNull null
+        val (unit, amount) = normalizedSize(p.detail) ?: return@mapNotNull null
+        Triple(provider, p, price / amount * UNIT_BASE to unit)
+    }
+    perUnit.minByOrNull { it.third.first }?.let { (provider, p, value) ->
+        val label = if (value.second == "ml") "litre" else "kg"
+        return "Best value for \"$item\": $provider · ₹%.0f per $label (${p.detail.substringBefore(" · ")} at ${p.price})".format(value.first)
+    }
+    val cheapest = offers.minByOrNull { (_, p) -> rupees(p) ?: Double.MAX_VALUE } ?: return "Options for \"$item\" — tap + to add:"
+    return "Cheapest for \"$item\": ${cheapest.first} · ${cheapest.second.price}"
 }
+
+/** Per-unit prices are compared per litre (1000 ml) or per kilo (1000 g). */
+private const val UNIT_BASE = 1000.0
 
 /**
  * Real Cash-on-Delivery placement: shows Zepto's own preview first, places the order only after an
@@ -1101,7 +1116,7 @@ private fun ResponseView(
         // Only reached if a dismissal was not confirmed through the card; it is never sent without confirmation.
         is NilaResponse.DismissAlarm -> AnswerCard("This alarm was not turned off.")
         // Torch, Camera and Note are done in performNow before they reach the chat.
-        is Torch, is Camera, is Note, is Directions, is MapSearch, is WebSearch, is PlayMusic, is MediaKey, is SoundChange,
+        is Torch, is Camera, is Note, is MapSearch, is WebSearch, is PlayMusic, is MediaKey, is SoundChange,
         is SettingsPage, is LaunchApp, ShowAlarms, BatteryLevel -> AnswerCard("Done.")
         is Message -> MessageCard(response, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is Timer -> ActionCard(
@@ -1434,7 +1449,6 @@ private fun performNow(context: Context, response: NilaResponse): NilaResponse =
         context.startActivity(Intent(action))
     }.fold({ NilaResponse.Text(if (response.video) "Opening the camera for video." else "Opening the camera.") }, { NilaResponse.Text("No camera app is available.") })
     is Note -> NilaResponse.Text(saveNote(context, response.text))
-    is Directions -> openUri(context, "google.navigation:q=" + Uri.encode(response.place), "Opening directions to ${response.place}.", "No maps app is available.")
     is MapSearch -> openUri(context, "geo:0,0?q=" + Uri.encode(response.query), "Showing ${response.query} nearby in Maps.", "No maps app is available.")
     is WebSearch -> start(context, Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, response.query), "Searching the web for ${response.query}.", "No browser is available.")
     is PlayMusic -> if (response.query == null) NilaResponse.Text(pressMediaKey(context, "play")) else start(

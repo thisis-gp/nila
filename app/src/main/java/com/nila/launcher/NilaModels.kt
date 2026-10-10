@@ -222,7 +222,9 @@ class NilaBrain(
         if (keyword is NilaIntent.Call && keyword.call.capabilityId == REMEMBER && assistant != null) {
             return@withContext done("rules+gemma:$REMEMBER", rememberWithKind(input, engine.execute(keyword)))
         }
-        if (keyword is NilaIntent.Call) return@withContext done("rules:${keyword.call.capabilityId}", engine.execute(keyword))
+        // Keyword rules are the offline fallback only: with Gemma loaded it reads the request and picks the
+        // tool itself ("take me to…", "play…", "battery" were matched by patterns before the model saw them).
+        if (keyword is NilaIntent.Call && assistant == null) return@withContext done("rules:${keyword.call.capabilityId}", engine.execute(keyword))
         // Stock FunctionGemma scored 31% on NILA's tools (training/functiongemma eval) and its wrong picks
         // pre-empt Gemma, so it routes only when Gemma 4 E2B is not loaded, until the fine-tuned router ships.
         if (assistant == null && !engine.isSmallTalk(input)) modelRoute(input)?.let { return@withContext done("functiongemma", it) }

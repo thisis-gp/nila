@@ -21,7 +21,7 @@ class MoreActionsTest {
 
     @Test
     fun mapsAndSearch() {
-        assertEquals(Directions("Indiranagar"), respond("take me to Indiranagar"))
+        assertEquals(NilaResponse.Navigate("Indiranagar"), respond("take me to Indiranagar"))
         assertEquals(MapSearch("petrol pumps"), respond("petrol pumps near me"))
         assertEquals(WebSearch("IPL score"), respond("search for IPL score"))
     }

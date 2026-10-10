@@ -5,7 +5,6 @@ package com.nila.launcher
 // to someone goes through a card, and the user still presses Send in Messages.
 
 data class Message(val who: String, val body: String) : NilaResponse
-data class Directions(val place: String) : NilaResponse
 data class MapSearch(val query: String) : NilaResponse
 data class WebSearch(val query: String) : NilaResponse
 /** [query] is null to resume whatever was playing. */
@@ -22,8 +21,11 @@ val moreCapabilities = listOf(
         "send_message", "Draft a text message to a person; the user presses Send in Messages.",
         listOf(Param("who", ParamType.STRING), Param("body", ParamType.STRING)), PermissionClass.PREPARE, label = "Message",
     ),
-    CapabilityDescriptor("directions", "Get directions to a place in Maps.", listOf(Param("place", ParamType.STRING)), PermissionClass.READ, label = "Directions"),
-    CapabilityDescriptor("map_search", "Find places nearby, for example \"petrol pumps near me\".", listOf(Param("query", ParamType.STRING)), PermissionClass.READ, label = "Nearby"),
+    CapabilityDescriptor(
+        "map_search",
+        "Find several places of a kind nearby, for example \"petrol pumps near me\" or \"coffee shops nearby\". Not for the route to one named place.",
+        listOf(Param("query", ParamType.STRING)), PermissionClass.READ, label = "Nearby",
+    ),
     CapabilityDescriptor("web_search", "Search the web.", listOf(Param("query", ParamType.STRING)), PermissionClass.READ, label = "Web search"),
     CapabilityDescriptor("play_music", "Play a song, artist or playlist.", listOf(Param("query", ParamType.STRING, required = false)), PermissionClass.READ, label = "Play music"),
     CapabilityDescriptor("media_control", "Pause, resume, skip to the next or go to the previous song.", listOf(Param("action", ParamType.STRING)), PermissionClass.READ, label = "Media"),
@@ -103,7 +105,8 @@ fun moreActionCall(input: String): ToolCall? {
     soundAction(input)?.let { return ToolCall("sound", mapOf("action" to it)) }
     mediaAction(input)?.let { return ToolCall("media_control", mapOf("action" to it)) }
     messageParts(input)?.let { (who, body) -> return ToolCall("send_message", mapOf("who" to who, "body" to body)) }
-    directionsTo(input)?.let { return ToolCall("directions", mapOf("place" to it)) }
+    // NILA's own route card (get_directions) answers "take me to…", with Open Maps on the card.
+    directionsTo(input)?.let { return ToolCall("get_directions", mapOf("destination" to it)) }
     nearbyQuery(input)?.let { return ToolCall("map_search", mapOf("query" to it)) }
     webQuery(input)?.let { return ToolCall("web_search", mapOf("query" to it)) }
     if (Regex("""^\s*(?:please\s+)?play\b""", RegexOption.IGNORE_CASE).containsMatchIn(input)) {
@@ -117,7 +120,6 @@ fun moreRun(call: ToolCall): NilaResponse? {
     val args = call.args
     return when (call.capabilityId) {
         "send_message" -> Message(args["who"] as String, args["body"] as String)
-        "directions" -> Directions(args["place"] as String)
         "map_search" -> MapSearch(args["query"] as String)
         "web_search" -> WebSearch(args["query"] as String)
         "play_music" -> PlayMusic(args["query"] as String?)
