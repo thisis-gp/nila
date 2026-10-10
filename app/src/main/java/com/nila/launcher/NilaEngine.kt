@@ -29,6 +29,24 @@ data class ProviderGroup(
     val note: String? = null,
 )
 
+/** A product card with a +/− quantity stepper instead of a single tap. onQuantityChange is called with the new count, including 0 to remove. */
+data class PickableProduct(
+    val title: String,
+    val detail: String,
+    val price: String,
+    val imageUrl: String? = null,
+    val initialQuantity: Int = 0,
+    val onQuantityChange: (Int) -> Unit,
+)
+
+/** One provider's results inside a ProductGroupChoices turn — same shape as ProviderGroup, but with steppers instead of a single tap. */
+data class ProductProviderGroup(
+    val providerName: String,
+    val summary: String,
+    val items: List<PickableProduct>,
+    val note: String? = null,
+)
+
 sealed interface NilaResponse {
     data class Text(val value: String) : NilaResponse
     data class Alarm(val hour: Int, val minute: Int) : NilaResponse
@@ -38,6 +56,8 @@ sealed interface NilaResponse {
     data class AsyncChoices(val intro: String, val items: List<AsyncChoice>) : NilaResponse
     /** Results grouped by provider (Zepto, Swiggy Instamart, ...), each collapsible, for comparing multiple MCPs side by side. */
     data class GroupedChoices(val intro: String, val groups: List<ProviderGroup>) : NilaResponse
+    /** Like GroupedChoices, but each item is a quantity stepper (search results, cart contents) instead of a single tap. */
+    data class ProductGroupChoices(val intro: String, val groups: List<ProductProviderGroup>) : NilaResponse
     data class Confirmation(val title: String, val detail: String, val price: String) : NilaResponse
     data class Remember(val fact: String) : NilaResponse
     /**

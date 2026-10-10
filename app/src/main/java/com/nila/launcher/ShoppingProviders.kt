@@ -73,6 +73,17 @@ fun swiggyPendingGroup(category: ShoppingCategory): ProviderGroup {
     )
 }
 
+/** Same placeholder as swiggyPendingGroup, shaped for a ProductGroupChoices turn (search results) instead of GroupedChoices. */
+fun swiggyPendingProductGroup(category: ShoppingCategory): ProductProviderGroup {
+    val surface = if (category == ShoppingCategory.FOOD) "Swiggy Food" else "Swiggy Instamart"
+    return ProductProviderGroup(
+        providerName = surface,
+        summary = "access pending",
+        items = emptyList(),
+        note = "Not connected yet — waiting on Swiggy's developer access confirmation.",
+    )
+}
+
 /**
  * Shown instead of attempting a Zepto call when there's no stored token yet. Unlike Swiggy, Zepto
  * genuinely can be connected right now (self-serve OAuth, see ZeptoAuth) — so this offers a real

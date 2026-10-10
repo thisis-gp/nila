@@ -5,7 +5,14 @@ import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicInteger
 
 data class ZeptoTool(val name: String, val description: String)
-data class CartItem(val name: String, val priceInPaisa: Int, val quantity: Int)
+data class CartItem(
+    val productVariantId: String,
+    val storeProductId: String,
+    val name: String,
+    val priceInPaisa: Int,
+    val quantity: Int,
+    val imageUrl: String?,
+)
 data class SavedAddress(val id: String, val label: String, val addressLine: String)
 data class ZeptoProduct(
     val productVariantId: String,
@@ -122,27 +129,39 @@ class ZeptoMcpClient(private val auth: ZeptoAuth) {
         }
     }
 
-    /** Prepare-tier only: adds to the real Zepto cart, never places or pays for an order. */
-    fun addToCart(deviceId: String, product: ZeptoProduct, quantity: Int = 1): String {
+    /** Prepare-tier only: sets a line's quantity in the real Zepto cart. 0 removes it. Never places or pays for an order. */
+    fun setCartQuantity(deviceId: String, productVariantId: String, storeProductId: String, name: String, quantity: Int): String {
         val item = JSONObject()
-            .put("productVariantId", product.productVariantId)
-            .put("storeProductId", product.storeProductId)
+            .put("productVariantId", productVariantId)
+            .put("storeProductId", storeProductId)
             .put("quantity", quantity)
-            .put("name", product.name)
+            .put("name", name)
         val arguments = JSONObject().put("deviceId", deviceId).put("cartItems", JSONArray().put(item))
         return resultText(callTool("update_cart", arguments))
     }
 
+    fun addToCart(deviceId: String, product: ZeptoProduct, quantity: Int = 1): String =
+        setCartQuantity(deviceId, product.productVariantId, product.storeProductId, product.name, quantity)
+
     /** Human-readable cart summary. No outputSchema declared for this tool, so the content text is the reliable part. */
     fun viewCart(): String = resultText(callTool("view_cart", JSONObject()))
 
-    /** Confirmed 2026-10-10 against the real account: structuredContent.items[], same as the text summary but structured for a price total. */
+    /** Confirmed 2026-10-10 against the real account: structuredContent.items[], same as the text summary but structured for editing and a price total. */
     fun viewCartItems(): List<CartItem> {
         val result = callTool("view_cart", JSONObject())
         val items = result.optJSONObject("structuredContent")?.optJSONArray("items") ?: JSONArray()
-        return (0 until items.length()).map { index ->
+        return (0 until items.length()).mapNotNull { index ->
             val item = items.getJSONObject(index)
-            CartItem(item.optString("name", "Item"), item.optInt("price", 0), item.optInt("quantity", 1))
+            val variantId = item.optString("productVariantId").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val storeProductId = item.optString("storeProductId").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            CartItem(
+                productVariantId = variantId,
+                storeProductId = storeProductId,
+                name = item.optString("name", "Item"),
+                priceInPaisa = item.optInt("price", 0),
+                quantity = item.optInt("quantity", 1),
+                imageUrl = item.optString("imageUrl").takeIf { it.isNotBlank() },
+            )
         }
     }
 }
