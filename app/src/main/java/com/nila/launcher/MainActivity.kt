@@ -162,7 +162,7 @@ private fun zeptoProductTurn(
  * The best value across providers, by price per litre or kilo when packs differ: "₹17 for 200 ml" is not
  * cheaper than "₹68 for 1 L". Falls back to the lowest price when a pack size can't be read.
  */
-private fun cheapestLine(item: String, groups: List<ProductProviderGroup>): String {
+internal fun cheapestLine(item: String, groups: List<ProductProviderGroup>): String {
     val offers = groups.flatMap { g -> g.items.map { g.providerName to it } }
     fun rupees(p: PickableProduct) = p.price.filter { it.isDigit() || it == '.' }.toDoubleOrNull()
     val perUnit = offers.mapNotNull { (provider, p) ->
@@ -172,7 +172,8 @@ private fun cheapestLine(item: String, groups: List<ProductProviderGroup>): Stri
     }
     perUnit.minByOrNull { it.third.first }?.let { (provider, p, value) ->
         val label = if (value.second == "ml") "litre" else "kg"
-        return "Best value for \"$item\": $provider · ₹%.0f per $label (${p.detail.substringBefore(" · ")} at ${p.price})".format(value.first)
+        val perLabel = "%.0f".format(value.first)
+        return "Best value for \"$item\": $provider · ₹$perLabel per $label (${p.detail.substringBefore(" · ")} at ${p.price})"
     }
     val cheapest = offers.minByOrNull { (_, p) -> rupees(p) ?: Double.MAX_VALUE } ?: return "Options for \"$item\" — tap + to add:"
     return "Cheapest for \"$item\": ${cheapest.first} · ${cheapest.second.price}"
