@@ -55,6 +55,8 @@ sealed interface NilaResponse {
     data class DismissAlarm(val hour: Int?, val minute: Int) : NilaResponse
     data class OpenApp(val name: String, val packageName: String, val fallbackUrl: String) : NilaResponse
     data class Navigate(val destination: String) : NilaResponse
+    /** The router chose search_groceries: Zepto and Swiggy Instamart are searched and shown side by side. */
+    data class GrocerySearch(val query: String) : NilaResponse
     data class RouteCard(
         val destination: String,
         val distanceKm: Double,
@@ -160,6 +162,12 @@ class NilaEngine(
                 Param("query", ParamType.STRING, label = "Dish or restaurant name only, like biryani"),
                 Param("preference", ParamType.STRING, required = false, label = "Taste or diet words the user said, like light, spicy or veg"),
             ),
+            permission = PermissionClass.READ,
+        ),
+        CapabilityDescriptor(
+            id = "search_groceries",
+            description = "Buy groceries or household items from Zepto or Swiggy Instamart, for example milk, eggs, bread, atta or detergent.",
+            params = listOf(Param("query", ParamType.STRING, label = "Item and pack size as the user said, like milk 1 litre")),
             permission = PermissionClass.READ,
         ),
         CapabilityDescriptor(
@@ -379,6 +387,7 @@ class NilaEngine(
                 // "chicken" for "chicken biryani" repeats the dish; only a word the dish doesn't already say is a preference.
                 preference = (args["preference"] as? String)?.takeIf { it.isNotBlank() && !(args["query"] as String).contains(it, ignoreCase = true) },
             )
+            "search_groceries" -> NilaResponse.GrocerySearch(args["query"] as String)
             "get_directions" -> NilaResponse.Navigate(args["destination"] as String)
             "set_timer" -> {
                 val hours = args["hours"] as Int? ?: 0

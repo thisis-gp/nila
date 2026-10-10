@@ -50,6 +50,8 @@ internal class McpClient(private val endpoint: String, private val accessToken: 
             when {
                 text.startsWith("{") -> JSONObject(text)
                 text.startsWith("[") -> JSONObject().put("items", JSONArray(text))
+                // Instamart puts display instructions before its JSON; the payload starts on its own line.
+                text.contains("\n{") -> JSONObject(text.substring(text.indexOf("\n{") + 1))
                 else -> null
             }
         }.getOrNull()

@@ -123,6 +123,12 @@ class NilaEngineTest {
     }
 
     @Test
+    fun grocerySearchHandsTheModelsQueryToTheComparison() {
+        val call = ToolCall("search_groceries", mapOf("query" to "milk 1 litre"))
+        assertEquals(NilaResponse.GrocerySearch("milk 1 litre"), engine.execute(NilaIntent.Call(call)))
+    }
+
+    @Test
     fun directionsHandTheModelsDestinationToMaps() {
         val call = ToolCall("get_directions", mapOf("destination" to "Indiranagar"))
         assertEquals(NilaResponse.Navigate("Indiranagar"), engine.execute(NilaIntent.Call(call)))

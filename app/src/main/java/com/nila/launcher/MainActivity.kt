@@ -123,6 +123,7 @@ private fun zeptoProductTurn(
     coroutineScope: kotlinx.coroutines.CoroutineScope,
     appendTurn: (Turn) -> Unit,
     desiredSize: String? = null,
+    instamartGroup: ProductProviderGroup? = null,
 ): Turn {
     val deviceId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
         ?: "nila-device"
@@ -149,8 +150,16 @@ private fun zeptoProductTurn(
     }
     val zeptoSummary = cheapest.minOfOrNull { it.priceInPaisa }?.let { "from ₹%.2f".format(it / 100.0) } ?: "no results"
     val zeptoGroup = ProductProviderGroup("Zepto", zeptoSummary, pickable, if (pickable.isEmpty()) "No Zepto results for \"$item\"." else null)
-    val groups = listOf(zeptoGroup, swiggyPendingProductGroup(ShoppingCategory.GROCERY))
-    return Turn("Zepto", NilaResponse.ProductGroupChoices("Options for \"$item\" — tap + to add:", groups))
+    val groups = listOfNotNull(zeptoGroup, instamartGroup)
+    return Turn("Zepto", NilaResponse.ProductGroupChoices(cheapestLine(item, groups), groups))
+}
+
+/** "Cheapest on Swiggy Instamart · ₹34" across the providers that returned prices. */
+private fun cheapestLine(item: String, groups: List<ProductProviderGroup>): String {
+    val best = groups.flatMap { g -> g.items.map { g.providerName to it } }
+        .minByOrNull { (_, p) -> p.price.filter { it.isDigit() || it == '.' }.toDoubleOrNull() ?: Double.MAX_VALUE }
+        ?: return "Options for \"$item\" — tap + to add:"
+    return "Cheapest for \"$item\": ${best.first} · ${best.second.price} (${best.second.detail.substringBefore(" · ")})"
 }
 
 /**
@@ -253,6 +262,7 @@ private fun NilaApp(resumeVersion: Int) {
     val swiggySession = remember(SignIns.revision) { SwiggyAuth.currentSession(context) }
     val zomatoSession = remember(SignIns.revision) { ZomatoAuth.currentSession(context) }
     val foodFlow = remember { FoodFlow(context.applicationContext) }
+    val instamart = remember { InstamartShop(context.applicationContext) }
 
     /** Runs one Swiggy step as its own chat turn, with the same thinking state as a typed request. */
     /**
@@ -325,6 +335,62 @@ private fun NilaApp(resumeVersion: Int) {
     // silently picks a saved address for that (no address UI shown — only "go to cart" -> proceed
     // asks). The resolved client+store is then reused for every later "buy" in this session.
     var activeZeptoSession by remember { mutableStateOf<ActiveZeptoSession?>(null) }
+
+    /**
+     * Groceries: Zepto and Swiggy Instamart side by side. Reached when the router picks search_groceries;
+     * the old "buy / get me / i need" keyword triggers are gone.
+     */
+    fun shopGroceries(item: String) {
+        if (!zeptoAuth.isConnected) {
+            turns += Turn("Zepto", NilaResponse.GroupedChoices("Options for \"$item\":", listOf(zeptoNotConnectedGroup(zeptoAuth, context, scope) { t -> turns += t })))
+            scope.launch {
+                val parsed = parseOrderItem(item)
+                val found = instamart.search(parsed.searchQuery, parsed.desiredSize)
+                turns += Turn("Swiggy Instamart", NilaResponse.ProductGroupChoices("Swiggy Instamart for \"$item\":", listOf(instamart.group(item, found, scope) { turns += Turn("Swiggy Instamart", NilaResponse.Text(it)) })))
+            }
+            return
+        }
+        val active = activeZeptoSession
+        if (active != null) {
+            turns += Turn("Zepto", NilaResponse.Text("Searching Zepto for \"$item\"..."))
+            scope.launch(Dispatchers.IO) {
+                val parsed = parseOrderItem(item)
+                val outcome = runCatching { active.client.searchProducts(parsed.searchQuery) }
+                val instamartFound = instamart.search(parsed.searchQuery, parsed.desiredSize)
+                withContext(Dispatchers.Main) {
+                    outcome.fold(
+                        onSuccess = { products -> turns += zeptoProductTurn(item, products, active.client, context, scope, { t -> turns += t }, parsed.desiredSize, instamart.group(item, instamartFound, scope) { turns += Turn("Swiggy Instamart", NilaResponse.Text(it)) }) },
+                        onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
+                    )
+                }
+            }
+            return
+        }
+        // First "buy" of this session: silently pick a saved address for store context (Zepto's own
+        // API rejects search without one) so nothing is asked here — only "go to cart" -> proceed asks.
+        turns += Turn("Zepto", NilaResponse.Text("Searching Zepto for \"$item\"..."))
+        scope.launch(Dispatchers.IO) {
+            val client = ZeptoMcpClient(zeptoAuth)
+            val outcome = runCatching {
+                val defaultAddress = client.listSavedAddresses().firstOrNull()
+                    ?: error("No saved Zepto address yet — add one in the Zepto app, then ask again.")
+                client.selectSavedAddress(defaultAddress.id)
+                val parsed = parseOrderItem(item)
+                Triple(client.searchProducts(parsed.searchQuery), parsed.desiredSize, defaultAddress)
+            }
+            val instamartFound = parseOrderItem(item).let { instamart.search(it.searchQuery, it.desiredSize) }
+            withContext(Dispatchers.Main) {
+                outcome.fold(
+                    onSuccess = { (products, desiredSize, defaultAddress) ->
+                        activeZeptoSession = ActiveZeptoSession(client, defaultAddress.id, defaultAddress.label.ifBlank { "Saved address" })
+                        turns += zeptoProductTurn(item, products, client, context, scope, { t -> turns += t }, desiredSize, instamart.group(item, instamartFound, scope) { turns += Turn("Swiggy Instamart", NilaResponse.Text(it)) })
+                    },
+                    onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
+                )
+            }
+        }
+        return
+    }
 
     fun submit(prompt: String = input) {
         if (prompt.isBlank() || isThinking) return
@@ -481,73 +547,6 @@ private fun NilaApp(resumeVersion: Int) {
             }
             return
         }
-        val orderItem = extractOrderItem(prompt)
-        if (orderItem != null) {
-            val category = classifyShoppingIntent(orderItem)
-            val isOldFoodDemo = prompt.lowercase().startsWith("order ") && category == ShoppingCategory.FOOD
-            if (!isOldFoodDemo) {
-                input = ""
-                if (category == ShoppingCategory.FOOD) {
-                    turns += Turn(
-                        prompt,
-                        NilaResponse.GroupedChoices(
-                            "\"$orderItem\" is a restaurant order — Zepto doesn't do food:",
-                            listOf(swiggyPendingGroup(category)),
-                        ),
-                    )
-                    return
-                }
-                val item = orderItem
-                if (!zeptoAuth.isConnected) {
-                    turns += Turn(
-                        prompt,
-                        NilaResponse.GroupedChoices(
-                            "Options for \"$item\":",
-                            listOf(zeptoNotConnectedGroup(zeptoAuth, context, scope) { t -> turns += t }, swiggyPendingGroup(category)),
-                        ),
-                    )
-                    return
-                }
-                val active = activeZeptoSession
-                if (active != null) {
-                    turns += Turn(prompt, NilaResponse.Text("Searching Zepto for \"$item\"..."))
-                    scope.launch(Dispatchers.IO) {
-                        val parsed = parseOrderItem(item)
-                        val outcome = runCatching { active.client.searchProducts(parsed.searchQuery) }
-                        withContext(Dispatchers.Main) {
-                            outcome.fold(
-                                onSuccess = { products -> turns += zeptoProductTurn(item, products, active.client, context, scope, { t -> turns += t }, parsed.desiredSize) },
-                                onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
-                            )
-                        }
-                    }
-                    return
-                }
-                // First "buy" of this session: silently pick a saved address for store context (Zepto's own
-                // API rejects search without one) so nothing is asked here — only "go to cart" -> proceed asks.
-                turns += Turn(prompt, NilaResponse.Text("Searching Zepto for \"$item\"..."))
-                scope.launch(Dispatchers.IO) {
-                    val client = ZeptoMcpClient(zeptoAuth)
-                    val outcome = runCatching {
-                        val defaultAddress = client.listSavedAddresses().firstOrNull()
-                            ?: error("No saved Zepto address yet — add one in the Zepto app, then ask again.")
-                        client.selectSavedAddress(defaultAddress.id)
-                        val parsed = parseOrderItem(item)
-                        Triple(client.searchProducts(parsed.searchQuery), parsed.desiredSize, defaultAddress)
-                    }
-                    withContext(Dispatchers.Main) {
-                        outcome.fold(
-                            onSuccess = { (products, desiredSize, defaultAddress) ->
-                                activeZeptoSession = ActiveZeptoSession(client, defaultAddress.id, defaultAddress.label.ifBlank { "Saved address" })
-                                turns += zeptoProductTurn(item, products, client, context, scope, { t -> turns += t }, desiredSize)
-                            },
-                            onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
-                        )
-                    }
-                }
-                return
-            }
-        }
         input = ""
         // The answer card needs the room: Swiggy's address step was hidden behind the keyboard.
         keyboard?.hide()
@@ -571,6 +570,10 @@ private fun NilaApp(resumeVersion: Int) {
                         engine.mockFood().let { it.copy(intro = "${it.intro}\nConnect Swiggy in Settings to order for real.") }
                     }
                     is NilaResponse.Navigate -> NilaIntegrations.liveRouteCard(context, routed.destination) ?: routed
+                    is NilaResponse.GrocerySearch -> {
+                        shopGroceries(routed.query)
+                        NilaResponse.Text("Comparing Zepto and Swiggy Instamart for \"${routed.query}\"…")
+                    }
                     else -> performNow(context, routed)
                 }
             }
@@ -1026,6 +1029,7 @@ private fun ResponseView(
         is NilaResponse.Food -> FoodCardView(response.card, food)
         // Resolved into the live flow in submit(); shown only if that ever fails to happen.
         is NilaResponse.FoodSearch -> AnswerCard("Looking for ${response.query}…")
+        is NilaResponse.GrocerySearch -> AnswerCard("Comparing Zepto and Swiggy Instamart for ${response.query}…")
         // Confirmation is this card only: the iQOO 15 loan devices have fingerprint locked for the hackathon.
         is NilaResponse.NeedsConfirmation -> CommitCard(response) { confirm(response.token) }
         is NilaResponse.Text -> AnswerCard(response.value)
