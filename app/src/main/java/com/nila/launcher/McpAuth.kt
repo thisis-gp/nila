@@ -59,8 +59,18 @@ internal object SignIns {
 
     fun start(auth: McpAuth, context: Context, onFailed: () -> Unit) {
         scope.launch {
-            if (auth.login(context) == null) onFailed()
+            if (auth.login(context) == null) onFailed() else bringBack(context)
             revision++
+        }
+    }
+
+    /** The sign-in tab stays open after the redirect; put NILA back in front of it. */
+    private fun bringBack(context: Context) {
+        runCatching {
+            context.startActivity(
+                android.content.Intent(context, MainActivity::class.java)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
         }
     }
 
