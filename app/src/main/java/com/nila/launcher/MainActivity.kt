@@ -837,6 +837,8 @@ private val FollowUpLabels = setOf("Zepto", "Zepto tools result", "Action result
 
 internal fun isFollowUpTurn(label: String): Boolean = label in FollowUpLabels
 
+/** A monthly reminder is a 15-minute calendar entry, so it shows as a block, not an all-day banner. */
+private const val REMINDER_LENGTH_MS = 15 * 60 * 1000L
 private val MascotTapSize = 40.dp
 private val HeaderMascotSize = 34.dp
 private val WorkingMascotSize = 28.dp
@@ -1150,6 +1152,27 @@ private fun ResponseView(
                 .putExtra(android.provider.CalendarContract.EXTRA_EVENT_ALL_DAY, response.time == null)
             runCatching { context.startActivity(intent) }
                 .onFailure { addTurn("Action result", NilaResponse.Text("No calendar app is available.")) }
+        }
+        is MonthlyReminder -> {
+            val first = firstReminder(response, java.time.LocalDateTime.now())
+            ActionCard(
+                label = "Monthly reminder",
+                title = response.title,
+                detail = "Every month on ${dayLabel(response)} at %02d:%02d. First: %s.\nYour calendar keeps it and reminds you, even when NILA is closed."
+                    .format(response.time.hour, response.time.minute, eventWhen(first.toLocalDate(), null).substringBefore(",")),
+                action = "Add to calendar",
+            ) {
+                val start = first.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+                val intent = Intent(Intent.ACTION_INSERT)
+                    .setData(android.provider.CalendarContract.Events.CONTENT_URI)
+                    .putExtra(android.provider.CalendarContract.Events.TITLE, response.title)
+                    .putExtra(android.provider.CalendarContract.EXTRA_EVENT_BEGIN_TIME, start)
+                    .putExtra(android.provider.CalendarContract.EXTRA_EVENT_END_TIME, start + REMINDER_LENGTH_MS)
+                    .putExtra(android.provider.CalendarContract.Events.RRULE, response.rule)
+                    .putExtra(android.provider.CalendarContract.Events.HAS_ALARM, 1)
+                runCatching { context.startActivity(intent) }
+                    .onFailure { addTurn("Action result", NilaResponse.Text("No calendar app is available.")) }
+            }
         }
         is Call -> CallCard(response.who, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is NilaResponse.Alarm -> ActionCard(
