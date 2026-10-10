@@ -311,7 +311,8 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
                 ConversationConfig(
                     systemInstruction = Contents.of(PERSONA),
                     initialMessages = history.flatMap { (user, nila) -> listOf(Message.user(user), Message.model(nila)) },
-                    samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.6),
+                    // A fresh seed per reply: with the default seed "tell me a joke" gave the same joke every time.
+                    samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.6, seed = kotlin.random.Random.nextInt()),
                     tools = engine.capabilities.values.map { tool(CapabilityTool(it)) },
                     automaticToolCalling = false,
                 ),
