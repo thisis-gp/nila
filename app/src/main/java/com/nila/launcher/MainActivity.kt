@@ -466,16 +466,10 @@ private fun NilaApp(resumeVersion: Int) {
         }
     }
 
-    // How the agent screen was last opened: from the mascot it starts listening, from a typed hand-off it does not.
-    var agentEntry by remember { mutableStateOf(AgentEntry.Text) }
-
-    fun openAgent(entry: AgentEntry) {
-        agentEntry = entry
-        open(NilaScreen.Nila)
-    }
+    // The agent screen always opens ready to type; listening starts only when the mic is tapped.
+    fun openAgent() = open(NilaScreen.Nila)
 
     fun closeOverlay() {
-        agentEntry = AgentEntry.Text
         screen = navigation.back()
     }
 
@@ -510,12 +504,12 @@ private fun NilaApp(resumeVersion: Int) {
                 HomeScreen(
                     resumeVersion = resumeVersion,
                     nilaMood = nilaMood,
-                    onInvokeNila = { openAgent(AgentEntry.Voice) },
+                    onInvokeNila = { openAgent() },
                     onOpenApps = { open(NilaScreen.Apps) },
                     onChangeWallpaper = { changeWallpaper(context) },
                     facts = facts,
                     onSuggestion = { request ->
-                        openAgent(AgentEntry.Text)
+                        openAgent()
                         submit(request)
                     },
                 )
@@ -553,7 +547,7 @@ private fun NilaApp(resumeVersion: Int) {
                                     }
                                 },
                                 onAskNila = { request ->
-                                    openAgent(AgentEntry.Text)
+                                    openAgent()
                                     submit(request)
                                 },
                                 onBack = ::closeOverlay,
@@ -561,7 +555,6 @@ private fun NilaApp(resumeVersion: Int) {
                                 onChangeWallpaper = { changeWallpaper(context) },
                             )
                             NilaScreen.Nila -> AgentSpace(
-                                entry = agentEntry,
                                 turns = turns,
                                 input = input,
                                 isThinking = isThinking,
@@ -673,11 +666,9 @@ private const val BUSY_CARD_ALPHA = 0.35f
 private const val BOUNDARY_ALPHA = 0.35f
 
 /** Where the agent screen was opened from: the mascot starts listening straight away, typed hand-offs do not. */
-internal enum class AgentEntry { Voice, Text }
 
 @Composable
 private fun AgentSpace(
-    entry: AgentEntry,
     turns: List<Turn>,
     input: String,
     isThinking: Boolean,
@@ -719,9 +710,6 @@ private fun AgentSpace(
     fun dismissVoice() {
         voice.cancel()
         notice = null
-    }
-    LaunchedEffect(Unit) {
-        if (entry == AgentEntry.Voice) voice.toggle()
     }
     val focusManager = LocalFocusManager.current
     val mood = when {
