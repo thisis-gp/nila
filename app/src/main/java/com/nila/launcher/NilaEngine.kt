@@ -157,7 +157,7 @@ class NilaEngine(
         ),
         CapabilityDescriptor(
             id = "search_food",
-            description = "Order food or find restaurants and dishes to eat, for example biryani, pizza or dinner.",
+            description = "Order or buy food, or find restaurants and dishes to eat, for example biryani, pizza or dinner.",
             params = listOf(
                 Param("query", ParamType.STRING, label = "Dish or restaurant name only, like biryani"),
                 Param("preference", ParamType.STRING, required = false, label = "Taste or diet words the user said, like light, spicy or veg"),
