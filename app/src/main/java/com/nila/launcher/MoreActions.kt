@@ -27,10 +27,11 @@ val moreCapabilities = listOf(
     CapabilityDescriptor("map_search", "Find places nearby, for example \"petrol pumps near me\".", listOf(Param("query", ParamType.STRING)), PermissionClass.READ, label = "Nearby"),
     CapabilityDescriptor(
         "web_search",
-        "Search the live web for real, current information: who or what something/someone is, facts, " +
-            "people, current events, definitions, prices, scores, or anything outside NILA's own training " +
-            "data. Use this for a factual question about the world, not just when the user literally says " +
-            "\"search\" — for example \"who is Ronaldo\" or \"what's the capital of France\" should call this.",
+        "Search the live web for a factual question about the world: who or what someone/something is, " +
+            "facts, current events, definitions, scores, or anything outside NILA's own training data. Use " +
+            "this even when the user doesn't literally say \"search\" — for example \"who is Ronaldo\" or " +
+            "\"what's the capital of France\". Never use this when the user wants to order, buy or get a " +
+            "dish, food item, grocery or household item — a different tool handles ordering things.",
         listOf(Param("query", ParamType.STRING)),
         PermissionClass.READ,
         label = "Web search",
