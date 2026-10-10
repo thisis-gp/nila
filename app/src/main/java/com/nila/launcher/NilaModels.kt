@@ -143,6 +143,18 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
     private var router: Engine? = null
     private val history = ArrayDeque<Pair<String, String>>()
 
+    /**
+     * Frees both native engines and the model thread. Runs on the model thread after any load or reply in
+     * progress, so nothing is closed while in use. Call when the screen that owns this brain goes away.
+     */
+    fun close() {
+        llm.executor.execute {
+            router?.close(); router = null
+            assistant?.close(); assistant = null
+        }
+        llm.close()
+    }
+
     suspend fun load() = withContext(llm) {
         router = loadModel(ModelFiles.ROUTER, gpuFirst = false, audio = false) { routerState = it }
         assistant = loadModel(ModelFiles.ASSISTANT, gpuFirst = true, audio = true) { assistantState = it }
@@ -203,14 +215,15 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             ).use { it.sendMessage(input) }
         }.getOrNull() ?: return null
         val proposed = response.toolCalls.firstOrNull()
-        Log.i(TAG, "functiongemma tool=${proposed?.name} args=${proposed?.arguments}")
+        // Argument names only: values can carry what the user said.
+        Log.i(TAG, "functiongemma tool=${proposed?.name} args=${proposed?.arguments?.keys}")
         // "chat" or an unknown tool means this is conversation, not an action.
         if (proposed == null) return null
         val capability = engine.capabilities[proposed.name] ?: return null
         // The model picks the action; exact values come from the user's own words where NILA can read them.
         val args = (if (capability.id == "create_alarm") engine.alarmArgs(input) else null) ?: coerceArgs(proposed.arguments, capability)
         val call = ToolCall(capability.id, args)
-        if (!numbersGrounded(call.args, input)) return null.also { Log.i(TAG, "rejected ungrounded numbers ${call.args}") }
+        if (!numbersGrounded(call.args, input)) return null.also { Log.i(TAG, "rejected ungrounded numbers for ${call.capabilityId}") }
         return when (checkCall(call, engine.capabilities)) {
             // A Text result from a validated call is a refusal ("I can't open that app"); prefer conversation.
             is CallCheck.Ok, is CallCheck.Missing -> engine.execute(NilaIntent.Call(call)).let { result ->
@@ -255,7 +268,7 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             ).use { conversation ->
                 conversation.sendMessage(input).contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim()
             }
-        }.getOrNull()?.takeIf { it.isNotBlank() }?.let { if (claimsAction(it)) NO_ACTION_TAKEN.also { Log.i(TAG, "replaced action claim: $it") } else it }
+        }.getOrNull()?.takeIf { it.isNotBlank() }?.let { if (claimsAction(it)) NO_ACTION_TAKEN.also { Log.i(TAG, "replaced a reply that claimed an action") } else it }
             ?: return null
         history.addLast(input to reply)
         while (history.size > HISTORY_TURNS) history.removeFirst()
