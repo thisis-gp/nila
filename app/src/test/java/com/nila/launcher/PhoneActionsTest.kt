@@ -66,12 +66,12 @@ class PhoneActionsTest {
         assertEquals(Camera(video = false, front = true), respond("take a selfie"))
         assertEquals(Camera(video = true, front = false), respond("record a video"))
         assertEquals(Camera(video = true, front = true), respond("record a video on the front camera"))
-        // The user's voice goes to the voice recorder, not the video camera.
-        assertEquals(VoiceRecorder, respond("record my voice"))
-        assertEquals(VoiceRecorder, respond("take a voice note"))
-        assertEquals(VoiceRecorder, respond("record some audio"))
         assertEquals(VoiceRecorder, respond("open the voice recorder"))
-        assertEquals(Camera(video = true, front = false), respond("record a video"))
+        // The user's voice is recorded on the video camera, never a voice recorder app.
+        assertEquals(Camera(video = true, front = false), respond("record my voice"))
+        assertEquals(Camera(video = true, front = false), respond("record my voice on the video camera"))
+        assertEquals(Camera(video = true, front = false), respond("take a voice note"))
+        assertEquals(Camera(video = true, front = false), respond("record some audio"))
     }
 
     @Test
