@@ -33,7 +33,8 @@ val moreCapabilities = listOf(
             "facts, current events, definitions, scores, or anything outside NILA's own training data. Use " +
             "this even when the user doesn't literally say \"search\" — for example \"who is Ronaldo\" or " +
             "\"what's the capital of France\". Never use this when the user wants to order, buy or get a " +
-            "dish, food item, grocery or household item — a different tool handles ordering things.",
+            "dish, food item, grocery or household item — a different tool handles ordering things. Never for jokes, " +
+            "small talk, opinions, advice or anything creative like a poem: NILA answers those itself.",
         listOf(Param("query", ParamType.STRING)),
         PermissionClass.READ,
         label = "Web search",
