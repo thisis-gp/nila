@@ -243,8 +243,10 @@ private fun NilaApp(resumeVersion: Int) {
     fun submit(prompt: String = input) {
         if (prompt.isBlank() || isThinking) return
         if (prompt.trim().startsWith("tvly-")) {
+            // Never render the raw key: it would sit in the chat scrollback (and any screenshot) for
+            // the rest of the session. Only the redacted turn and a generic status reach the UI.
             tavilyAuth.apiKey = prompt.trim()
-            turns += Turn(prompt, NilaResponse.Text("Web search connected. Try \"search for <something>\"."))
+            turns += Turn("Web search key", NilaResponse.Text("Web search connected. Try \"search for <something>\"."))
             input = ""
             return
         }
