@@ -44,8 +44,8 @@ class MonthlyReminderTest {
         // The 31st is "the last day": a 31st-only rule would skip 30-day months and February.
         assertEquals("FREQ=MONTHLY;BYMONTHDAY=-1", MonthlyReminder("Bill", 31, LocalTime.NOON).rule)
         assertEquals("the last day", dayLabel(MonthlyReminder("Bill", 30, LocalTime.NOON)))
-        assertEquals("21st", dayLabel(MonthlyReminder("Bill", 21, LocalTime.NOON)))
-        assertEquals("12th", dayLabel(MonthlyReminder("Bill", 12, LocalTime.NOON)))
+        assertEquals("the 21st", dayLabel(MonthlyReminder("Bill", 21, LocalTime.NOON)))
+        assertEquals("the 12th", dayLabel(MonthlyReminder("Bill", 12, LocalTime.NOON)))
     }
 
     @Test

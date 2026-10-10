@@ -182,9 +182,9 @@ fun monthlyReminderArgs(text: String): Map<String, Any>? {
     return args
 }
 
-/** "5th", "21st", "the last day". */
+/** "the 5th", "the 21st", "the last day". */
 fun dayLabel(reminder: MonthlyReminder): String = if (reminder.lastDay) "the last day" else reminder.day.let { d ->
-    d.toString() + when {
+    "the " + d.toString() + when {
         d % 100 in 11..13 -> "th"
         d % 10 == 1 -> "st"
         d % 10 == 2 -> "nd"
