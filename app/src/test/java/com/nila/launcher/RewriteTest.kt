@@ -25,6 +25,10 @@ class RewriteTest {
         assertTrue(numbersSaid("take a note that 2 apples", "i need 2 apples put in the notes"))
         assertFalse(numbersSaid("set an alarm for 7 am", "wake me up early"))
         assertTrue(numbersSaid("turn off the flashlight", "yes"))
+        // A huge amount is compared as text, never parsed: it used to throw NumberFormatException.
+        assertTrue(numbersSaid("pay 123456789012345678901234567890", "pay 123456789012345678901234567890 rupees"))
+        assertFalse(numbersSaid("pay 123456789012345678901234567891", "pay 123456789012345678901234567890"))
+        assertTrue(numbersSaid("set an alarm for 7:05 am", "wake me at 07:05"))
     }
 
     @Test

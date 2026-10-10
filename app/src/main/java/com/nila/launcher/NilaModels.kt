@@ -124,8 +124,10 @@ fun cleanCommand(raw: String): String? {
 
 /** True when every number in [command] appears in what was said, so a rewrite never invents a time or amount. */
 fun numbersSaid(command: String, said: String): Boolean {
-    val heard = Regex("""\d+""").findAll(said).map { it.value.toLong() }.toSet()
-    return Regex("""\d+""").findAll(command).all { it.value.toLong() in heard }
+    // Digit strings without leading zeros ("07" is 7): toLong() threw on a 30-digit amount and aborted the request.
+    fun numbers(text: String) = Regex("""\d+""").findAll(text).map { it.value.trimStart('0').ifEmpty { "0" } }
+    val heard = numbers(said).toSet()
+    return numbers(command).all { it in heard }
 }
 
 /** Asks Gemma for a transcript only, in the language's own script, never an answer to the request. */
