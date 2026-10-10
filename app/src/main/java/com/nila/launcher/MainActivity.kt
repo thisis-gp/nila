@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.AlarmClock
+import android.util.Log
 import android.provider.Settings
 import android.widget.Toast
 import androidx.core.view.WindowCompat
@@ -19,7 +20,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -30,7 +34,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -63,12 +66,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.unit.sp
 import com.composables.icons.lucide.R as LucideR
 
@@ -96,7 +102,85 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private data class Turn(val user: String, val response: NilaResponse)
+data class Turn(val user: String, val response: NilaResponse)
+private data class ActiveZeptoSession(val client: ZeptoMcpClient, val addressId: String, val addressLabel: String)
+
+/** Builds the quantity-stepper turn for a Zepto search result. Prepare-tier only: setCartQuantity never places or pays for an order. */
+private fun zeptoProductTurn(
+    item: String,
+    products: List<ZeptoProduct>,
+    client: ZeptoMcpClient,
+    context: Context,
+    coroutineScope: kotlinx.coroutines.CoroutineScope,
+    appendTurn: (Turn) -> Unit,
+    desiredSize: String? = null,
+): Turn {
+    val deviceId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+        ?: "nila-device"
+    val desiredNormalized = desiredSize?.let { normalizedSize(it) }
+    val cheapest = products.sortedWith(
+        compareByDescending<ZeptoProduct> { product ->
+            desiredNormalized != null && normalizedSize(product.packSize)?.let { (unit, value) ->
+                unit == desiredNormalized.first && kotlin.math.abs(value - desiredNormalized.second) < 1.0
+            } == true
+        }.thenBy { it.priceInPaisa },
+    ).take(6)
+    val pickable = cheapest.map { product ->
+        PickableProduct(
+            title = product.name,
+            detail = product.packSize,
+            price = "₹%.2f".format(product.priceInPaisa / 100.0),
+            imageUrl = product.imageUrl,
+        ) { quantity ->
+            coroutineScope.launch(Dispatchers.IO) {
+                runCatching { client.setCartQuantity(deviceId, product.productVariantId, product.storeProductId, product.name, quantity) }
+                    .onFailure { withContext(Dispatchers.Main) { appendTurn(Turn("Zepto", NilaResponse.Text("Could not update cart: ${it.message}"))) } }
+            }
+        }
+    }
+    val zeptoSummary = cheapest.minOfOrNull { it.priceInPaisa }?.let { "from ₹%.2f".format(it / 100.0) } ?: "no results"
+    val zeptoGroup = ProductProviderGroup("Zepto", zeptoSummary, pickable, if (pickable.isEmpty()) "No Zepto results for \"$item\"." else null)
+    val groups = listOf(zeptoGroup, swiggyPendingProductGroup(ShoppingCategory.GROCERY))
+    return Turn("Zepto", NilaResponse.ProductGroupChoices("Options for \"$item\" — tap + to add:", groups))
+}
+
+/**
+ * Real Cash-on-Delivery placement: shows Zepto's own preview first, places the order only after an
+ * explicit tap on that preview. COD only — online payment, wallet and UPI reserve-pay all move money
+ * through a gateway and stay unwired (see ZeptoMcpClient). Never opens the Zepto app: the order is
+ * placed for real right here, so there is nothing left to hand off for.
+ */
+private fun startCodCheckout(
+    client: ZeptoMcpClient,
+    addressId: String,
+    addressLabel: String,
+    coroutineScope: kotlinx.coroutines.CoroutineScope,
+    appendTurn: (Turn) -> Unit,
+) {
+    coroutineScope.launch(Dispatchers.IO) {
+        val outcome = runCatching { client.previewCodOrder(addressId) }
+        withContext(Dispatchers.Main) {
+            outcome.fold(
+                onSuccess = { preview ->
+                    appendTurn(Turn("Zepto", NilaResponse.Text("Delivering to $addressLabel.\n\n$preview")))
+                    val place = AsyncChoice("Place order (Cash on Delivery)", "This charges nothing now — you pay the rider on delivery", "", "") {
+                        coroutineScope.launch(Dispatchers.IO) {
+                            val placed = runCatching { client.placeCodOrder(addressId) }
+                            withContext(Dispatchers.Main) {
+                                placed.fold(
+                                    onSuccess = { result -> appendTurn(Turn("Zepto", NilaResponse.Text(result))) },
+                                    onFailure = { appendTurn(Turn("Zepto", NilaResponse.Text("Order failed: ${it.message}"))) },
+                                )
+                            }
+                        }
+                    }
+                    appendTurn(Turn("Zepto", NilaResponse.AsyncChoices("Confirm to place the order", listOf(place))))
+                },
+                onFailure = { appendTurn(Turn("Zepto", NilaResponse.Text("Could not preview the order: ${it.message}"))) },
+            )
+        }
+    }
+}
 
 internal val Ink = Color(0xFF151513)
 internal val Panel = Color(0xFF22221F)
@@ -227,9 +311,234 @@ private fun NilaApp(resumeVersion: Int) {
     }
 
     val keyboard = LocalSoftwareKeyboardController.current
+    val zeptoAuth = remember { ZeptoAuth(context) }
+    // Zepto requires a selected store before search works at all, so the first "buy" of a session
+    // silently picks a saved address for that (no address UI shown — only "go to cart" -> proceed
+    // asks). The resolved client+store is then reused for every later "buy" in this session.
+    var activeZeptoSession by remember { mutableStateOf<ActiveZeptoSession?>(null) }
 
     fun submit(prompt: String = input) {
         if (prompt.isBlank() || isThinking) return
+        if (prompt.lowercase().contains("connect zepto")) {
+            turns += Turn(prompt, NilaResponse.Text("Opening Zepto login in your browser. Sign in and come back to NILA."))
+            input = ""
+            scope.launch(Dispatchers.IO) {
+                zeptoAuth.connect(context)
+                    .onSuccess { Log.i("ZeptoAuth", "Zepto authorization completed.") }
+                    .onFailure { Log.w("ZeptoAuth", "Zepto authorization failed: ${it.message}") }
+            }
+            return
+        }
+        if (prompt.lowercase().contains("zepto cart") || prompt.lowercase().contains("go to cart") ||
+            prompt.lowercase().contains("buy now") || prompt.lowercase().contains("checkout")
+        ) {
+            input = ""
+            if (!zeptoAuth.isConnected) {
+                turns += Turn(prompt, NilaResponse.GroupedChoices("Options:", listOf(zeptoNotConnectedGroup(zeptoAuth, context, scope) { t -> turns += t })))
+                return
+            }
+            val client = activeZeptoSession?.client ?: ZeptoMcpClient(zeptoAuth)
+            turns += Turn(prompt, NilaResponse.Text("Checking your Zepto cart..."))
+            scope.launch(Dispatchers.IO) {
+                val deviceId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "nila-device"
+                val outcome = runCatching { client.viewCartItems() }
+                withContext(Dispatchers.Main) {
+                    outcome.fold(
+                        onSuccess = { items ->
+                            if (items.isEmpty()) {
+                                turns += Turn("Zepto", NilaResponse.Text("Your Zepto cart is empty. Say \"buy <item>\" to add something first."))
+                                return@fold
+                            }
+                            val total = items.sumOf { it.priceInPaisa.toLong() * it.quantity }
+                            val pickable = items.map { cartItem ->
+                                PickableProduct(
+                                    title = cartItem.name,
+                                    detail = "₹%.2f each".format(cartItem.priceInPaisa / 100.0),
+                                    price = "₹%.2f".format(cartItem.priceInPaisa * cartItem.quantity / 100.0),
+                                    imageUrl = cartItem.imageUrl,
+                                    initialQuantity = cartItem.quantity,
+                                ) { quantity ->
+                                    scope.launch(Dispatchers.IO) {
+                                        runCatching { client.setCartQuantity(deviceId, cartItem.productVariantId, cartItem.storeProductId, cartItem.name, quantity) }
+                                    }
+                                }
+                            }
+                            // The cart's items were searched/added under activeZeptoSession's store (a saved
+                            // address silently picked on the first "buy"). Zepto is hyperlocal — a different
+                            // store's catalog can have different stock/prices — so checkout must CONFIRM that
+                            // same address, not offer a fresh pick that would swap the store under the cart.
+                            val proceed = AsyncChoice("Proceed to checkout", "Confirm delivery address and total", "", "") {
+                                val session = activeZeptoSession
+                                if (session != null) {
+                                    startCodCheckout(client, session.addressId, session.addressLabel, scope) { t -> turns += t }
+                                } else {
+                                    // Cart was viewed cold (no "buy" this session) — we don't know the store yet.
+                                    // Let the user pick one, then re-check the cart under it: items may differ.
+                                    scope.launch(Dispatchers.IO) {
+                                        val addresses = runCatching { client.listSavedAddresses() }.getOrElse { emptyList() }
+                                        withContext(Dispatchers.Main) {
+                                            if (addresses.isEmpty()) {
+                                                turns += Turn("Zepto", NilaResponse.Text("No saved delivery address — add one in the Zepto app, then proceed again."))
+                                            } else {
+                                                val addressChoices = addresses.map { address ->
+                                                    AsyncChoice(address.label.ifBlank { "Saved address" }, address.addressLine, "", "") {
+                                                        scope.launch(Dispatchers.IO) {
+                                                            val outcome2 = runCatching {
+                                                                client.selectSavedAddress(address.id)
+                                                                client.viewCartItems()
+                                                            }
+                                                            withContext(Dispatchers.Main) {
+                                                                activeZeptoSession = ActiveZeptoSession(client, address.id, address.label.ifBlank { "Saved address" })
+                                                                outcome2.fold(
+                                                                    onSuccess = { freshItems ->
+                                                                        if (freshItems.isEmpty()) {
+                                                                            turns += Turn("Zepto", NilaResponse.Text("None of the cart items are available for delivery to ${address.label.ifBlank { "this address" }}. Try adding items again from here."))
+                                                                        } else {
+                                                                            startCodCheckout(client, address.id, address.label.ifBlank { "this address" }, scope) { t -> turns += t }
+                                                                        }
+                                                                    },
+                                                                    onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                turns += Turn("Zepto", NilaResponse.AsyncChoices("Deliver to which address?", addressChoices))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            turns += Turn(
+                                "Zepto",
+                                NilaResponse.ProductGroupChoices(
+                                    "Your cart — tap +/− to edit, total ₹%.2f".format(total / 100.0),
+                                    listOf(ProductProviderGroup("Zepto cart", "${items.size} item${if (items.size == 1) "" else "s"}", pickable)),
+                                ),
+                            )
+                            turns += Turn("Zepto", NilaResponse.AsyncChoices("Ready to order?", listOf(proceed)))
+                        },
+                        onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
+                    )
+                }
+            }
+            return
+        }
+        if (prompt.lowercase().contains("open zepto")) {
+            turns += Turn(prompt, NilaResponse.OpenApp("Zepto", "com.zeptoconsumerapp", "https://www.zeptonow.com"))
+            input = ""
+            return
+        }
+        if (prompt.lowercase().contains("zepto tools")) {
+            turns += Turn(prompt, NilaResponse.Text("Checking what Zepto's MCP actually exposes..."))
+            input = ""
+            scope.launch(Dispatchers.IO) {
+                val result = runCatching { ZeptoMcpClient(zeptoAuth).listTools() }
+                val message = result.fold(
+                    onSuccess = { tools -> "Zepto tools: " + tools.joinToString(", ") { it.name } },
+                    onFailure = { "Zepto tools/list failed: ${it.message}" },
+                )
+                Log.i("ZeptoAuth", message)
+                withContext(Dispatchers.Main) {
+                    turns += Turn("Zepto tools result", NilaResponse.Text(message))
+                }
+            }
+            return
+        }
+        if (prompt.lowercase().contains("zepto schema")) {
+            turns += Turn(prompt, NilaResponse.Text("Dumping Zepto's tool schemas to a file..."))
+            input = ""
+            scope.launch(Dispatchers.IO) {
+                val message = runCatching {
+                    val raw = ZeptoMcpClient(zeptoAuth).listToolsRaw().toString(2)
+                    context.openFileOutput("zepto_tools.json", Context.MODE_PRIVATE).use { it.write(raw.toByteArray()) }
+                    "Wrote ${raw.length} bytes to files/zepto_tools.json"
+                }.getOrElse { "Zepto schema dump failed: ${it.message}" }
+                Log.i("ZeptoAuth", message)
+            }
+            return
+        }
+        if (prompt.lowercase().startsWith("zepto call ")) {
+            val rest = prompt.substring("zepto call ".length).trim()
+            val toolName = rest.substringBefore(" ")
+            val argsJson = rest.substringAfter(" ", "{}")
+            turns += Turn(prompt, NilaResponse.Text("Calling Zepto tool \"$toolName\"..."))
+            input = ""
+            scope.launch(Dispatchers.IO) {
+                val message = runCatching {
+                    ZeptoMcpClient(zeptoAuth).callTool(toolName, org.json.JSONObject(argsJson)).toString(2)
+                }.getOrElse { "Zepto call failed: ${it.message}" }
+                Log.i("ZeptoAuth", "zepto call $toolName -> $message")
+            }
+            return
+        }
+        val orderItem = extractOrderItem(prompt)
+        if (orderItem != null) {
+            val category = classifyShoppingIntent(orderItem)
+            val isOldFoodDemo = prompt.lowercase().startsWith("order ") && category == ShoppingCategory.FOOD
+            if (!isOldFoodDemo) {
+                input = ""
+                if (category == ShoppingCategory.FOOD) {
+                    turns += Turn(
+                        prompt,
+                        NilaResponse.GroupedChoices(
+                            "\"$orderItem\" is a restaurant order — Zepto doesn't do food:",
+                            listOf(swiggyPendingGroup(category)),
+                        ),
+                    )
+                    return
+                }
+                val item = orderItem
+                if (!zeptoAuth.isConnected) {
+                    turns += Turn(
+                        prompt,
+                        NilaResponse.GroupedChoices(
+                            "Options for \"$item\":",
+                            listOf(zeptoNotConnectedGroup(zeptoAuth, context, scope) { t -> turns += t }, swiggyPendingGroup(category)),
+                        ),
+                    )
+                    return
+                }
+                val active = activeZeptoSession
+                if (active != null) {
+                    turns += Turn(prompt, NilaResponse.Text("Searching Zepto for \"$item\"..."))
+                    scope.launch(Dispatchers.IO) {
+                        val parsed = parseOrderItem(item)
+                        val outcome = runCatching { active.client.searchProducts(parsed.searchQuery) }
+                        withContext(Dispatchers.Main) {
+                            outcome.fold(
+                                onSuccess = { products -> turns += zeptoProductTurn(item, products, active.client, context, scope, { t -> turns += t }, parsed.desiredSize) },
+                                onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
+                            )
+                        }
+                    }
+                    return
+                }
+                // First "buy" of this session: silently pick a saved address for store context (Zepto's own
+                // API rejects search without one) so nothing is asked here — only "go to cart" -> proceed asks.
+                turns += Turn(prompt, NilaResponse.Text("Searching Zepto for \"$item\"..."))
+                scope.launch(Dispatchers.IO) {
+                    val client = ZeptoMcpClient(zeptoAuth)
+                    val outcome = runCatching {
+                        val defaultAddress = client.listSavedAddresses().firstOrNull()
+                            ?: error("No saved Zepto address yet — add one in the Zepto app, then ask again.")
+                        client.selectSavedAddress(defaultAddress.id)
+                        val parsed = parseOrderItem(item)
+                        Triple(client.searchProducts(parsed.searchQuery), parsed.desiredSize, defaultAddress)
+                    }
+                    withContext(Dispatchers.Main) {
+                        outcome.fold(
+                            onSuccess = { (products, desiredSize, defaultAddress) ->
+                                activeZeptoSession = ActiveZeptoSession(client, defaultAddress.id, defaultAddress.label.ifBlank { "Saved address" })
+                                turns += zeptoProductTurn(item, products, client, context, scope, { t -> turns += t }, desiredSize)
+                            },
+                            onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
+                        )
+                    }
+                }
+                return
+            }
+        }
         input = ""
         // The answer card needs the room: Swiggy's address step was hidden behind the keyboard.
         keyboard?.hide()
@@ -499,6 +808,9 @@ private fun AgentSpace(
                 Text("NILA", color = Lime, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
                 Text(modelStatus, color = Muted, fontSize = 11.sp)
             }
+            IconButton(onClick = { onSubmit("zepto cart") }) {
+                Text("🛒", fontSize = 20.sp)
+            }
             NilaMascot(mood = mood, size = 36.dp)
         }
         LazyColumn(
@@ -719,11 +1031,159 @@ private fun ResponseView(
                 }
             }
         }
+        is NilaResponse.AsyncChoices -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(response.intro)
+            response.items.forEach { item ->
+                ActionCard(item.title, "${item.detail}${if (item.eta.isNotBlank()) " · ${item.eta}" else ""}", item.price.ifBlank { "Select" }, item.onClick)
+            }
+        }
+        is NilaResponse.GroupedChoices -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(response.intro)
+            response.groups.forEach { group -> ProviderGroupCard(group) }
+        }
+        is NilaResponse.ProductGroupChoices -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(response.intro)
+            response.groups.forEach { group -> ProductProviderGroupCard(group) }
+        }
         is NilaResponse.Confirmation -> ConfirmationCard(response) {
             addTurn(
                 "Action result",
                 NilaResponse.Text("Simulation complete. No order was placed and no payment or data was shared."),
             )
+        }
+    }
+}
+
+@Composable
+private fun ProviderGroupCard(group: ProviderGroup) {
+    var expanded by remember(group.providerName) { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Card(
+            modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+            colors = CardDefaults.cardColors(containerColor = CardInk),
+            shape = RoundedCornerShape(16.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("${group.providerName} — ${group.summary}", fontWeight = FontWeight.Bold)
+                Text(if (expanded) "▾" else "▸", color = Lime)
+            }
+        }
+        if (expanded) {
+            Column(modifier = Modifier.padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (group.items.isEmpty()) {
+                    Text(group.note ?: "No results.", style = MaterialTheme.typography.bodySmall, color = Muted)
+                } else {
+                    group.items.forEach { item -> ImageActionCard(item) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProductProviderGroupCard(group: ProductProviderGroup) {
+    var expanded by remember(group.providerName) { mutableStateOf(group.items.isNotEmpty()) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Card(
+            modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+            colors = CardDefaults.cardColors(containerColor = CardInk),
+            shape = RoundedCornerShape(16.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("${group.providerName} — ${group.summary}", fontWeight = FontWeight.Bold)
+                Text(if (expanded) "▾" else "▸", color = Lime)
+            }
+        }
+        if (expanded) {
+            Column(modifier = Modifier.padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (group.items.isEmpty()) {
+                    Text(group.note ?: "No results.", style = MaterialTheme.typography.bodySmall, color = Muted)
+                } else {
+                    group.items.forEach { item -> QuantityProductCard(item) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuantityProductCard(item: PickableProduct) {
+    var quantity by remember(item.title) { mutableStateOf(item.initialQuantity) }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = CardInk),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                if (item.imageUrl != null) {
+                    coil.compose.AsyncImage(
+                        model = item.imageUrl,
+                        contentDescription = item.title,
+                        modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                }
+                Column {
+                    Text(item.title, fontWeight = FontWeight.Bold)
+                    Text(item.detail, style = MaterialTheme.typography.bodySmall, color = Muted)
+                    Text(item.price, style = MaterialTheme.typography.bodySmall, color = Lime)
+                }
+            }
+            if (quantity <= 0) {
+                Button(onClick = { quantity = 1; item.onQuantityChange(1) }) { Text("Add") }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { val next = quantity - 1; quantity = next; item.onQuantityChange(next) }) { Text("−", fontWeight = FontWeight.Bold, color = Lime) }
+                    Text("$quantity", fontWeight = FontWeight.Bold)
+                    IconButton(onClick = { quantity += 1; item.onQuantityChange(quantity) }) { Text("+", fontWeight = FontWeight.Bold, color = Lime) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ImageActionCard(item: AsyncChoice) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = CardInk),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                if (item.imageUrl != null) {
+                    coil.compose.AsyncImage(
+                        model = item.imageUrl,
+                        contentDescription = item.title,
+                        modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                }
+                Column {
+                    Text(item.title, fontWeight = FontWeight.Bold)
+                    Text(item.detail, style = MaterialTheme.typography.bodySmall, color = Muted)
+                }
+            }
+            Button(onClick = item.onClick) { Text(item.price.ifBlank { "Select" }) }
         }
     }
 }
@@ -752,6 +1212,11 @@ private fun ConfirmationCard(response: NilaResponse.Confirmation, onConfirm: () 
 
 @Composable
 private fun ActionCard(title: String, detail: String, action: String, onClick: () -> Unit) {
+    // A tap can start a real, non-idempotent call (place a COD order, select an address, start OAuth).
+    // tapOnce is checked and set inside the click handler itself, so even two taps in the same frame
+    // can't both get through before recomposition would otherwise disable the button.
+    val consumed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    var disabled by remember { mutableStateOf(false) }
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = CardInk),
@@ -768,10 +1233,13 @@ private fun ActionCard(title: String, detail: String, action: String, onClick: (
                     Text(detail, style = MaterialTheme.typography.bodySmall, color = Color.LightGray)
                 }
             }
-            Button(onClick = onClick) { Text(action) }
+            Button(onClick = { if (tapOnce(consumed)) { disabled = true; onClick() } }, enabled = !disabled) { Text(action) }
         }
     }
 }
+
+/** True on the first call, false on every call after — even two calls racing from the same frame. Guards a tap from firing a non-idempotent action (an order, a payment) twice. */
+internal fun tapOnce(consumed: java.util.concurrent.atomic.AtomicBoolean): Boolean = !consumed.getAndSet(true)
 
 /**
  * Asks the Clock app to turn off an alarm after the user confirmed. Android does not let other apps read

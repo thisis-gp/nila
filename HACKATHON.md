@@ -135,7 +135,7 @@ Each owner works on `owner/short-topic`, opens a focused pull request and includ
 
 - No custom Android ROM.
 - No arbitrary code or APK generation.
-- No real payment integration.
+- No online payment gateway, wallet or UPI reserve-pay integration. Cash-on-Delivery order placement is in scope (confirm-then-place, same as any other Commit action) since it moves no money through NILA itself.
 - No unofficial provider API.
 - No multi-agent framework.
 - No community MCP in the critical path.
