@@ -13,6 +13,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -25,12 +27,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.BasicTextField
@@ -69,6 +71,12 @@ class MainActivity : ComponentActivity() {
     private var resumeVersion by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Edge-to-edge hands the keyboard inset to Compose; safeDrawingPadding in NilaApp applies it once.
+        // Dark bar styles keep light status icons on NILA's dark background in any system theme.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
         super.onCreate(savedInstanceState)
         setContent { NilaApp(resumeVersion) }
     }
@@ -269,7 +277,7 @@ private fun NilaApp(resumeVersion: Int) {
 
 @Composable
 private fun OverlayScaffold(onClose: () -> Unit, content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxSize().background(Ink).imePadding()) {
+    Column(Modifier.fillMaxSize().background(Ink)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
             IconButton(onClick = onClose) {
                 Icon(painterResource(LucideR.drawable.lucide_ic_arrow_left), contentDescription = "Close", tint = Paper)
@@ -302,6 +310,11 @@ private fun AgentSpace(
         turns.isEmpty() -> MascotMood.Idle
         else -> MascotMood.Talking
     }
+    val listState = rememberLazyListState()
+    // Bring the newest turn into view when it is added and again when its reply lands.
+    LaunchedEffect(turns.size, isThinking) {
+        if (turns.isNotEmpty()) listState.animateScrollToItem(turns.lastIndex)
+    }
     LaunchedEffect(turns.size) {
         if (lastWasConfirmation) {
             celebrate = true
@@ -319,6 +332,7 @@ private fun AgentSpace(
         }
         LazyColumn(
             modifier = Modifier.weight(1f),
+            state = listState,
             contentPadding = PaddingValues(vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
