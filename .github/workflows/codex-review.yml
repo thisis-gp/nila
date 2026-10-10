@@ -2,9 +2,7 @@ name: NILA PR review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-  issue_comment:
-    types: [created]
+    types: [review_requested]
 
 permissions:
   contents: read
@@ -16,8 +14,11 @@ concurrency:
 jobs:
   review:
     if: >-
-      ${{ (github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/codex review')) }}
+      ${{ github.event_name == 'pull_request' &&
+      github.event.action == 'review_requested' &&
+      github.event.requested_reviewer.login == 'thisis-gp' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) }}
     runs-on: ubuntu-latest
     environment: prod
     permissions:
@@ -27,29 +28,12 @@ jobs:
       pr_number: ${{ steps.context.outputs.pr_number }}
       head_sha: ${{ steps.context.outputs.head_sha }}
     steps:
-      - name: Resolve PR context for comment-triggered review
-        id: pr
-        if: github.event_name == 'issue_comment'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data: pr } = await github.rest.pulls.get({
-              ...context.repo,
-              pull_number: context.issue.number,
-            });
-            if (pr.head.repo?.full_name !== context.repo.owner + '/' + context.repo.repo ||
-                !['OWNER', 'MEMBER', 'COLLABORATOR'].includes(pr.author_association)) {
-              throw new Error('Manual Codex review requires a trusted, same-repository PR author.');
-            }
-            core.setOutput('number', String(pr.number));
-            core.setOutput('head_sha', pr.head.sha);
-            core.setOutput('base_sha', pr.base.sha);
       - name: Set review context
         id: context
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number || steps.pr.outputs.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.pr.outputs.head_sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || steps.pr.outputs.base_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
@@ -87,6 +71,7 @@ jobs:
         run: npm install --global @anthropic-ai/claude-code@2.1.296
       - name: Run read-only Creditclaim review
         env:
+          # Owner-approved external review provider; PR diffs are sent to Creditclaim/DeepSeek.
           ANTHROPIC_BASE_URL: https://creditclaim.reskilll.com/llm
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.CREDITCLAIM_API_KEY }}
           ANTHROPIC_API_KEY: ""
@@ -124,6 +109,7 @@ jobs:
     permissions:
       actions: read
       issues: write
+      pull-requests: write
     steps:
       - uses: actions/download-artifact@v8
         with:
