@@ -9,7 +9,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
-import java.io.PrintWriter
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.security.MessageDigest
@@ -71,6 +70,10 @@ class ZeptoAuth(context: Context) {
                 .appendQueryParameter("state", state)
                 .appendQueryParameter("code_challenge", pkceChallenge(verifier))
                 .appendQueryParameter("code_challenge_method", "S256")
+                // RFC 8707 resource indicator, required by the MCP authorization spec so the auth
+                // server knows which resource (Zepto's MCP) this grant is for. Omitting it is a
+                // plausible cause of the Accept step hanging without ever finalizing the grant.
+                .appendQueryParameter("resource", ZeptoConfig.MCP_URL)
                 .build()
             launchContext.startActivity(
                 Intent(Intent.ACTION_VIEW, authorizeUri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -90,6 +93,7 @@ class ZeptoAuth(context: Context) {
                     "redirect_uri" to redirectUri,
                     "client_id" to clientId,
                     "code_verifier" to verifier,
+                    "resource" to ZeptoConfig.MCP_URL,
                 )
             )
             val response = JSONObject(httpPost("${ZeptoConfig.AUTH_SERVER}/token", form, "application/x-www-form-urlencoded"))
@@ -115,14 +119,28 @@ class ZeptoAuth(context: Context) {
     /** Waits for the one GET /callback?... request the browser sends after login, then replies with a plain HTML page. */
     private fun awaitLoopbackCallback(server: ServerSocket): Uri {
         server.accept().use { socket ->
-            val requestLine = BufferedReader(InputStreamReader(socket.getInputStream())).readLine()
-                ?: error("Zepto's login redirect arrived empty.")
+            val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
+            val requestLine = reader.readLine() ?: error("Zepto's login redirect arrived empty.")
             val path = requestLine.split(" ").getOrNull(1) ?: error("Could not read Zepto's redirect.")
-            PrintWriter(socket.getOutputStream(), true).use { writer ->
-                writer.print(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n" +
-                        "<html><body>Signed in to Zepto. You can return to NILA.</body></html>"
-                )
+            // Drain the rest of the request headers before responding, so the browser isn't still
+            // writing while we reply — some clients stall waiting for us to finish reading first.
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (line.isEmpty()) break
+            }
+            // Relying on "Connection: close" + socket EOF to signal the response is done is fragile —
+            // some browsers kept the tab spinning even after we'd fully sent and closed. An explicit
+            // Content-Length is unambiguous, so Chrome stops loading as soon as the body is read.
+            val body = ("<html><body style=\"font-family:sans-serif;padding:24px\">" +
+                "Signed in to Zepto. You can close this tab and return to NILA.</body></html>").toByteArray(Charsets.UTF_8)
+            val headers = ("HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/html; charset=utf-8\r\n" +
+                "Content-Length: ${body.size}\r\n" +
+                "Connection: close\r\n\r\n").toByteArray(Charsets.US_ASCII)
+            socket.getOutputStream().apply {
+                write(headers)
+                write(body)
+                flush()
             }
             return Uri.parse("http://localhost:${server.localPort}$path")
         }
