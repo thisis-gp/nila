@@ -222,7 +222,13 @@ class NilaEngine(
     }
 
     /** 24-hour value, or null when invalid. With am/pm, only 1-12 is accepted. */
-    private fun alarmHour(hour: Int, minute: Int, meridiem: String?): Int? = when (meridiem) {
+    private fun alarmHour(hour: Int, minute: Int, meridiem: String?): Int? = when {
+        // Checked first: nextOccurrence builds a LocalTime, which throws on minute 99 instead of rejecting it.
+        minute !in 0..59 -> null
+        else -> hourFor(hour, minute, meridiem)
+    }
+
+    private fun hourFor(hour: Int, minute: Int, meridiem: String?): Int? = when (meridiem) {
         null -> when (hour) {
             in 1..12 -> nextOccurrence(hour, minute)
             0, in 13..23 -> hour
