@@ -847,23 +847,21 @@ private fun AgentSpace(
     var celebrate by remember { mutableStateOf(false) }
     // Model load status is debug info: hidden until the mascot is tapped.
     var showStatus by remember { mutableStateOf(false) }
-    // What the inline listening state shows: the transcript waiting for "Use this request", or why voice failed.
-    var heard by remember { mutableStateOf<String?>(null) }
+    // Why voice failed, shown in the listening state. A transcript is sent at once, like a typed message:
+    // waiting for "Use this request" made every voice request take two steps, and commit actions still ask.
     var notice by remember { mutableStateOf<String?>(null) }
     val voice = rememberVoiceCapture(
         transcribe = transcribe,
-        onFinal = { heard = it },
+        onFinal = onVoiceRequest,
         onMessage = { notice = it },
         onListenStart = {
-            heard = null
             notice = null
             onListenStart()
         },
     )
-    val voiceShown = voice.state != VoiceState.IDLE || heard != null || notice != null
+    val voiceShown = voice.state != VoiceState.IDLE || notice != null
     fun dismissVoice() {
         voice.cancel()
-        heard = null
         notice = null
     }
     LaunchedEffect(Unit) {
@@ -915,10 +913,7 @@ private fun AgentSpace(
             )
         }
         if (voiceShown) {
-            ListeningTurn(voice = voice, heard = heard, notice = notice, modifier = Modifier.weight(1f)) { request ->
-                heard = null
-                onVoiceRequest(request)
-            }
+            ListeningTurn(voice = voice, notice = notice, modifier = Modifier.weight(1f))
         } else LazyColumn(
             modifier = Modifier.weight(1f),
             state = listState,
