@@ -21,22 +21,38 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import kotlin.coroutines.resume
 
+/** One MCP food service's OAuth endpoints. Swiggy and Zomato use the same flow with different paths. */
+internal data class McpProvider(
+    val name: String,
+    val base: String,
+    val registerPath: String,
+    val authorizePath: String,
+    val tokenPath: String,
+    val prefs: String,
+    /** Used when the token response has no expires_in. */
+    val defaultLifetimeSeconds: Long,
+)
+
+internal val SWIGGY = McpProvider("Swiggy", "https://mcp.swiggy.com", "/auth/register", "/auth/authorize", "/auth/token", "nila_swiggy", 432_000L)
+internal val ZOMATO = McpProvider("Zomato", "https://mcp-server.zomato.com", "/register", "/authorize", "/token", "nila_zomato", 86_400L)
+
+internal val SwiggyAuth = McpAuth(SWIGGY)
+internal val ZomatoAuth = McpAuth(ZOMATO)
+
 /**
- * OAuth 2.1 + PKCE against Swiggy's MCP auth server, using dynamic client
+ * OAuth 2.1 + PKCE against an MCP auth server (Swiggy's first), using dynamic client
  * registration (RFC 7591) and an in-app loopback redirect — the documented
  * dev-mode path (mcp.swiggy.com/builders/docs/start/authenticate/) that works
  * today without waiting on builders@swiggy.in to approve a `nila://oauth`
  * custom scheme. Access tokens last 5 days and are never refreshed; once
  * expired, the full flow must run again.
  */
-internal object SwiggyAuth {
-    private const val BASE = "https://mcp.swiggy.com"
-    private const val PREFS = "nila_swiggy"
+internal class McpAuth(private val provider: McpProvider) {
     private val http = OkHttpClient()
 
     internal data class Session(val accessToken: String, val expiresAtMillis: Long)
 
-    private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private fun prefs(context: Context) = context.getSharedPreferences(provider.prefs, Context.MODE_PRIVATE)
 
     fun currentSession(context: Context): Session? {
         val p = prefs(context)
@@ -80,7 +96,7 @@ internal object SwiggyAuth {
         val challenge = base64UrlSha256(verifier)
         val state = randomUrlSafe(16)
 
-        val authorizeUri = Uri.parse("$BASE/auth/authorize").buildUpon()
+        val authorizeUri = Uri.parse(provider.base + provider.authorizePath).buildUpon()
             .appendQueryParameter("response_type", "code")
             .appendQueryParameter("client_id", clientId)
             .appendQueryParameter("redirect_uri", redirectUri)
@@ -100,7 +116,7 @@ internal object SwiggyAuth {
 
         val tokenJson = withContext(Dispatchers.IO) { exchangeCode(clientId, code, verifier, redirectUri) } ?: return null
         val accessToken = tokenJson.optString("access_token").ifBlank { return null }
-        val expiresIn = tokenJson.optLong("expires_in", 432_000L) // docs default: 5 days
+        val expiresIn = tokenJson.optLong("expires_in", provider.defaultLifetimeSeconds)
         val expiresAt = System.currentTimeMillis() + expiresIn * 1000
 
         prefs(context).edit()
@@ -148,19 +164,19 @@ internal object SwiggyAuth {
             put("response_types", JSONArray().put("code"))
         }
         val request = Request.Builder()
-            .url("$BASE/auth/register")
+            .url(provider.base + provider.registerPath)
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
         return runCatching {
             http.newCall(request).execute().use { resp ->
                 val text = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
-                    Log.e("NilaSwiggy", "register ${resp.code}: $text")
+                    Log.e("NilaMcp", "${provider.name} register ${resp.code}: $text")
                     return null
                 }
                 JSONObject(text).optString("client_id").ifBlank { null }
             }
-        }.onFailure { Log.e("NilaSwiggy", "register failed", it) }.getOrNull()
+        }.onFailure { Log.e("NilaMcp", "${provider.name} register failed", it) }.getOrNull()
     }
 
     private fun exchangeCode(clientId: String, code: String, verifier: String, redirectUri: String): JSONObject? {
@@ -170,7 +186,7 @@ internal object SwiggyAuth {
             "&redirect_uri=${Uri.encode(redirectUri)}" +
             "&client_id=${Uri.encode(clientId)}"
         val request = Request.Builder()
-            .url("$BASE/auth/token")
+            .url(provider.base + provider.tokenPath)
             .post(form.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
             .build()
         return runCatching {

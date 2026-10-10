@@ -10,13 +10,13 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * MCP JSON-RPC 2.0 client for Swiggy's Food server (streamable HTTP, one POST
+ * MCP JSON-RPC 2.0 client for a food server at [endpoint] (Swiggy's Food server first (streamable HTTP, one POST
  * URL). Tool names and argument schemas come from the live `tools/list`
  * (get_addresses, search_restaurants, get_restaurant_menu, update_food_cart,
  * get_food_cart, get_payment_options, place_food_order, ...). Blocking: call
  * from Dispatchers.IO.
  */
-internal class SwiggyClient(private val accessToken: String) {
+internal class McpClient(private val endpoint: String, private val accessToken: String) {
     private val http = OkHttpClient.Builder().readTimeout(30, TimeUnit.SECONDS).build()
     private val nextId = AtomicInteger(1)
     private var sessionId: String? = null
@@ -64,7 +64,7 @@ internal class SwiggyClient(private val accessToken: String) {
             .put("method", method)
             .put("params", params)
         val request = Request.Builder()
-            .url(ENDPOINT)
+            .url(endpoint)
             .header("Authorization", "Bearer $accessToken")
             .header("Accept", "application/json, text/event-stream")
             .apply { sessionId?.let { header("Mcp-Session-Id", it) } }
@@ -95,8 +95,4 @@ internal class SwiggyClient(private val accessToken: String) {
             parsed.optJSONObject("result")
         }
     }.onFailure { lastError = "$method -> ${it.javaClass.simpleName}: ${it.message}" }.getOrNull()
-
-    private companion object {
-        const val ENDPOINT = "https://mcp.swiggy.com/food"
-    }
 }

@@ -175,6 +175,14 @@ class NilaEngineTest {
     }
 
     @Test
+    fun zomatoMatchingNeedsTheSameRestaurantAndDish() {
+        assertTrue(sameRestaurant("Paradise Biryani", "Paradise Biryani - A Legend Since 1953"))
+        assertTrue(!sameRestaurant("Paradise Biryani", "Biryani Paradise Kitchen"))
+        assertTrue(sameDish("Paneer Tikka Roll", "Paneer Tikka Roll"))
+        assertTrue(sameDish("Chicken Biryani (pulav) · Regular (serves 1)", "Chicken Biryani (Pulav)"))
+    }
+
+    @Test
     fun foodIsLeftToTheModelNotKeywords() {
         assertEquals(NilaIntent.Converse("I'm starving, get me biryani"), engine.route("I'm starving, get me biryani"))
     }

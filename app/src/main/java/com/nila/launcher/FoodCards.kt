@@ -57,6 +57,7 @@ import kotlinx.coroutines.delay
 /** What the food cards can ask NILA to do next. Implemented in MainActivity. */
 internal interface FoodActions {
     fun locate(query: String)
+    fun zomatoTotal(payment: FoodCard.Payment, method: String)
     fun applyCoupon(payment: FoodCard.Payment, coupon: FoodCoupon)
     fun back(card: FoodCard)
     fun lastResults(): FoodCard.Restaurants?
@@ -871,6 +872,7 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
             )
         }
         OffersBlock(card, enabled = !placed) { actions.applyCoupon(card, it) }
+        card.zomato?.let { compared -> CompareBlock(card, compared, selected?.method.orEmpty(), enabled = !placed) { actions.zomatoTotal(card, it) } }
         Spacer(Modifier.height(4.dp))
         Surface(color = CommitInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -911,6 +913,60 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
                     )
                 }
                 Text("This places a real Swiggy order and charges you.", color = Muted, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+/**
+ * The same order on Zomato: dish prices first (both apps add their own fees), then Zomato's real total
+ * once the user asks for it. A gap is said plainly, never filled with a guessed match.
+ */
+@Composable
+private fun CompareBlock(card: FoodCard.Payment, compared: ZomatoComparison, method: String, enabled: Boolean, onTotal: (String) -> Unit) {
+    Text("COMPARE", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(top = 4.dp))
+    Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            when (compared) {
+                is ZomatoGap -> Text("Zomato · ${compared.reason}", color = Muted, fontSize = 13.sp)
+                is ZomatoQuote -> {
+                    val swiggyItems = card.cart.bill.firstOrNull { it.first == "Item total" }?.second?.let(::digitsOf)
+                        ?: card.cart.lines.sumOf { digitsOf(it.price) ?: 0 }
+                    val swiggyTotal = digitsOf(card.cart.total)
+                    val zomatoTotal = compared.total
+                    val (zomatoAmount, swiggyAmount, what) =
+                        if (zomatoTotal != null && swiggyTotal != null) Triple(zomatoTotal, swiggyTotal, "total to pay")
+                        else Triple(compared.itemsTotal, swiggyItems, "dish prices")
+                    val gap = zomatoAmount - swiggyAmount
+                    Text(
+                        when {
+                            gap < 0 -> "Zomato is ₹${-gap} cheaper (${what})"
+                            gap > 0 -> "Swiggy is ₹$gap cheaper (${what})"
+                            else -> "Same price on both (${what})"
+                        },
+                        color = if (gap < 0) Lime else Paper,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                    )
+                    Text("Swiggy ₹$swiggyAmount · Zomato ₹$zomatoAmount", color = Paper, fontSize = 13.sp)
+                    Text(
+                        listOf(compared.restaurantName, compared.eta).filter(String::isNotBlank).joinToString(" · "),
+                        color = Muted,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (compared.missing.isNotEmpty()) Text("Not on Zomato: ${compared.missing.joinToString()}", color = Muted, fontSize = 12.sp)
+                    if (zomatoTotal == null) {
+                        Text(
+                            "Check Zomato total with fees · makes a Zomato cart, no order",
+                            color = Lime,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.clickable(enabled = enabled) { onTotal(method) }.padding(vertical = 2.dp),
+                        )
+                    }
+                }
             }
         }
     }

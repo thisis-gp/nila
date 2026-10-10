@@ -114,6 +114,7 @@ sealed interface FoodCard {
         val options: List<FoodPayOption>,
         val coupons: List<FoodCoupon> = emptyList(),
         val applied: FoodCoupon? = null,
+        val zomato: ZomatoComparison? = null,
     ) : FoodCard
     data class Order(
         val title: String,
@@ -133,7 +134,8 @@ sealed interface FoodCard {
  * names instead of fixed paths, and every raw response is kept in files/probe/.
  */
 internal class FoodFlow(private val context: Context) {
-    private var client: SwiggyClient? = null
+    private var client: McpClient? = null
+    private val zomato = ZomatoCompare(context)
     private var cartRestaurantId: String? = null
     private val cartItems = linkedMapOf<String, Pair<FoodItem, Int>>()
 
@@ -156,7 +158,7 @@ internal class FoodFlow(private val context: Context) {
 
     private suspend fun call(tool: String, args: JSONObject = JSONObject()): JSONObject? = withContext(Dispatchers.IO) {
         val session = SwiggyAuth.currentSession(context) ?: return@withContext null
-        val c = client ?: SwiggyClient(session.accessToken).also { client = it }
+        val c = client ?: McpClient(SWIGGY_FOOD_ENDPOINT, session.accessToken).also { client = it }
         c.callTool(tool, args).also { result ->
             runCatching {
                 val dir = File(context.filesDir, "probe").apply { mkdirs() }
@@ -307,7 +309,16 @@ internal class FoodFlow(private val context: Context) {
         val ordered = options.sortedByDescending { it.label == usual }
         val coupons = call("fetch_food_coupons", JSONObject().put("restaurantId", restaurant.id).put("addressId", address.id))
             ?.let(::parseCoupons).orEmpty()
-        return card(FoodCard.Payment(address, restaurant, cart, ordered, coupons).also { lastPayment = it })
+        // Same order on Zomato, by dish price, when the user has connected Zomato in Settings.
+        val compared = if (zomato.connected) zomato.quote(address, restaurant, cart) else null
+        return card(FoodCard.Payment(address, restaurant, cart, ordered, coupons, zomato = compared).also { lastPayment = it })
+    }
+
+    /** The user asked for Zomato's real total: creates a Zomato cart for the same items, never checks out. */
+    suspend fun zomatoTotal(payment: FoodCard.Payment, method: String): NilaResponse {
+        val quote = payment.zomato as? ZomatoQuote ?: return card(payment)
+        val priced = zomato.total(quote, method) ?: return card(payment.copy(zomato = ZomatoGap("Zomato couldn't price this cart right now")))
+        return card(payment.copy(zomato = priced).also { lastPayment = it })
     }
 
     /** Applies one coupon; Swiggy answers with the repriced cart, which replaces the bill on the same card. */
@@ -399,12 +410,12 @@ internal class FoodFlow(private val context: Context) {
 
 // ---- Tolerant JSON helpers -------------------------------------------------
 
-private fun JSONObject.pick(vararg keys: String): String? = keys.firstNotNullOfOrNull { key ->
+internal fun JSONObject.pick(vararg keys: String): String? = keys.firstNotNullOfOrNull { key ->
     opt(key)?.takeIf { it != JSONObject.NULL && it !is JSONObject && it !is JSONArray }
         ?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != "null" }
 }
 
-private fun allObjects(node: Any?, out: MutableList<JSONObject> = mutableListOf(), depth: Int = 0): List<JSONObject> {
+internal fun allObjects(node: Any?, out: MutableList<JSONObject> = mutableListOf(), depth: Int = 0): List<JSONObject> {
     if (depth > 10) return out
     when (node) {
         is JSONObject -> {
@@ -446,7 +457,7 @@ private fun imageUrl(o: JSONObject, vararg keys: String): String? {
 }
 
 /** Swiggy's internal APIs sometimes give paise; a single dish above ₹3000 is far rarer than a paise value. */
-private fun rupees(value: String?): String {
+internal fun rupees(value: String?): String {
     val text = value?.trim().orEmpty()
     if (text.isEmpty()) return ""
     if (text.startsWith("₹")) return text
@@ -475,6 +486,7 @@ private fun parseAddresses(result: JSONObject): List<FoodAddress> =
         }
         .distinctBy { it.id }
 
+private const val SWIGGY_FOOD_ENDPOINT = "https://mcp.swiggy.com/food"
 private const val BEST_FIT_COUNT = 3
 private const val LAST_ADDRESS = "last_address"
 private const val LAST_PAYMENT = "last_payment"
@@ -587,7 +599,7 @@ private fun parseCoupons(result: JSONObject): List<FoodCoupon> =
 
 private fun partyWords(people: Int) = if (people == 1) "one" else "$people"
 
-private fun digitsOf(text: String) = Regex("""\d+""").find(text)?.value?.toIntOrNull()
+internal fun digitsOf(text: String) = Regex("""\d+""").find(text)?.value?.toIntOrNull()
 
 private val AD_SUFFIX = Regex("""\s*\(Ad\)\s*$""", RegexOption.IGNORE_CASE)
 
