@@ -160,8 +160,11 @@ private fun NilaApp(resumeVersion: Int) {
             delay(550) // a visible thinking beat, so a reply doesn't feel like a canned instant lookup
             val response = if (prompt.lowercase().contains("what do you remember")) {
                 NilaResponse.Text(memory.getString("fact", null)?.let { "You asked me to remember: $it" } ?: "You have not asked me to remember anything yet.")
+            } else if (Regex("""\b(show|read|list|open|what are)\b.*\bnotes?\b""").containsMatchIn(prompt.lowercase())) {
+                NilaResponse.Text(notesSummary(context))
             } else {
-                brain.respond(prompt)
+                // Harmless, reversible actions (flashlight, camera, notes) happen straight away.
+                performNow(context, brain.respond(prompt))
             }
             if (response is NilaResponse.Remember) {
                 memory.edit().putString("fact", response.fact).apply()
@@ -463,6 +466,36 @@ private fun ResponseView(
         is NilaResponse.Remember -> Text("I'll remember: ${response.fact}")
         // Only reached if a dismissal was not confirmed through the card; it is never sent without confirmation.
         is NilaResponse.DismissAlarm -> Text("This alarm was not turned off.")
+        // Torch, Camera and Note are done in performNow before they reach the chat.
+        is Torch, is Camera, is Note -> Text("Done.")
+        is Timer -> ActionCard(
+            title = "Timer %d:%02d".format(response.seconds / 60, response.seconds % 60),
+            detail = "Ready to ask the Clock app to start this timer.",
+            action = "Start timer",
+        ) {
+            val intent = Intent(AlarmClock.ACTION_SET_TIMER)
+                .putExtra(AlarmClock.EXTRA_LENGTH, response.seconds)
+                .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+            runCatching { context.startActivity(intent) }
+                .onSuccess { addTurn("Action result", NilaResponse.Text("Timer request sent to the Clock app.")) }
+                .onFailure { addTurn("Action result", NilaResponse.Text("No timer app is available.")) }
+        }
+        is CalendarEvent -> ActionCard(
+            title = response.title,
+            detail = eventWhen(response.date, response.time) + "\nOpens your calendar to save it.",
+            action = "Add to calendar",
+        ) {
+            val zone = java.time.ZoneId.systemDefault()
+            val start = (response.time?.let { response.date.atTime(it) } ?: response.date.atStartOfDay()).atZone(zone).toInstant().toEpochMilli()
+            val intent = Intent(Intent.ACTION_INSERT)
+                .setData(android.provider.CalendarContract.Events.CONTENT_URI)
+                .putExtra(android.provider.CalendarContract.Events.TITLE, response.title)
+                .putExtra(android.provider.CalendarContract.EXTRA_EVENT_BEGIN_TIME, start)
+                .putExtra(android.provider.CalendarContract.EXTRA_EVENT_ALL_DAY, response.time == null)
+            runCatching { context.startActivity(intent) }
+                .onFailure { addTurn("Action result", NilaResponse.Text("No calendar app is available.")) }
+        }
+        is Call -> CallCard(response.who, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is NilaResponse.Alarm -> ActionCard(
             title = "Alarm ${"%02d:%02d".format(response.hour, response.minute)}",
             detail = "Ready to ask Android to set this alarm.",
@@ -569,3 +602,77 @@ private fun dismissAlarm(context: Context, alarm: NilaResponse.DismissAlarm): Ni
         onFailure = { NilaResponse.Text("The Clock app on this phone can't turn off alarms for NILA. Nothing was changed.") },
     )
 }
+
+/** Does harmless, reversible actions straight away and reports what happened; everything else is returned as is. */
+private fun performNow(context: Context, response: NilaResponse): NilaResponse = when (response) {
+    is Torch -> NilaResponse.Text(setTorch(context, response.on))
+    is Camera -> runCatching {
+        val action = if (response.video) android.provider.MediaStore.INTENT_ACTION_VIDEO_CAMERA else android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA
+        context.startActivity(Intent(action))
+    }.fold({ NilaResponse.Text(if (response.video) "Opening the camera for video." else "Opening the camera.") }, { NilaResponse.Text("No camera app is available.") })
+    is Note -> NilaResponse.Text(saveNote(context, response.text))
+    else -> response
+}
+
+private fun setTorch(context: Context, on: Boolean): String = runCatching {
+    val cameras = context.getSystemService(android.hardware.camera2.CameraManager::class.java)
+    val withFlash = cameras.cameraIdList.first {
+        cameras.getCameraCharacteristics(it).get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+    }
+    cameras.setTorchMode(withFlash, on)
+}.fold({ if (on) "Flashlight is on." else "Flashlight is off." }, { "I couldn't switch the flashlight. The camera may be in use." })
+
+// ponytail: notes are a JSON list in app storage; move to ObjectBox with the rest of memory when it lands.
+private fun notes(context: Context): org.json.JSONArray =
+    runCatching { org.json.JSONArray(context.getSharedPreferences("nila_notes", Context.MODE_PRIVATE).getString("notes", "[]")) }.getOrDefault(org.json.JSONArray())
+
+private fun saveNote(context: Context, text: String): String {
+    val all = notes(context).put(text)
+    context.getSharedPreferences("nila_notes", Context.MODE_PRIVATE).edit().putString("notes", all.toString()).apply()
+    return "Saved to your notes: $text"
+}
+
+private fun notesSummary(context: Context): String {
+    val all = notes(context)
+    if (all.length() == 0) return "You have no notes yet. Say \"take a note that…\" to add one."
+    return "Your notes:\n" + (0 until all.length()).joinToString("\n") { "• ${all.getString(it)}" }
+}
+
+/** Shows who will be called and opens the dialer with the number; the user presses call there. */
+@Composable
+private fun CallCard(who: String, context: Context, report: (String) -> Unit) {
+    fun dial(number: String) {
+        runCatching { context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(number)))) }
+            .onFailure { report("No phone app is available.") }
+    }
+    fun dialContact() {
+        val found = findContact(context, who)
+        if (found == null) report("I couldn't find \"$who\" in your contacts.") else {
+            report("Opening the dialer for ${found.first}. Press call to ring.")
+            dial(found.second)
+        }
+    }
+    val askContacts = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (granted) dialContact() else report("NILA needs contacts access to find $who. You can say the number instead.") }
+    ActionCard(title = "Call $who", detail = "Opens the dialer with the number. You press call.", action = "Call") {
+        val number = phoneNumber(who)
+        when {
+            number != null -> dial(number)
+            androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_CONTACTS) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED -> dialContact()
+            else -> askContacts.launch(android.Manifest.permission.READ_CONTACTS)
+        }
+    }
+}
+
+/** First contact whose name contains [name], as (display name, number). Needs READ_CONTACTS. */
+private fun findContact(context: Context, name: String): Pair<String, String>? {
+    val uri =android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+    val nameColumn = android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME
+    val numberColumn = android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER
+    return context.contentResolver.query(uri, arrayOf(nameColumn, numberColumn), "$nameColumn LIKE ?", arrayOf("%$name%"), null)?.use { cursor ->
+        if (cursor.moveToFirst()) cursor.getString(0) to cursor.getString(1) else null
+    }
+}
+
