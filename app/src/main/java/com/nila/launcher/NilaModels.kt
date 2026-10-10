@@ -283,6 +283,11 @@ class NilaBrain(
      */
     suspend fun respond(input: String): NilaResponse {
         askedAbout(input)?.let { return NilaResponse.Text(personSummary(it, facts())) }
+        // "last week I went to the hospital": offer the health tracker, with the day the user said.
+        if (isHealthMention(input)) {
+            val kind = healthKindFor(input)
+            return HealthPrompt(kind, kind.label, healthDate(input, java.time.LocalDate.now()))
+        }
         // A statement about the user or their people is answered and remembered (learn), never acted on.
         if (isPersonalStatement(input)) return withContext(llm) { chat(input) } ?: NilaResponse.Text("Got it.")
         val who = favouriteOf(input) ?: return answerFor(input)

@@ -57,6 +57,16 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keep the user-initiated OAuth callback alive while browser sign-in is open." />
         </service>
+        <!-- My NILA's "Take a photo" of a report: the camera writes to app cache, NILA encrypts it, the capture is deleted. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/nila_files" />
+        </provider>
     </application>
 </manifest>
 

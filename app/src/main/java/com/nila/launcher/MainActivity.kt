@@ -133,6 +133,7 @@ private fun NilaApp(resumeVersion: Int) {
     // What the user asked NILA to remember; read by chat, food, groceries and the morning suggestion.
     val memory = remember { NilaMemory(context.applicationContext) }
     var facts by remember { mutableStateOf(memory.facts()) }
+    val health = remember { HealthStore(context.applicationContext) }
     val brain = remember { NilaBrain(context.applicationContext, engine) { memory.facts() } }
     // Lakshmi speaks replies to spoken requests; typed requests stay silent.
     val lakshmi = remember { Lakshmi(context) }
@@ -456,6 +457,8 @@ private fun NilaApp(resumeVersion: Int) {
     }
 
     BackHandler(enabled = navigation.canGoBack) { closeOverlay() }
+    // "Add to My NILA" on a chat card opens My NILA's health form, prefilled.
+    LaunchedEffect(MyNilaRequests.pending) { if (MyNilaRequests.pending != null) open(NilaScreen.MyNila) }
 
     MaterialTheme(
         colorScheme = darkColorScheme(
@@ -490,6 +493,7 @@ private fun NilaApp(resumeVersion: Int) {
                     onOpenApps = { open(NilaScreen.Apps) },
                     onChangeWallpaper = { changeWallpaper(context) },
                     facts = facts,
+                    onOpenMyNila = { open(NilaScreen.MyNila) },
                     onSuggestion = { request ->
                         openAgent()
                         submit(request)
@@ -569,6 +573,14 @@ private fun NilaApp(resumeVersion: Int) {
                                 },
                             ) { label, next -> turns += Turn(label, next) }
                             NilaScreen.Home -> Unit
+                            NilaScreen.MyNila -> MyNilaScreen(
+                                facts = facts,
+                                onForgetFact = { id -> facts = memory.delete(id) },
+                                health = health,
+                                draft = MyNilaRequests.pending,
+                                onDraftUsed = { MyNilaRequests.pending = null },
+                                onBack = ::closeOverlay,
+                            )
                             else -> NilaScreenCatalogue(
                                 screen = overlayScreen,
                                 onOpen = ::open,
@@ -927,6 +939,12 @@ private fun ResponseView(
         // Confirmation is this card only: the iQOO 15 loan devices have fingerprint locked for the hackathon.
         is NilaResponse.NeedsConfirmation -> CommitCard(response) { confirm(response.token) }
         is NilaResponse.Text -> AnswerCard(response.value)
+        is HealthPrompt -> ActionCard(
+            label = "My NILA · Health",
+            title = "${response.title} · ${eventWhen(response.date, null).substringBefore(",")}",
+            detail = "Add it to your health tracker with a photo or PDF of the report. It stays encrypted on this phone.",
+            action = "Add to My NILA",
+        ) { MyNilaRequests.pending = response }
         is NilaResponse.Remember -> NilaCard {
             SectionLabel("Saved to My NILA", color = Lime)
             Text(

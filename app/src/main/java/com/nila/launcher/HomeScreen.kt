@@ -139,6 +139,7 @@ internal fun HomeScreen(
     onOpenApps: () -> Unit,
     onChangeWallpaper: () -> Unit,
     facts: List<MemoryFact>,
+    onOpenMyNila: () -> Unit,
     onSuggestion: (String) -> Unit,
 ) {
     val context = LocalContext.current
@@ -216,12 +217,13 @@ internal fun HomeScreen(
             )
             Text(statusLine, color = ClockInk, fontSize = 12.sp, letterSpacing = 0.05.em, modifier = Modifier.padding(top = 4.dp))
             Spacer(Modifier.weight(1f))
-            if (nextAlarm != null || suggestion != null) {
+            run {
                 Column(
                     Modifier.align(Alignment.End).padding(bottom = 18.dp),
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    AmbientPill("My NILA", Modifier.clickable(onClick = onOpenMyNila))
                     nextAlarm?.let { AmbientPill(it) }
                     suggestion?.let { AmbientPill(it.label, Modifier.clickable { onSuggestion(it.request) }) }
                 }

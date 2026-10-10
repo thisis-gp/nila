@@ -77,7 +77,7 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
         NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, accounts)
         NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
-        NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps -> Unit
+        NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps, NilaScreen.MyNila -> Unit
     }
 }
 
@@ -261,7 +261,7 @@ private fun SettingsScreen(
     }
 
     SettingsGroup("Privacy and safety") {
-        SettingsRow(LucideR.drawable.lucide_ic_brain, "My NILA", "What NILA knows about you and your people, on this phone") { onOpen(NilaScreen.Memory) }
+        SettingsRow(LucideR.drawable.lucide_ic_brain, "My NILA", "What NILA knows about you and your people, on this phone") { onOpen(NilaScreen.MyNila) }
         SettingsRow(LucideR.drawable.lucide_ic_volume_2, "Spoken replies", "Offline voices for Lakshmi") { onOpen(NilaScreen.Languages) }
     }
     // A fact about NILA, not a setting: nothing here to switch.
