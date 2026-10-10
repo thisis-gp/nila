@@ -150,6 +150,10 @@ private fun NilaApp(resumeVersion: Int) {
     val engine = remember { NilaEngine() }
     // Gemma 4 E2B and FunctionGemma load in the background; until then NILA answers with its rules.
     val brain = remember { NilaBrain(context.applicationContext, engine) }
+    // Lakshmi speaks replies to spoken requests; typed requests stay silent.
+    val lakshmi = remember { Lakshmi(context) }
+    DisposableEffect(lakshmi) { onDispose { lakshmi.close() } }
+    var speakReply by remember { mutableStateOf(false) }
     LaunchedEffect(brain) { brain.load() }
     // Free both native models when this screen goes away, so recreating it never leaves old engines open.
     DisposableEffect(brain) { onDispose { brain.close() } }
@@ -438,6 +442,8 @@ private fun NilaApp(resumeVersion: Int) {
                 rememberedFact = response.fact
             }
             turns[pendingIndex] = Turn(prompt, response)
+            if (speakReply) spokenText(response)?.let(lakshmi::speak)
+            speakReply = false
             isThinking = false
             justReplied = true
             delay(900) // the dock head visibly "speaks" for a beat right after a reply lands
@@ -523,12 +529,14 @@ private fun NilaApp(resumeVersion: Int) {
                                 transcribe = brain::transcribe,
                                 onInput = { input = it },
                                 onSubmit = ::submit,
+                                onVoiceRequest = { speakReply = true; submit(it) },
+                                onListenStart = lakshmi::stop,
                                 context = context,
                                 prepare = engine::prepare,
                                 confirm = { token ->
                                     // Replace the card with its result so the Confirm button cannot be tapped again.
                                     val index = turns.indexOfFirst { (it.response as? NilaResponse.NeedsConfirmation)?.token == token }
-                                    val result = engine.confirm(token)
+                                    val result = engine.confirm(token).let { if (it is NilaResponse.DismissAlarm) dismissAlarm(context, it) else it }
                                     if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
                                 },
                             ) { label, next -> turns += Turn(label, next) }
@@ -584,6 +592,8 @@ private fun AgentSpace(
     transcribe: suspend (wav: ByteArray, languageName: String) -> String?,
     onInput: (String) -> Unit,
     onSubmit: (String) -> Unit,
+    onVoiceRequest: (String) -> Unit,
+    onListenStart: () -> Unit,
     context: Context,
     prepare: (Choice) -> NilaResponse.Confirmation,
     confirm: (String) -> Unit,
@@ -670,7 +680,8 @@ private fun AgentSpace(
                 }
                 VoiceMic(
                     transcribe = transcribe,
-                    onFinal = onSubmit,
+                    onFinal = onVoiceRequest,
+                    onListenStart = onListenStart,
                     onMessage = { addTurn("Voice", NilaResponse.Text(it)) },
                 )
                 IconButton(onClick = { onSubmit(input) }) {
@@ -721,12 +732,14 @@ private fun ResponseView(
     when (response) {
         // ponytail: plain tap confirms; biometric prompt comes with the confirmation flow.
         is NilaResponse.NeedsConfirmation -> ActionCard(
-            title = response.capability.description,
+            title = response.capability.label,
             detail = response.lines.joinToString("\n", postfix = "\nNothing happens until you confirm.") { (name, value) -> "$name: $value" },
             action = "Confirm",
         ) { confirm(response.token) }
         is NilaResponse.Text -> Text(response.value)
         is NilaResponse.Remember -> Text("I'll remember: ${response.fact}")
+        // Only reached if a dismissal was not confirmed through the card; it is never sent without confirmation.
+        is NilaResponse.DismissAlarm -> Text("This alarm was not turned off.")
         is NilaResponse.Alarm -> ActionCard(
             title = "Alarm ${"%02d:%02d".format(response.hour, response.minute)}",
             detail = "Ready to ask Android to set this alarm.",
@@ -961,3 +974,23 @@ private fun ActionCard(title: String, detail: String, action: String, onClick: (
     }
 }
 
+/**
+ * Asks the Clock app to turn off an alarm after the user confirmed. Android does not let other apps read
+ * or delete alarms directly, so this is a request: the Clock app may show its own screen to pick one.
+ */
+private fun dismissAlarm(context: Context, alarm: NilaResponse.DismissAlarm): NilaResponse.Text {
+    val intent = Intent(AlarmClock.ACTION_DISMISS_ALARM).apply {
+        if (alarm.hour == null) {
+            putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_NEXT)
+        } else {
+            putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_TIME)
+            putExtra(AlarmClock.EXTRA_HOUR, alarm.hour)
+            putExtra(AlarmClock.EXTRA_MINUTES, alarm.minute)
+        }
+    }
+    val which = alarm.hour?.let { "the %02d:%02d alarm".format(it, alarm.minute) } ?: "your next alarm"
+    return runCatching { context.startActivity(intent) }.fold(
+        onSuccess = { NilaResponse.Text("Asked the Clock app to turn off $which. Check Clock if it asks you to pick one.") },
+        onFailure = { NilaResponse.Text("The Clock app on this phone can't turn off alarms for NILA. Nothing was changed.") },
+    )
+}

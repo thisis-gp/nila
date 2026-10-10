@@ -50,6 +50,8 @@ data class ProductProviderGroup(
 sealed interface NilaResponse {
     data class Text(val value: String) : NilaResponse
     data class Alarm(val hour: Int, val minute: Int) : NilaResponse
+    /** A confirmed request to turn off an alarm: at [hour]:[minute], or the next alarm when [hour] is null. */
+    data class DismissAlarm(val hour: Int?, val minute: Int) : NilaResponse
     data class OpenApp(val name: String, val packageName: String, val fallbackUrl: String) : NilaResponse
     data class Choices(val intro: String, val items: List<Choice>) : NilaResponse
     /** Like Choices, but each item runs real work (a Zepto call, etc.) when tapped instead of a canned status string. */
@@ -82,6 +84,7 @@ class NilaEngine(
     private val alarm = Regex("""alarm\s+(?:(?:for|at|on)\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?""")
     private val remember = Regex("""remember(?: that)?\s+(.+)""")
     // "1:30", "1.30", "1 30" and "9 pm"; then compact "130" or "1330" as hours and minutes.
+    private val removeAlarm = Regex("""\b(remove|delete|cancel|turn off|switch off|stop|dismiss|clear|disable)\b.*\balarms?\b""")
     private val clockTime = Regex("""(?<![\d:.])(\d{1,2})(?:[:.\s](\d{2}))?\s*(am|pm)?(?![\d:.])""")
     private val compactTime = Regex("""(?<!\d)(\d{1,2})(\d{2})\s*(am|pm)?(?!\d)""")
     private val smallTalk = Regex(
@@ -105,6 +108,19 @@ class NilaEngine(
                 Param("meridiem", ParamType.STRING, required = false),
             ),
             permission = PermissionClass.PREPARE,
+            androidPermissions = setOf("com.android.alarm.permission.SET_ALARM"),
+        ),
+        CapabilityDescriptor(
+            id = "remove_alarm",
+            description = "Turn off, cancel, delete or remove an alarm. Give the time if the user said one; with no time it means their next alarm.",
+            params = listOf(
+                Param("hour", ParamType.INT, required = false),
+                Param("minute", ParamType.INT, required = false),
+                Param("meridiem", ParamType.STRING, required = false),
+            ),
+            // Deleting is a Commit action: it always stops at a confirmation card.
+            permission = PermissionClass.COMMIT,
+            label = "Turn off an alarm",
             androidPermissions = setOf("com.android.alarm.permission.SET_ALARM"),
         ),
         CapabilityDescriptor(
@@ -162,6 +178,11 @@ class NilaEngine(
     fun route(input: String): NilaIntent {
         val normalized = normalize(input)
 
+        // Checked before "alarm for 7": "cancel the alarm for 7" removes, it does not set.
+        if (removeAlarm.containsMatchIn(normalized)) {
+            return NilaIntent.Call(ToolCall("remove_alarm", alarmArgs(input).orEmpty()))
+        }
+
         // The router only extracts what was said; run() converts and validates the time.
         alarm.find(normalized)?.let { match ->
             val args = mutableMapOf<String, Any>(
@@ -217,6 +238,8 @@ class NilaEngine(
                 ?.takeIf { (args["minute"] as Int? ?: 0) in 0..59 }
                 ?.let { NilaResponse.Alarm(it, args["minute"] as Int? ?: 0) }
                 ?: NilaResponse.Text("That alarm time is not valid.")
+            "remove_alarm" -> removalTime(args)?.let { (hour, minute) -> NilaResponse.DismissAlarm(hour, minute) }
+                ?: NilaResponse.Text("That alarm time is not valid.")
             "open_app" -> apps[args["app"]]?.let { NilaResponse.OpenApp(it.first, it.second, it.third) }
                 ?: NilaResponse.Text("I can't open that app.")
             "remember_fact" -> NilaResponse.Remember(args["fact"] as String)
@@ -245,8 +268,23 @@ class NilaEngine(
         token = UUID.randomUUID().toString().also { pending[it] = call },
         call = call,
         capability = capability,
-        lines = capability.params.mapNotNull { param -> call.args[param.name]?.let { param.label to display(param.type, it) } },
+        lines = if (capability.id == "remove_alarm") listOf("Turn off" to removalLabel(call.args))
+        else capability.params.mapNotNull { param -> call.args[param.name]?.let { param.label to display(param.type, it) } },
     )
+
+    /** 24-hour time to remove, (null, 0) for "the next alarm", or null when the time is invalid. */
+    private fun removalTime(args: Map<String, Any>): Pair<Int?, Int>? {
+        val hour = args["hour"] as Int? ?: return null to 0
+        val minute = args["minute"] as Int? ?: 0
+        if (minute !in 0..59) return null
+        return alarmHour(hour, minute, args["meridiem"] as String?)?.let { it to minute }
+    }
+
+    /** What the confirmation card says will be turned off, using the same time rules as removing it. */
+    private fun removalLabel(args: Map<String, Any>): String = when (val time = removalTime(args)) {
+        null -> "An invalid time (nothing will be removed)"
+        else -> time.first?.let { "The %02d:%02d alarm".format(it, time.second) } ?: "Your next alarm"
+    }
 
     /** Formats a validated argument for people. Paise become rupees in Indian grouping, such as ₹1,23,456.00. */
     private fun display(type: ParamType, value: Any): String = when (type) {
