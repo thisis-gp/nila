@@ -27,6 +27,7 @@ data class InstamartItem(
 internal class InstamartShop(private val context: Context) {
     private var client: McpClient? = null
     private val cart = linkedMapOf<String, Pair<InstamartItem, Int>>()
+    private val memory = NilaMemory(context)
 
     val connected: Boolean get() = SwiggyAuth.currentSession(context) != null
 
@@ -41,14 +42,15 @@ internal class InstamartShop(private val context: Context) {
         context.getSharedPreferences("nila_food", Context.MODE_PRIVATE).getString("last_address", null)
             ?: call("get_addresses")?.let { allObjects(it) }?.firstNotNullOfOrNull { it.pick("id", "addressId") }
 
-    /** Pack sizes matching what the user asked for come first, then the cheapest. */
+    /** Items named in a Preference fact come first, then pack sizes matching what the user asked for, then the cheapest. */
     suspend fun search(query: String, desiredSize: String?): List<InstamartItem> {
         val address = addressId() ?: return emptyList()
         val result = call("search_products", JSONObject().put("query", query).put("addressId", address)) ?: return emptyList()
         val wanted = desiredSize?.let(::normalizedSize)
+        val facts = memory.facts()
         return parseInstamart(result)
             .sortedWith(
-                compareByDescending<InstamartItem> { item ->
+                compareByDescending<InstamartItem> { sharesPreferenceWord(it.name, facts) }.thenByDescending { item ->
                     wanted != null && normalizedSize(item.pack)?.let { (unit, value) -> unit == wanted.first && kotlin.math.abs(value - wanted.second) < 1.0 } == true
                 }.thenBy { it.pricePaise },
             )

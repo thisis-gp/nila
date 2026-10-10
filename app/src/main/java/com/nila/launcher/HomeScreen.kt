@@ -16,6 +16,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -126,7 +127,8 @@ internal fun partOfDay(hour: Int): PartOfDay = when (hour) {
 
 /**
  * The quiet home: place and date, a large clock, one calm line about what NILA is doing, the next alarm
- * when Android has one, and a five-slot dock with NILA in the middle. Every other app is a swipe up away.
+ * when Android has one, a morning suggestion from memory when there is one, and a five-slot dock with NILA
+ * in the middle. Every other app is a swipe up away.
  */
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
@@ -136,6 +138,8 @@ internal fun HomeScreen(
     onInvokeNila: () -> Unit,
     onOpenApps: () -> Unit,
     onChangeWallpaper: () -> Unit,
+    facts: List<MemoryFact>,
+    onSuggestion: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val wallpaper = remember(context, resumeVersion) { runCatching { WallpaperManager.getInstance(context).drawable }.getOrNull() }
@@ -148,6 +152,7 @@ internal fun HomeScreen(
         }
     }
     val nextAlarm = remember(context, resumeVersion, now) { nextAlarmLine(context) }
+    val suggestion = remember(facts, now) { morningSuggestion(facts, now) }
     var greeting by rememberSaveable { mutableStateOf(true) }
     var resting by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -211,7 +216,16 @@ internal fun HomeScreen(
             )
             Text(statusLine, color = ClockInk, fontSize = 12.sp, letterSpacing = 0.05.em, modifier = Modifier.padding(top = 4.dp))
             Spacer(Modifier.weight(1f))
-            nextAlarm?.let { AmbientPill(it, Modifier.align(Alignment.End).padding(bottom = 18.dp)) }
+            if (nextAlarm != null || suggestion != null) {
+                Column(
+                    Modifier.align(Alignment.End).padding(bottom = 18.dp),
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    nextAlarm?.let { AmbientPill(it) }
+                    suggestion?.let { AmbientPill(it.label, Modifier.clickable { onSuggestion(it.request) }) }
+                }
+            }
             HomeDock(
                 mood = displayMood,
                 onPhone = { openDialer(context, "") },
@@ -277,7 +291,7 @@ private fun startOrTell(context: Context, intent: Intent, failure: String) {
 @Composable
 private fun AmbientPill(text: String, modifier: Modifier = Modifier) {
     Row(
-        modifier.clip(RoundedCornerShape(16.dp)).background(PillFill).border(1.dp, PillStroke, RoundedCornerShape(16.dp))
+        Modifier.clip(RoundedCornerShape(16.dp)).then(modifier).background(PillFill).border(1.dp, PillStroke, RoundedCornerShape(16.dp))
             .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

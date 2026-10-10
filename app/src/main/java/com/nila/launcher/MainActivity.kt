@@ -56,6 +56,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import java.time.LocalTime
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
@@ -213,7 +214,10 @@ private fun NilaApp(resumeVersion: Int) {
     val context = LocalContext.current
     val engine = remember { NilaEngine() }
     // Gemma 4 E2B and FunctionGemma load in the background; until then NILA answers with its rules.
-    val brain = remember { NilaBrain(context.applicationContext, engine) }
+    // What the user asked NILA to remember; read by chat, food, groceries and the morning suggestion.
+    val memory = remember { NilaMemory(context.applicationContext) }
+    var facts by remember { mutableStateOf(memory.facts()) }
+    val brain = remember { NilaBrain(context.applicationContext, engine) { memory.facts() } }
     // Lakshmi speaks replies to spoken requests; typed requests stay silent.
     val lakshmi = remember { Lakshmi(context) }
     DisposableEffect(lakshmi) { onDispose { lakshmi.close() } }
@@ -240,8 +244,6 @@ private fun NilaApp(resumeVersion: Int) {
     LaunchedEffect(installedApps) {
         launcherPreferences.edit().putStringSet("home_pins", pinnedPackages.toSet()).apply()
     }
-    val memory = remember { context.getSharedPreferences("nila_memory", Context.MODE_PRIVATE) }
-    var rememberedFact by remember { mutableStateOf(memory.getString("fact", null)) }
     val navigation = remember { NilaNavigation(NilaScreen.Home) }
     var screen by remember { mutableStateOf(navigation.current) }
     var overlayScreen by remember { mutableStateOf(screen) }
@@ -326,6 +328,9 @@ private fun NilaApp(resumeVersion: Int) {
                 runFood("Check payment") { foodFlow.checkPayment(pending) }
             override fun track(orderId: String?) =
                 runFood("Track order") { foodFlow.track(orderId) }
+            override fun rememberDish(dish: String) {
+                facts = memory.save("I like $dish", MemoryKind.Preference)
+            }
         }
     }
 
@@ -606,7 +611,7 @@ private fun NilaApp(resumeVersion: Int) {
             delay(550) // a visible thinking beat, so a reply doesn't feel like a canned instant lookup
             val normalized = prompt.lowercase()
             val response = if (normalized.contains("what do you remember")) {
-                NilaResponse.Text(memory.getString("fact", null)?.let { "You asked me to remember: $it" } ?: "You have not asked me to remember anything yet.")
+                NilaResponse.Text(memorySummary(facts))
             } else if (Regex("""\b(show|read|list|open|what are)\b.*\bnotes?\b""").containsMatchIn(prompt.lowercase())) {
                 NilaResponse.Text(notesSummary(context))
             } else {
@@ -626,10 +631,7 @@ private fun NilaApp(resumeVersion: Int) {
                     else -> performNow(context, routed)
                 }
             }
-            if (response is NilaResponse.Remember) {
-                memory.edit().putString("fact", response.fact).apply()
-                rememberedFact = response.fact
-            }
+            if (response is NilaResponse.Remember) facts = memory.save(response.fact, response.kind)
             turns[pendingIndex] = Turn(prompt, response)
             if (speakReply) spokenText(response)?.let(lakshmi::speak)
             speakReply = false
@@ -687,6 +689,11 @@ private fun NilaApp(resumeVersion: Int) {
                     onInvokeNila = { openAgent(AgentEntry.Voice) },
                     onOpenApps = { open(NilaScreen.Apps) },
                     onChangeWallpaper = { changeWallpaper(context) },
+                    facts = facts,
+                    onSuggestion = { request ->
+                        openAgent(AgentEntry.Text)
+                        submit(request)
+                    },
                 )
 
                 AnimatedVisibility(
@@ -753,18 +760,17 @@ private fun NilaApp(resumeVersion: Int) {
                                     if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
                                 },
                                 food = foodActions,
+                                suggestion = morningSuggestion(facts, LocalTime.now()),
                             ) { label, next -> turns += Turn(label, next) }
                             NilaScreen.Home -> Unit
                             else -> NilaScreenCatalogue(
                                 screen = overlayScreen,
                                 onOpen = ::open,
                                 onBack = ::closeOverlay,
-                                rememberedFact = rememberedFact,
+                                facts = facts,
                                 onChooseDefaultHome = ::chooseDefaultHome,
-                                onForgetMemory = {
-                                    memory.edit().remove("fact").apply()
-                                    rememberedFact = null
-                                },
+                                onForgetFact = { id -> facts = memory.delete(id) },
+                                onForgetAll = { facts = memory.clear() },
                                 accounts = listOf(
                                     ServiceAccount(
                                         name = "Swiggy",
@@ -836,6 +842,7 @@ private fun AgentSpace(
     prepare: (Choice) -> NilaResponse.Confirmation,
     confirm: (String) -> Unit,
     food: FoodActions,
+    suggestion: MemorySuggestion?,
     addTurn: (String, NilaResponse) -> Unit,
 ) {
     val lastWasConfirmation = turns.lastOrNull()?.response is NilaResponse.Confirmation
@@ -922,7 +929,7 @@ private fun AgentSpace(
             contentPadding = PaddingValues(vertical = 22.dp),
             verticalArrangement = Arrangement.spacedBy(28.dp),
         ) {
-            if (turns.isEmpty()) item { EmptyAgent(onSubmit) }
+            if (turns.isEmpty()) item { EmptyAgent(suggestion, onSubmit) }
             itemsIndexed(turns) { index, turn ->
                 val busy = index == turns.lastIndex && isThinking
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1013,7 +1020,7 @@ private fun WorkingOnIt() {
 }
 
 @Composable
-private fun EmptyAgent(onSubmit: (String) -> Unit) {
+private fun EmptyAgent(suggestion: MemorySuggestion?, onSubmit: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(top = 24.dp)) {
         NilaMascot(mood = MascotMood.Idle, size = EmptyMascotSize)
         Text("Say it naturally, or type it", color = Muted, fontSize = 12.sp)
@@ -1028,27 +1035,31 @@ private fun EmptyAgent(onSubmit: (String) -> Unit) {
             fontSize = 36.sp,
             lineHeight = 39.sp,
         )
-        DemoPrompts(onSubmit)
+        DemoPrompts(suggestion, onSubmit)
     }
 }
 
+/** The fixed examples, led by one suggestion from memory when there is one; it sends its own request when tapped. */
 @Composable
-private fun DemoPrompts(onSubmit: (String) -> Unit) {
-    val prompts = listOf(
+private fun DemoPrompts(suggestion: MemorySuggestion?, onSubmit: (String) -> Unit) {
+    val examples = listOf(
         "Find dinner under ₹800",
         "What is 18% of 4250?",
         "Set an alarm for 6:30 am",
         "Open YouTube",
-    )
+    ).map { MemorySuggestion("“$it”", it) }
+    val prompts = listOfNotNull(suggestion) + examples
     Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
         SectionLabel("Try asking")
         prompts.forEach { prompt ->
+            val fromMemory = prompt == suggestion
             Box(
-                Modifier.heightIn(min = PromptMinHeight).clip(CircleShape).background(Panel).border(1.dp, Stroke, CircleShape)
-                    .clickable { onSubmit(prompt) }.padding(horizontal = 16.dp),
+                Modifier.heightIn(min = PromptMinHeight).clip(CircleShape).background(Panel)
+                    .border(1.dp, if (fromMemory) Lime else Stroke, CircleShape)
+                    .clickable { onSubmit(prompt.request) }.padding(horizontal = 16.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
-                Text("“$prompt”", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text(prompt.label, color = if (fromMemory) Lime else Paper, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -1085,6 +1096,7 @@ private fun ResponseView(
         is NilaResponse.Remember -> NilaCard {
             SectionLabel("Remembered", color = Lime)
             Text("I'll remember: ${response.fact}", color = Paper, fontSize = 15.sp, lineHeight = 22.sp)
+            Text(response.kind.label, color = Muted, fontSize = 12.sp)
         }
         // Only reached if a dismissal was not confirmed through the card; it is never sent without confirmation.
         is NilaResponse.DismissAlarm -> AnswerCard("This alarm was not turned off.")

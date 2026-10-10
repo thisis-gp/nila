@@ -34,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -75,6 +76,8 @@ internal interface FoodActions {
     fun openUpi(link: String)
     fun checkPayment(pending: PendingPayment)
     fun track(orderId: String?)
+    /** Saves "I like <dish>" as a Preference fact; only ever called from the user's own tap. */
+    fun rememberDish(dish: String)
 }
 
 private val RatingGreen = Color(0xFF1BA672)
@@ -620,7 +623,7 @@ private fun DishesCard(card: FoodCard.Dishes, actions: FoodActions) {
         }
         val shown = if (showAll) card.dishes else card.dishes.take(DISH_PREVIEW)
         shown.forEachIndexed { index, dish ->
-            DishRow(dish, badge = pickLabel(card.intent).takeIf { index == 0 }) { item -> actions.changeItem(card.address, dish.restaurant, item, +1) }
+            DishRow(dish, badge = pickLabel(card.intent).takeIf { index == 0 && dish.caution == null }) { item -> actions.changeItem(card.address, dish.restaurant, item, +1) }
         }
         if (!showAll && card.dishes.size > DISH_PREVIEW) {
             Text(
@@ -1036,6 +1039,24 @@ private fun PayRow(option: FoodPayOption, selected: Boolean, enabled: Boolean, o
 
 // ---- Order result ------------------------------------------------------------
 
+private const val REMEMBER_DISH_LIMIT = 3
+
+/** Ask, don't assume: one quiet offer per ordered dish, and nothing is saved without the tap. */
+@Composable
+private fun RememberDishes(dishes: List<String>, actions: FoodActions) {
+    val saved = remember(dishes) { mutableStateListOf<String>() }
+    dishes.distinct().take(REMEMBER_DISH_LIMIT).forEach { dish ->
+        if (dish in saved) {
+            Text("I'll remember that you like $dish.", color = Ink.copy(alpha = 0.75f), fontSize = 13.sp)
+        } else {
+            TextAction("Remember that you like $dish?", onClick = {
+                actions.rememberDish(dish)
+                saved += dish
+            }, color = Ink)
+        }
+    }
+}
+
 @Composable
 private fun OrderCard(card: FoodCard.Order, actions: FoodActions) {
     if (card.placed) {
@@ -1053,6 +1074,7 @@ private fun OrderCard(card: FoodCard.Order, actions: FoodActions) {
                     shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Paper),
                 ) { Text("Track order", fontWeight = FontWeight.Bold) }
+                RememberDishes(card.dishes, actions)
             }
         }
         return

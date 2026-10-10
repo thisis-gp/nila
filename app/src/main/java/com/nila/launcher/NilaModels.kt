@@ -145,7 +145,12 @@ private class CapabilityTool(private val capability: CapabilityDescriptor) : Ope
  * loaded. Order per ARCHITECTURE.md: deterministic fast paths, then the router, then conversation.
  * Business rules and permissions stay in NilaEngine: model output is only a proposal checked by checkCall.
  */
-class NilaBrain(private val context: Context, private val engine: NilaEngine) {
+/** [facts] reads what the user asked NILA to remember, fresh for every chat reply. */
+class NilaBrain(
+    private val context: Context,
+    private val engine: NilaEngine,
+    private val facts: () -> List<MemoryFact>,
+) {
     var assistantState by mutableStateOf(ModelState.MISSING)
         private set
     var routerState by mutableStateOf(ModelState.MISSING)
@@ -214,11 +219,34 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         }
         engine.calculate(input)?.let { return@withContext done("calculator", it) }
         val keyword = engine.route(input)
+        if (keyword is NilaIntent.Call && keyword.call.capabilityId == REMEMBER && assistant != null) {
+            return@withContext done("rules+gemma:$REMEMBER", rememberWithKind(input, engine.execute(keyword)))
+        }
         if (keyword is NilaIntent.Call) return@withContext done("rules:${keyword.call.capabilityId}", engine.execute(keyword))
         // Stock FunctionGemma scored 31% on NILA's tools (training/functiongemma eval) and its wrong picks
         // pre-empt Gemma, so it routes only when Gemma 4 E2B is not loaded, until the fine-tuned router ships.
         if (assistant == null && !engine.isSmallTalk(input)) modelRoute(input)?.let { return@withContext done("functiongemma", it) }
         chat(input)?.let { done("gemma", it) } ?: done("fallback", engine.execute(NilaIntent.Converse(input)))
+    }
+
+    /**
+     * "Remember …" is always saved in the user's own words; Gemma only names the fact's kind. If Gemma does
+     * not call remember_fact, the fact is still saved, as Other: the model decides the kind, never whether to save.
+     */
+    private fun rememberWithKind(input: String, saved: NilaResponse): NilaResponse {
+        if (saved !is NilaResponse.Remember) return saved
+        val proposed = runCatching {
+            assistant?.createConversation(
+                ConversationConfig(
+                    systemInstruction = Contents.of(PERSONA),
+                    samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0),
+                    tools = listOfNotNull(engine.capabilities[REMEMBER]).map { tool(CapabilityTool(it)) },
+                    automaticToolCalling = false,
+                ),
+            )?.use { it.sendMessage(input) }
+        }.getOrNull()?.toolCalls?.firstOrNull { it.name == REMEMBER }
+        trace("gemma remember kind=${proposed?.arguments?.get("kind") != null}")
+        return saved.copy(kind = MemoryKind.from(proposed?.arguments?.get("kind") as? String))
     }
 
     /**
@@ -309,7 +337,7 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         val response = runCatching {
             model.createConversation(
                 ConversationConfig(
-                    systemInstruction = Contents.of(PERSONA),
+                    systemInstruction = Contents.of(personaWith(PERSONA, facts())),
                     initialMessages = history.flatMap { (user, nila) -> listOf(Message.user(user), Message.model(nila)) },
                     // A fresh seed per reply: with the default seed "tell me a joke" gave the same joke every time.
                     samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.6, seed = kotlin.random.Random.nextInt()),
@@ -338,6 +366,7 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
     private companion object {
         const val TAG = "NilaBrain"
         const val HISTORY_TURNS = 4
+        const val REMEMBER = "remember_fact"
         const val ALARM_HELP = "I couldn't read that time, so no alarm is set. Try \"set an alarm for 1:30 pm\"."
         const val NO_ACTION_TAKEN = "I haven't done that. Chat can't take actions. To set an alarm, say a time like \"set an alarm for 1:30 pm\" and tap Set alarm on the card."
 
@@ -359,7 +388,7 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             draft a text message, search the web, play or pause music, change the volume or ring mode,
             open settings pages or any installed app, show alarms, tell the battery level,
             open YouTube, Netflix, Instagram or BGMI, order food on Swiggy, buy groceries on Zepto or Instamart,
-            show the route to a place or find places nearby, remember one fact, and calculate percentages.
+            show the route to a place or find places nearby, remember facts the user tells NILA, and calculate percentages.
             Questions are not requests: "is biryani healthy" or "what is Koramangala famous for" get a spoken answer, not a tool.
             Jokes, facts, advice and small talk are welcome: answer them yourself, briefly and warmly.
             For actions NILA has no tool for, such as payments outside a food or grocery order, say plainly that NILA cannot do that yet and name something it can do.
