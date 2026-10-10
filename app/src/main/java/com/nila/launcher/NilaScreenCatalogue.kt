@@ -272,7 +272,7 @@ private fun SettingsScreen(
     }
 
     SettingsGroup("Privacy and safety") {
-        SettingsRow(LucideR.drawable.lucide_ic_brain, "Memory", "What NILA remembers, kept on this phone") { onOpen(NilaScreen.Memory) }
+        SettingsRow(LucideR.drawable.lucide_ic_brain, "My NILA", "What NILA knows about you and your people, on this phone") { onOpen(NilaScreen.Memory) }
         SettingsRow(LucideR.drawable.lucide_ic_shield_check, "Confirm before acting", "Pay, send, book, delete or share", value = "Always")
         SettingsRow(LucideR.drawable.lucide_ic_volume_2, "Spoken replies", "Offline voices for Lakshmi") { onOpen(NilaScreen.Languages) }
     }
