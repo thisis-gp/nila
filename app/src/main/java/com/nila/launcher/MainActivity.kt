@@ -31,7 +31,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -40,10 +39,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -73,6 +68,17 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.unit.sp
@@ -677,7 +683,7 @@ private fun NilaApp(resumeVersion: Int) {
                                     onTypeInstead = { listening = false },
                                     onClose = ::closeOverlay,
                                 )
-                            } else OverlayScaffold(onClose = ::closeOverlay) {
+                            } else {
                                 AgentSpace(
                                     turns = turns,
                                     input = input,
@@ -689,6 +695,7 @@ private fun NilaApp(resumeVersion: Int) {
                                     onSubmit = ::submit,
                                     onVoiceRequest = { speakReply = true; submit(it) },
                                     onListenStart = lakshmi::stop,
+                                    onClose = ::closeOverlay,
                                     context = context,
                                     prepare = engine::prepare,
                                     confirm = { token ->
@@ -744,19 +751,20 @@ private fun NilaApp(resumeVersion: Int) {
     }
 }
 
-@Composable
-private fun OverlayScaffold(onClose: () -> Unit, content: @Composable () -> Unit) {
-    // No separate imePadding() here: the overlay Box already applies safeDrawingPadding(),
-    // which includes the IME inset. Adding it again double-counted the keyboard height.
-    Column(Modifier.fillMaxSize().background(Ink)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
-            IconButton(onClick = onClose) {
-                Icon(painterResource(LucideR.drawable.lucide_ic_arrow_left), contentDescription = "Close", tint = Paper)
-            }
-        }
-        Box(Modifier.weight(1f)) { content() }
-    }
-}
+/** Turns NILA adds on its own (a provider follow-up, an action's result) carry a label, not something the person said. */
+private val FollowUpLabels = setOf("Zepto", "Zepto tools result", "Action result", "Prepared action", "Voice")
+
+internal fun isFollowUpTurn(label: String): Boolean = label in FollowUpLabels
+
+private val MascotTapSize = 40.dp
+private val HeaderMascotSize = 34.dp
+private val WorkingMascotSize = 28.dp
+private val EmptyMascotSize = 72.dp
+private val FoodRequestSize = 20.sp
+private val ProductImageSize = 60.dp
+private val OptionImageSize = 52.dp
+private const val BUSY_CARD_ALPHA = 0.35f
+private const val BOUNDARY_ALPHA = 0.35f
 
 @Composable
 private fun AgentSpace(
@@ -769,6 +777,7 @@ private fun AgentSpace(
     onSubmit: (String) -> Unit,
     onVoiceRequest: (String) -> Unit,
     onListenStart: () -> Unit,
+    onClose: () -> Unit,
     context: Context,
     prepare: (Choice) -> NilaResponse.Confirmation,
     confirm: (String) -> Unit,
@@ -779,6 +788,8 @@ private fun AgentSpace(
     val lastText = (turns.lastOrNull()?.response as? NilaResponse.Text)?.value.orEmpty()
     val lastWasError = !isThinking && (lastText.contains("could not", true) || lastText.contains("unavailable", true) || lastText.contains("No alarm", true))
     var celebrate by remember { mutableStateOf(false) }
+    // Model load status is debug info: hidden until the mascot is tapped.
+    var showStatus by remember { mutableStateOf(false) }
     val mood = when {
         celebrate -> MascotMood.Celebrate
         isThinking -> MascotMood.Thinking
@@ -803,49 +814,60 @@ private fun AgentSpace(
     Column(
         Modifier.fillMaxSize().background(Ink).padding(horizontal = 18.dp, vertical = 12.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("NILA", color = Lime, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-                Text(modelStatus, color = Muted, fontSize = 11.sp)
-            }
-            IconButton(onClick = { onSubmit("zepto cart") }) {
-                Text("🛒", fontSize = 20.sp)
-            }
-            NilaMascot(mood = mood, size = 36.dp)
+        // The small spaced state label, like the listening layer's "LISTENING".
+        val stateLabel = when {
+            isThinking -> "WORKING"
+            turns.isEmpty() -> "ASK NILA"
+            else -> "NILA"
+        }
+        TopAction(label = stateLabel, onBack = onClose) {
+            RoundButton(LucideR.drawable.lucide_ic_shopping_cart, "Zepto cart", { onSubmit("zepto cart") })
+            Box(
+                Modifier.size(MascotTapSize).clip(CircleShape)
+                    .clickable(onClickLabel = if (showStatus) "Hide model status" else "Show model status") { showStatus = !showStatus },
+                contentAlignment = Alignment.Center,
+            ) { NilaMascot(mood = mood, size = HeaderMascotSize) }
+        }
+        AnimatedVisibility(visible = showStatus) {
+            Text(
+                modelStatus,
+                color = Muted,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+            )
         }
         LazyColumn(
             modifier = Modifier.weight(1f),
             state = listState,
-            contentPadding = PaddingValues(vertical = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(vertical = 22.dp),
+            verticalArrangement = Arrangement.spacedBy(28.dp),
         ) {
-            if (turns.isEmpty()) item {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    NilaMascot(mood = MascotMood.Idle, size = 84.dp, modifier = Modifier.align(Alignment.CenterHorizontally))
-                    Text("What would you like to get done?", color = Paper, fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
-                    DemoPrompts(onSubmit)
-                }
-            }
+            if (turns.isEmpty()) item { EmptyAgent(onSubmit) }
             itemsIndexed(turns) { index, turn ->
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("YOU", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                    Text(turn.user, style = MaterialTheme.typography.titleMedium)
-                    val busy = index == turns.lastIndex && isThinking
-                    if (busy && turn.response is NilaResponse.Food) {
-                        // Keep the booking card on screen while Swiggy answers, faded so taps wait.
-                        Text("Working on it…", color = Lime, style = MaterialTheme.typography.labelMedium)
-                        Box(Modifier.alpha(0.35f)) {
-                            ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, addTurn = addTurn)
+                val busy = index == turns.lastIndex && isThinking
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    TurnHeading(turn)
+                    when {
+                        busy && turn.response is NilaResponse.Food -> {
+                            // Keep the booking card on screen while Swiggy answers, faded so taps wait.
+                            WorkingOnIt()
+                            Box(Modifier.alpha(BUSY_CARD_ALPHA)) {
+                                ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, addTurn = addTurn)
+                            }
                         }
-                    } else if (busy) {
-                        Text("NILA is thinking…", color = Muted, style = MaterialTheme.typography.bodyMedium)
-                    } else {
-                        ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, addTurn = addTurn)
+                        busy -> WorkingOnIt()
+                        else -> ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, addTurn = addTurn)
                     }
                 }
             }
         }
-        Surface(Modifier.fillMaxWidth(), color = Panel, shape = RoundedCornerShape(24.dp)) {
+        Surface(
+            Modifier.fillMaxWidth(),
+            color = Panel,
+            shape = RoundedCornerShape(24.dp),
+            border = BorderStroke(1.dp, Stroke),
+        ) {
             Row(
                 Modifier.padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -857,6 +879,7 @@ private fun AgentSpace(
                         onValueChange = onInput,
                         modifier = Modifier.fillMaxWidth(),
                         textStyle = MaterialTheme.typography.bodyLarge.copy(color = Paper),
+                        cursorBrush = SolidColor(Lime),
                         singleLine = true,
                         keyboardActions = KeyboardActions(onDone = { onSubmit(input) }),
                     )
@@ -875,6 +898,58 @@ private fun AgentSpace(
     }
 }
 
+/** What the person asked, as the layer's serif headline; NILA's own follow-ups get a small label instead. */
+@Composable
+private fun TurnHeading(turn: Turn) {
+    when {
+        isFollowUpTurn(turn.user) -> SectionLabel(turn.user)
+        // The booking sheet brings its own serif step title, so the request stays a quieter line above it.
+        turn.response is NilaResponse.Food -> RequestHeadline(turn.user, FoodRequestSize)
+        else -> RequestHeadline(turn.user, HeadlineSize)
+    }
+}
+
+@Composable
+private fun RequestHeadline(request: String, size: TextUnit) {
+    val key = requestKeyPhrase(request)
+    val styled = buildAnnotatedString {
+        if (key == null) append(request) else {
+            append(request.substring(0, key.first))
+            withStyle(SpanStyle(color = Lime)) { append(request.substring(key)) }
+            append(request.substring(key.last + 1))
+        }
+    }
+    Text(styled, color = Paper, fontFamily = FontFamily.Serif, fontSize = size, lineHeight = size * 1.12f)
+}
+
+@Composable
+private fun WorkingOnIt() {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        NilaMascot(mood = MascotMood.Thinking, size = WorkingMascotSize)
+        SectionLabel("Working on it…", color = Lime)
+    }
+}
+
+@Composable
+private fun EmptyAgent(onSubmit: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(top = 24.dp)) {
+        NilaMascot(mood = MascotMood.Idle, size = EmptyMascotSize)
+        Text("Say it naturally, or type it", color = Muted, fontSize = 12.sp)
+        Text(
+            buildAnnotatedString {
+                append("What would you like to ")
+                withStyle(SpanStyle(color = Lime)) { append("get done") }
+                append("?")
+            },
+            color = Paper,
+            fontFamily = FontFamily.Serif,
+            fontSize = 36.sp,
+            lineHeight = 39.sp,
+        )
+        DemoPrompts(onSubmit)
+    }
+}
+
 @Composable
 private fun DemoPrompts(onSubmit: (String) -> Unit) {
     val prompts = listOf(
@@ -883,23 +958,17 @@ private fun DemoPrompts(onSubmit: (String) -> Unit) {
         "Set an alarm for 6:30 am",
         "Open YouTube",
     )
-    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        Text("TRY ASKING", style = MaterialTheme.typography.labelSmall, color = Muted)
-        prompts.chunked(2).forEach { rowPrompts ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                rowPrompts.forEach { prompt ->
-                    Button(
-                        onClick = { onSubmit(prompt) },
-                        modifier = Modifier.weight(1f).height(46.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Panel, contentColor = Paper),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp),
-                        shape = RoundedCornerShape(14.dp),
-                    ) {
-                        Text(prompt, style = MaterialTheme.typography.bodySmall, maxLines = 2, lineHeight = 16.sp)
-                    }
-                }
-                if (rowPrompts.size == 1) Spacer(Modifier.weight(1f))
-            }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
+        SectionLabel("Try asking")
+        prompts.forEach { prompt ->
+            Text(
+                "“$prompt”",
+                color = Paper,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.clip(CircleShape).background(Panel).border(1.dp, Stroke, CircleShape)
+                    .clickable { onSubmit(prompt) }.padding(horizontal = 14.dp, vertical = 9.dp),
+            )
         }
     }
 }
@@ -927,21 +996,21 @@ private fun ResponseView(
     when (response) {
         is NilaResponse.Food -> FoodCardView(response.card, food)
         // Resolved into the live flow in submit(); shown only if that ever fails to happen.
-        is NilaResponse.FoodSearch -> Text("Looking for ${response.query}…")
+        is NilaResponse.FoodSearch -> AnswerCard("Looking for ${response.query}…")
         // Confirmation is this card only: the iQOO 15 loan devices have fingerprint locked for the hackathon.
-        is NilaResponse.NeedsConfirmation -> ActionCard(
-            title = response.capability.label,
-            detail = response.lines.joinToString("\n", postfix = "\nNothing happens until you confirm.") { (name, value) -> "$name: $value" },
-            action = "Confirm",
-        ) { confirm(response.token) }
-        is NilaResponse.Text -> Text(response.value)
-        is NilaResponse.Remember -> Text("I'll remember: ${response.fact}")
+        is NilaResponse.NeedsConfirmation -> CommitCard(response) { confirm(response.token) }
+        is NilaResponse.Text -> AnswerCard(response.value)
+        is NilaResponse.Remember -> NilaCard {
+            SectionLabel("Remembered", color = Lime)
+            Text("I'll remember: ${response.fact}", color = Paper, fontSize = 15.sp, lineHeight = 22.sp)
+        }
         // Only reached if a dismissal was not confirmed through the card; it is never sent without confirmation.
-        is NilaResponse.DismissAlarm -> Text("This alarm was not turned off.")
+        is NilaResponse.DismissAlarm -> AnswerCard("This alarm was not turned off.")
         // Torch, Camera and Note are done in performNow before they reach the chat.
-        is Torch, is Camera, is Note -> Text("Done.")
+        is Torch, is Camera, is Note -> AnswerCard("Done.")
         is Timer -> ActionCard(
-            title = "Timer %d:%02d".format(response.seconds / 60, response.seconds % 60),
+            label = "Timer",
+            title = "%d:%02d".format(response.seconds / 60, response.seconds % 60),
             detail = "Ready to ask the Clock app to start this timer.",
             action = "Start timer",
         ) {
@@ -953,6 +1022,7 @@ private fun ResponseView(
                 .onFailure { addTurn("Action result", NilaResponse.Text("No timer app is available.")) }
         }
         is CalendarEvent -> ActionCard(
+            label = "Calendar",
             title = response.title,
             detail = eventWhen(response.date, response.time) + "\nOpens your calendar to save it.",
             action = "Add to calendar",
@@ -969,7 +1039,8 @@ private fun ResponseView(
         }
         is Call -> CallCard(response.who, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is NilaResponse.Alarm -> ActionCard(
-            title = "Alarm ${"%02d:%02d".format(response.hour, response.minute)}",
+            label = "Alarm",
+            title = "%02d:%02d".format(response.hour, response.minute),
             detail = "Ready to ask Android to set this alarm.",
             action = "Set alarm",
         ) {
@@ -983,9 +1054,10 @@ private fun ResponseView(
                 .onFailure { addTurn("Action result", NilaResponse.Text("No alarm application is available.")) }
         }
         is NilaResponse.OpenApp -> ActionCard(
+            label = "Open app",
             title = response.name,
             detail = "This experience is better in its full interface.",
-            action = "Open",
+            action = "Open ${response.name}",
         ) {
             val launch = context.packageManager.getLaunchIntentForPackage(response.packageName)
                 ?: Intent(Intent.ACTION_VIEW, Uri.parse(response.fallbackUrl))
@@ -993,56 +1065,53 @@ private fun ResponseView(
                 .onFailure { addTurn("Action result", NilaResponse.Text("${response.name} could not be opened.")) }
         }
         is NilaResponse.Navigate -> ActionCard(
-            title = "Navigate to ${response.destination}",
+            label = "Directions",
+            title = response.destination,
             detail = "Opens Google Maps for live turn-by-turn directions.",
             action = "Open Maps",
         ) { openGoogleMaps(context, response.destination, addTurn) }
-        is NilaResponse.RouteCard -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(response.source, color = Lime, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = CardInk),
-                shape = RoundedCornerShape(16.dp),
-            ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(response.destination, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Text(
-                        "%.1f km · about %.0f min by road".format(response.distanceKm, response.durationMin),
-                        color = Color.LightGray,
-                    )
-                    Text("© OpenStreetMap contributors", color = Muted, fontSize = 10.sp)
-                    Button(onClick = { openGoogleMaps(context, response.destination, addTurn) }) {
-                        Text("Open Maps for navigation")
+        is NilaResponse.RouteCard -> NilaCard {
+            SourceLabel(response.source)
+            SerifTitle(response.destination)
+            Text("%.1f km · about %.0f min by road".format(response.distanceKm, response.durationMin), color = Paper, fontSize = 14.sp)
+            Text("© OpenStreetMap contributors", color = Muted, fontSize = 10.sp)
+            PrimaryAction("Open Maps for navigation", { openGoogleMaps(context, response.destination, addTurn) }, Modifier.padding(top = 4.dp))
+        }
+        is NilaResponse.Choices -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            SourceLabel(response.source, color = if (response.source.startsWith("LIVE")) Lime else Orange)
+            Text(response.intro, color = Paper, fontSize = 15.sp, lineHeight = 22.sp)
+            NilaCard {
+                response.items.forEachIndexed { index, item ->
+                    if (index > 0) HorizontalDivider(color = Panel)
+                    val review = rememberSingleTap { addTurn("Prepared action", prepare(item)) }
+                    OptionRow(item.title, "${item.detail} · ${item.eta}", imageUrl = null) {
+                        Column(horizontalAlignment = Alignment.End) {
+                            SerifTitle(item.price, size = 18.sp)
+                            TextAction("Review ›", review::fire, color = if (review.used) Muted else Lime)
+                        }
                     }
                 }
             }
         }
-        is NilaResponse.Choices -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                response.source,
-                color = if (response.source.startsWith("LIVE")) Lime else Orange,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(response.intro)
-            response.items.forEach { item ->
-                ActionCard(item.title, "${item.detail} · ${item.eta}", "Review ${item.price}") {
-                    addTurn("Prepared action", prepare(item))
+        is NilaResponse.AsyncChoices -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            SerifTitle(response.intro)
+            val only = response.items.singleOrNull()
+            if (only != null) SingleChoiceCard(only) else NilaCard {
+                response.items.forEachIndexed { index, item ->
+                    if (index > 0) HorizontalDivider(color = Panel)
+                    val pick = rememberSingleTap(item.onClick)
+                    OptionRow(item.title, withEta(item.detail, item.eta), item.imageUrl) {
+                        TextAction("${item.price.ifBlank { "Select" }} ›", pick::fire, color = if (pick.used) Muted else Lime)
+                    }
                 }
             }
         }
-        is NilaResponse.AsyncChoices -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(response.intro)
-            response.items.forEach { item ->
-                ActionCard(item.title, "${item.detail}${if (item.eta.isNotBlank()) " · ${item.eta}" else ""}", item.price.ifBlank { "Select" }, item.onClick)
-            }
-        }
-        is NilaResponse.GroupedChoices -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(response.intro)
+        is NilaResponse.GroupedChoices -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            SerifTitle(response.intro)
             response.groups.forEach { group -> ProviderGroupCard(group) }
         }
-        is NilaResponse.ProductGroupChoices -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(response.intro)
+        is NilaResponse.ProductGroupChoices -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            SerifTitle(response.intro)
             response.groups.forEach { group -> ProductProviderGroupCard(group) }
         }
         is NilaResponse.Confirmation -> ConfirmationCard(response) {
@@ -1054,30 +1123,100 @@ private fun ResponseView(
     }
 }
 
+private fun withEta(detail: String, eta: String) = if (eta.isNotBlank()) "$detail · $eta" else detail
+
+/** NILA's plain answer: calm text on a card, nothing to tap. */
+@Composable
+private fun AnswerCard(text: String) {
+    if (text.isBlank()) return
+    NilaCard { Text(text, color = Paper, fontSize = 15.sp, lineHeight = 22.sp) }
+}
+
+/** The line every Commit card ends on, set apart like the prototype's "NILA will stop at this boundary". */
+@Composable
+private fun BoundaryNote(text: String) {
+    Surface(color = Ink.copy(alpha = BOUNDARY_ALPHA), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+        Text(text, color = Paper, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 17.sp, modifier = Modifier.padding(12.dp))
+    }
+}
+
+/** A validated Commit call: shows exactly what Confirm authorizes; the token is spent by the first tap. */
+@Composable
+private fun CommitCard(response: NilaResponse.NeedsConfirmation, onConfirm: () -> Unit) {
+    val tap = rememberSingleTap(onConfirm)
+    NilaCard(color = CommitInk) {
+        SectionLabel("Confirmation required", color = Orange)
+        SerifTitle(response.capability.label)
+        response.lines.forEach { (name, value) -> DetailRow(name, value) }
+        BoundaryNote("Nothing happens until you confirm.")
+        PrimaryAction("Confirm", tap::fire, enabled = !tap.used)
+    }
+}
+
+/** One option in a list: image-led when there is an image, with its action on the right. */
+@Composable
+private fun OptionRow(title: String, detail: String, imageUrl: String?, trailing: @Composable () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        if (imageUrl != null) {
+            coil.compose.AsyncImage(
+                model = imageUrl,
+                contentDescription = title,
+                modifier = Modifier.size(OptionImageSize).clip(RoundedCornerShape(14.dp)).background(Panel),
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            )
+            Spacer(Modifier.width(12.dp))
+        }
+        Column(Modifier.weight(1f).padding(end = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, color = Paper, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            if (detail.isNotBlank()) Text(detail, color = Muted, fontSize = 12.sp, lineHeight = 16.sp)
+        }
+        trailing()
+    }
+}
+
+/** A single next step (place this order, connect this account): the one primary action of its card. */
+@Composable
+private fun SingleChoiceCard(item: AsyncChoice) {
+    val tap = rememberSingleTap(item.onClick)
+    NilaCard {
+        if (item.price.isNotBlank()) Text(item.title, color = Paper, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        val detail = withEta(item.detail, item.eta)
+        if (detail.isNotBlank()) Text(detail, color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+        PrimaryAction(item.price.ifBlank { item.title }, tap::fire, Modifier.padding(top = 4.dp), enabled = !tap.used)
+    }
+}
+
+/** A provider's name and summary as a section label, like "ZEPTO · FROM ₹42.00"; tapping it folds the group. */
+@Composable
+private fun ProviderHeader(name: String, summary: String, expanded: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClickLabel = if (expanded) "Collapse $name" else "Expand $name", onClick = onToggle).padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SectionLabel("$name · $summary", Modifier.weight(1f), color = Paper)
+        Icon(
+            painterResource(if (expanded) LucideR.drawable.lucide_ic_chevron_down else LucideR.drawable.lucide_ic_chevron_right),
+            contentDescription = null,
+            tint = Lime,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+@Composable
+private fun GroupNote(note: String?) = Text(note ?: "No results.", color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+
 @Composable
 private fun ProviderGroupCard(group: ProviderGroup) {
     var expanded by remember(group.providerName) { mutableStateOf(false) }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Card(
-            modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
-            colors = CardDefaults.cardColors(containerColor = CardInk),
-            shape = RoundedCornerShape(16.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("${group.providerName} — ${group.summary}", fontWeight = FontWeight.Bold)
-                Text(if (expanded) "▾" else "▸", color = Lime)
-            }
-        }
-        if (expanded) {
-            Column(modifier = Modifier.padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (group.items.isEmpty()) {
-                    Text(group.note ?: "No results.", style = MaterialTheme.typography.bodySmall, color = Muted)
-                } else {
-                    group.items.forEach { item -> ImageActionCard(item) }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        ProviderHeader(group.providerName, group.summary, expanded = expanded) { expanded = !expanded }
+        if (expanded) NilaCard {
+            if (group.items.isEmpty()) GroupNote(group.note)
+            group.items.forEachIndexed { index, item ->
+                if (index > 0) HorizontalDivider(color = Panel)
+                OptionRow(item.title, item.detail, item.imageUrl) {
+                    TextAction("${item.price.ifBlank { "Select" }} ›", item.onClick)
                 }
             }
         }
@@ -1087,159 +1226,88 @@ private fun ProviderGroupCard(group: ProviderGroup) {
 @Composable
 private fun ProductProviderGroupCard(group: ProductProviderGroup) {
     var expanded by remember(group.providerName) { mutableStateOf(group.items.isNotEmpty()) }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Card(
-            modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
-            colors = CardDefaults.cardColors(containerColor = CardInk),
-            shape = RoundedCornerShape(16.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("${group.providerName} — ${group.summary}", fontWeight = FontWeight.Bold)
-                Text(if (expanded) "▾" else "▸", color = Lime)
-            }
-        }
-        if (expanded) {
-            Column(modifier = Modifier.padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (group.items.isEmpty()) {
-                    Text(group.note ?: "No results.", style = MaterialTheme.typography.bodySmall, color = Muted)
-                } else {
-                    group.items.forEach { item -> QuantityProductCard(item) }
-                }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        ProviderHeader(group.providerName, group.summary, expanded = expanded) { expanded = !expanded }
+        if (expanded) NilaCard {
+            if (group.items.isEmpty()) GroupNote(group.note)
+            group.items.forEachIndexed { index, item ->
+                if (index > 0) HorizontalDivider(color = Panel)
+                QuantityProductRow(item)
             }
         }
     }
 }
 
+/** Image-led product row with the price up front and the same stepper as the Swiggy cart. */
 @Composable
-private fun QuantityProductCard(item: PickableProduct) {
+private fun QuantityProductRow(item: PickableProduct) {
     var quantity by remember(item.title) { mutableStateOf(item.initialQuantity) }
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = CardInk),
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                if (item.imageUrl != null) {
-                    coil.compose.AsyncImage(
-                        model = item.imageUrl,
-                        contentDescription = item.title,
-                        modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)),
-                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    )
-                    Spacer(Modifier.width(12.dp))
-                }
-                Column {
-                    Text(item.title, fontWeight = FontWeight.Bold)
-                    Text(item.detail, style = MaterialTheme.typography.bodySmall, color = Muted)
-                    Text(item.price, style = MaterialTheme.typography.bodySmall, color = Lime)
-                }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        val imageModifier = Modifier.size(ProductImageSize).clip(RoundedCornerShape(14.dp)).background(Panel)
+        if (item.imageUrl != null) {
+            coil.compose.AsyncImage(
+                model = item.imageUrl,
+                contentDescription = item.title,
+                modifier = imageModifier,
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            )
+        } else {
+            Box(imageModifier, contentAlignment = Alignment.Center) {
+                Icon(painterResource(LucideR.drawable.lucide_ic_shopping_basket), contentDescription = null, tint = Muted, modifier = Modifier.size(22.dp))
             }
-            if (quantity <= 0) {
-                Button(onClick = { quantity = 1; item.onQuantityChange(1) }) { Text("Add") }
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { val next = quantity - 1; quantity = next; item.onQuantityChange(next) }) { Text("−", fontWeight = FontWeight.Bold, color = Lime) }
-                    Text("$quantity", fontWeight = FontWeight.Bold)
-                    IconButton(onClick = { quantity += 1; item.onQuantityChange(quantity) }) { Text("+", fontWeight = FontWeight.Bold, color = Lime) }
-                }
-            }
+        }
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(item.title, color = Paper, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (item.detail.isNotBlank()) Text(item.detail, color = Muted, fontSize = 12.sp)
+            Text(item.price, color = Paper, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        }
+        if (quantity <= 0) {
+            Text(
+                "ADD",
+                color = Lime,
+                fontWeight = FontWeight.Black,
+                fontSize = 13.sp,
+                modifier = Modifier.border(1.dp, Lime.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+                    .clickable(onClickLabel = "Add ${item.title}") { quantity = 1; item.onQuantityChange(1) }
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+        } else {
+            QuantityStepper(
+                quantity = quantity,
+                onLess = { val next = quantity - 1; quantity = next; item.onQuantityChange(next) },
+                onMore = { quantity += 1; item.onQuantityChange(quantity) },
+            )
         }
     }
 }
 
-@Composable
-private fun ImageActionCard(item: AsyncChoice) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = CardInk),
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                if (item.imageUrl != null) {
-                    coil.compose.AsyncImage(
-                        model = item.imageUrl,
-                        contentDescription = item.title,
-                        modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)),
-                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    )
-                    Spacer(Modifier.width(12.dp))
-                }
-                Column {
-                    Text(item.title, fontWeight = FontWeight.Bold)
-                    Text(item.detail, style = MaterialTheme.typography.bodySmall, color = Muted)
-                }
-            }
-            Button(onClick = item.onClick) { Text(item.price.ifBlank { "Select" }) }
-        }
-    }
-}
-
+/** The labelled mock food flow's prepared order: the prototype's confirm sheet, still a simulation. */
 @Composable
 private fun ConfirmationCard(response: NilaResponse.Confirmation, onConfirm: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF321F19)),
-        shape = RoundedCornerShape(18.dp),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("CONFIRMATION REQUIRED", color = Orange, style = MaterialTheme.typography.labelSmall)
-            Text(response.title, fontWeight = FontWeight.Bold)
-            Text(response.detail, color = Muted, style = MaterialTheme.typography.bodySmall)
-            Text(response.price, color = Paper, style = MaterialTheme.typography.titleLarge)
-            Text(
-                "Demo only. This stops before a real provider, order or payment.",
-                color = Muted,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Button(onClick = onConfirm, modifier = Modifier.fillMaxWidth()) { Text("Confirm simulation") }
+    NilaCard(color = CommitInk) {
+        SectionLabel("Prepared · not ordered", color = Orange)
+        SerifTitle(response.title)
+        Text(response.detail, color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Total", color = Paper, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            SerifTitle(response.price, size = 26.sp)
         }
+        BoundaryNote("Demo only. This stops before a real provider, order or payment.")
+        PrimaryAction("Confirm simulation", onConfirm)
     }
 }
 
+/** One action card: what it is, the serif title, a calm line of detail and one lime button that works once. */
 @Composable
-private fun ActionCard(title: String, detail: String, action: String, onClick: () -> Unit) {
-    // A tap can start a real, non-idempotent call (place a COD order, select an address, start OAuth).
-    // tapOnce is checked and set inside the click handler itself, so even two taps in the same frame
-    // can't both get through before recomposition would otherwise disable the button.
-    val consumed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
-    var disabled by remember { mutableStateOf(false) }
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = CardInk),
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.weight(1f)) {
-                Column {
-                    Text(title, fontWeight = FontWeight.Bold)
-                    Text(detail, style = MaterialTheme.typography.bodySmall, color = Color.LightGray)
-                }
-            }
-            Button(onClick = { if (tapOnce(consumed)) { disabled = true; onClick() } }, enabled = !disabled) { Text(action) }
-        }
+private fun ActionCard(label: String, title: String, detail: String, action: String, onClick: () -> Unit) {
+    val tap = rememberSingleTap(onClick)
+    NilaCard {
+        SectionLabel(label)
+        SerifTitle(title)
+        Text(detail, color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+        PrimaryAction(action, tap::fire, Modifier.padding(top = 4.dp), enabled = !tap.used)
     }
 }
-
-/** True on the first call, false on every call after — even two calls racing from the same frame. Guards a tap from firing a non-idempotent action (an order, a payment) twice. */
-internal fun tapOnce(consumed: java.util.concurrent.atomic.AtomicBoolean): Boolean = !consumed.getAndSet(true)
 
 /**
  * Asks the Clock app to turn off an alarm after the user confirmed. Android does not let other apps read
@@ -1314,7 +1382,7 @@ private fun CallCard(who: String, context: Context, report: (String) -> Unit) {
     val askContacts = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
     ) { granted -> if (granted) dialContact() else report("NILA needs contacts access to find $who. You can say the number instead.") }
-    ActionCard(title = "Call $who", detail = "Opens the dialer with the number. You press call.", action = "Call") {
+    ActionCard(label = "Call", title = who, detail = "Opens the dialer with the number. You press call.", action = "Call $who") {
         val number = phoneNumber(who)
         when {
             number != null -> dial(number)

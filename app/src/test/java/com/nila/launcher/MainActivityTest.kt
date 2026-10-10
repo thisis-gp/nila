@@ -20,4 +20,11 @@ class MainActivityTest {
         val winners = (1..50).toList().parallelStream().filter { tapOnce(consumed) }.count()
         assertTrue("expected exactly one winner, got $winners", winners == 1L)
     }
+
+    @Test
+    fun followUpTurnsAreNilasOwnLabelsNotRequests() {
+        assertTrue(isFollowUpTurn("Zepto"))
+        assertTrue(isFollowUpTurn("Action result"))
+        assertFalse(isFollowUpTurn("Set an alarm for 6:30 am"))
+    }
 }

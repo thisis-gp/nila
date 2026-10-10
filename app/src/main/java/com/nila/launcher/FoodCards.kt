@@ -80,7 +80,6 @@ internal interface FoodActions {
 private val RatingGreen = Color(0xFF1BA672)
 private val VegGreen = Color(0xFF0F8A65)
 private val NonVegRed = Color(0xFFE43B4F)
-private val CommitInk = Color(0xFF321F19)
 
 @Composable
 internal fun FoodCardView(card: FoodCard, actions: FoodActions) {
@@ -94,7 +93,7 @@ internal fun FoodCardView(card: FoodCard, actions: FoodActions) {
         is FoodCard.Order -> OrderCard(card, actions)
         is FoodCard.Problem -> Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("SWIGGY", color = Orange, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                SectionLabel("Swiggy", color = Orange)
                 Text(card.message, color = Paper)
             }
         }
@@ -114,10 +113,7 @@ private fun BackLink(label: String, onBack: () -> Unit) {
 
 @Composable
 private fun StepHeader(step: Int, title: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(Modifier.size(6.dp).background(Lime, CircleShape))
-        Text("SWIGGY · LIVE", color = Lime, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-    }
+    SourceLabel("Swiggy · live")
     Spacer(Modifier.height(4.dp))
     Text(title, color = Paper, fontSize = 26.sp, fontFamily = FontFamily.Serif, lineHeight = 30.sp)
 }
@@ -185,7 +181,7 @@ private fun AddressesCard(card: FoodCard.Addresses, actions: FoodActions) {
         Text("Where should I deliver?", color = Paper, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
         HereCard(card, nearest, actions, onAddHere = { showForm = true }, onAllow = { askLocation.launch(Manifest.permission.ACCESS_COARSE_LOCATION) })
         if (others.isNotEmpty()) {
-            Text("SAVED ADDRESSES", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(top = 6.dp))
+            SectionLabel("Saved addresses", Modifier.padding(top = 6.dp))
             Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
                 Column {
                     val shown = if (showAll) others else others.take(SAVED_PREVIEW)
@@ -773,26 +769,11 @@ private fun CartCard(card: FoodCard.Cart, actions: FoodActions) {
                 card.cart.lines.forEach { line ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(line.name, color = Paper, fontSize = 14.sp, modifier = Modifier.weight(1f), maxLines = 2)
-                        Row(
-                            Modifier.border(1.dp, Lime.copy(alpha = 0.6f), RoundedCornerShape(10.dp)),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                "−",
-                                color = Lime,
-                                fontSize = 18.sp,
-                                modifier = Modifier.clickable { actions.changeLine(card.address, card.restaurant, line.itemId, -1) }
-                                    .padding(horizontal = 10.dp, vertical = 2.dp),
-                            )
-                            Text("${line.quantity}", color = Paper, fontWeight = FontWeight.Bold)
-                            Text(
-                                "+",
-                                color = Lime,
-                                fontSize = 18.sp,
-                                modifier = Modifier.clickable { actions.changeLine(card.address, card.restaurant, line.itemId, +1) }
-                                    .padding(horizontal = 10.dp, vertical = 2.dp),
-                            )
-                        }
+                        QuantityStepper(
+                            quantity = line.quantity,
+                            onLess = { actions.changeLine(card.address, card.restaurant, line.itemId, -1) },
+                            onMore = { actions.changeLine(card.address, card.restaurant, line.itemId, +1) },
+                        )
                         Text(line.price, color = Paper, fontSize = 14.sp, modifier = Modifier.width(64.dp).padding(start = 8.dp))
                     }
                 }
@@ -924,7 +905,7 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
  */
 @Composable
 private fun CompareBlock(card: FoodCard.Payment, compared: ZomatoComparison, method: String, enabled: Boolean, onTotal: (String) -> Unit) {
-    Text("COMPARE", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(top = 4.dp))
+    SectionLabel("Compare", Modifier.padding(top = 4.dp))
     Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             when (compared) {
@@ -994,7 +975,7 @@ private fun OffersBlock(card: FoodCard.Payment, enabled: Boolean, onApply: (Food
         if (card.coupons.isNotEmpty()) Text("No coupon fits this cart yet", color = Muted, fontSize = 12.sp)
         return
     }
-    Text("OFFERS", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(top = 4.dp))
+    SectionLabel("Offers", Modifier.padding(top = 4.dp))
     Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
         Column {
             (if (showAll) usable else usable.take(1)).forEachIndexed { index, coupon ->
