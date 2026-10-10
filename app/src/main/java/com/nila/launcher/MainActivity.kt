@@ -136,6 +136,44 @@ private fun zeptoProductTurn(
     return Turn("Zepto", NilaResponse.ProductGroupChoices("Options for \"$item\" — tap + to add:", groups))
 }
 
+/**
+ * Real Cash-on-Delivery placement: shows Zepto's own preview first, places the order only after an
+ * explicit tap on that preview. COD only — online payment, wallet and UPI reserve-pay all move money
+ * through a gateway and stay unwired (see ZeptoMcpClient). Never opens the Zepto app: the order is
+ * placed for real right here, so there is nothing left to hand off for.
+ */
+private fun startCodCheckout(
+    client: ZeptoMcpClient,
+    addressId: String,
+    addressLabel: String,
+    coroutineScope: kotlinx.coroutines.CoroutineScope,
+    appendTurn: (Turn) -> Unit,
+) {
+    coroutineScope.launch(Dispatchers.IO) {
+        val outcome = runCatching { client.previewCodOrder(addressId) }
+        withContext(Dispatchers.Main) {
+            outcome.fold(
+                onSuccess = { preview ->
+                    appendTurn(Turn("Zepto", NilaResponse.Text("Delivering to $addressLabel.\n\n$preview")))
+                    val place = AsyncChoice("Place order (Cash on Delivery)", "This charges nothing now — you pay the rider on delivery", "", "") {
+                        coroutineScope.launch(Dispatchers.IO) {
+                            val placed = runCatching { client.placeCodOrder(addressId) }
+                            withContext(Dispatchers.Main) {
+                                placed.fold(
+                                    onSuccess = { result -> appendTurn(Turn("Zepto", NilaResponse.Text(result))) },
+                                    onFailure = { appendTurn(Turn("Zepto", NilaResponse.Text("Order failed: ${it.message}"))) },
+                                )
+                            }
+                        }
+                    }
+                    appendTurn(Turn("Zepto", NilaResponse.AsyncChoices("Confirm to place the order", listOf(place))))
+                },
+                onFailure = { appendTurn(Turn("Zepto", NilaResponse.Text("Could not preview the order: ${it.message}"))) },
+            )
+        }
+    }
+}
+
 internal val Ink = Color(0xFF151513)
 internal val Panel = Color(0xFF22221F)
 internal val CardInk = Color(0xFF2D2D29)
@@ -254,8 +292,7 @@ private fun NilaApp(resumeVersion: Int) {
                             val proceed = AsyncChoice("Proceed to checkout", "Confirm delivery address and total", "", "") {
                                 val session = activeZeptoSession
                                 if (session != null) {
-                                    turns += Turn("Zepto", NilaResponse.Text("Delivering to ${session.addressLabel}. Total ₹%.2f. NILA stops here — open Zepto to pay and finish the order:".format(total / 100.0)))
-                                    turns += Turn("Zepto", NilaResponse.OpenApp("Zepto", "com.zeptoconsumerapp", "https://www.zeptonow.com"))
+                                    startCodCheckout(client, session.addressId, session.addressLabel, scope) { t -> turns += t }
                                 } else {
                                     // Cart was viewed cold (no "buy" this session) — we don't know the store yet.
                                     // Let the user pick one, then re-check the cart under it: items may differ.
@@ -276,12 +313,10 @@ private fun NilaApp(resumeVersion: Int) {
                                                                 activeZeptoSession = ActiveZeptoSession(client, address.id, address.label.ifBlank { "Saved address" })
                                                                 outcome2.fold(
                                                                     onSuccess = { freshItems ->
-                                                                        val freshTotal = freshItems.sumOf { it.priceInPaisa.toLong() * it.quantity }
                                                                         if (freshItems.isEmpty()) {
                                                                             turns += Turn("Zepto", NilaResponse.Text("None of the cart items are available for delivery to ${address.label.ifBlank { "this address" }}. Try adding items again from here."))
                                                                         } else {
-                                                                            turns += Turn("Zepto", NilaResponse.Text("Delivering to ${address.label.ifBlank { "this address" }}. Total ₹%.2f. NILA stops here — open Zepto to pay and finish the order:".format(freshTotal / 100.0)))
-                                                                            turns += Turn("Zepto", NilaResponse.OpenApp("Zepto", "com.zeptoconsumerapp", "https://www.zeptonow.com"))
+                                                                            startCodCheckout(client, address.id, address.label.ifBlank { "this address" }, scope) { t -> turns += t }
                                                                         }
                                                                     },
                                                                     onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },

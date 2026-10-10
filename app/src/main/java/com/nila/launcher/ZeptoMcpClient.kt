@@ -40,9 +40,10 @@ internal fun rpcHeaders(sessionId: String?, protocolVersion: String?): Map<Strin
 /**
  * JSON-RPC client for Zepto's MCP (Streamable HTTP transport). Methods here are typed against
  * the real schemas and real responses observed on 2026-10-09 (see zepto_tools.json dump), not
- * guessed. Order placement (create_order / payment tools) is intentionally not wired up: that's
- * a Commit-tier action needing the same visible-confirmation flow the rest of NILA uses before
- * anything consequential, and real payments are out of scope for the hackathon build.
+ * guessed. Only create_order (Cash on Delivery) is wired for real order placement — the online
+ * payment, wallet and UPI reserve-pay tools move money through a gateway and stay unwired. COD
+ * is still a Commit-tier action: callers must show previewCodOrder's result and get an explicit
+ * tap before calling placeCodOrder.
  */
 class ZeptoMcpClient(private val auth: ZeptoAuth) {
     private val nextId = AtomicInteger(1)
@@ -178,4 +179,20 @@ class ZeptoMcpClient(private val auth: ZeptoAuth) {
             )
         }
     }
+
+    /** Text list of what the account can actually pay with. Zepto's own tools require calling this before any order tool. */
+    fun getPaymentMethods(): String = resultText(callTool("get_payment_methods", JSONObject()))
+
+    /** confirmOrder=false: a real preview (items, fees, final total) with no order placed yet. Show this before placeCodOrder. */
+    fun previewCodOrder(addressId: String, riderTip: Double = 0.0): String =
+        resultText(callTool("create_order", codOrderArgs(addressId, riderTip, confirm = false)))
+
+    /** Places a real Cash on Delivery order. Only call after the user has seen previewCodOrder's result and tapped confirm. */
+    fun placeCodOrder(addressId: String, riderTip: Double = 0.0): String =
+        resultText(callTool("create_order", codOrderArgs(addressId, riderTip, confirm = true)))
+
+    private fun codOrderArgs(addressId: String, riderTip: Double, confirm: Boolean) = JSONObject()
+        .put("userAddressId", addressId)
+        .put("riderTip", riderTip)
+        .put("confirmOrder", confirm)
 }
