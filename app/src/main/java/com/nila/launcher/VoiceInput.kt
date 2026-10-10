@@ -139,43 +139,54 @@ suspend fun recordSpeech(stopRequested: () -> Boolean): ByteArray? = withContext
 
 enum class VoiceState { IDLE, LISTENING, UNDERSTANDING }
 
+/** Where one spoken request is: the chat mic and the listening layer both read it. */
+interface VoiceCapture {
+    val state: VoiceState
+    val tag: String
+    val languageName: String
+
+    /** Starts listening, or, while listening, stops and sends what was said. */
+    fun toggle()
+
+    fun nextLanguage()
+}
+
 /**
- * Language chip and mic for the chat input. Tap to speak; pause or tap again to send. The clip goes to
- * [transcribe] (Gemma 4 E2B, on the phone) with the chip's language as a hint, and the text is sent like a
- * typed request, so voice gets the same rules, checks and confirmations as typing.
+ * Records one spoken request at a time. The clip goes to [transcribe] (Gemma 4 E2B, on the phone) with the
+ * chosen language as a hint, and the text goes to [onFinal], so voice gets the same rules as typing.
  */
 @Composable
-fun VoiceMic(
+fun rememberVoiceCapture(
     /** [languageName] is null for Auto, so Gemma detects the language itself. */
     transcribe: suspend (wav: ByteArray, languageName: String?) -> String?,
     onFinal: (String) -> Unit,
     onMessage: (String) -> Unit,
     /** Called as recording starts, so NILA stops talking and the mic does not record Lakshmi. */
     onListenStart: () -> Unit = {},
-) {
+): VoiceCapture {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("nila_voice", Context.MODE_PRIVATE) }
-    var tag by remember { mutableStateOf(prefs.getString(LANGUAGE_KEY, null) ?: AUTO_LANGUAGE.tag) }
-    var state by remember { mutableStateOf(VoiceState.IDLE) }
+    var currentTag by remember { mutableStateOf(prefs.getString(LANGUAGE_KEY, null) ?: AUTO_LANGUAGE.tag) }
+    var currentState by remember { mutableStateOf(VoiceState.IDLE) }
     var stopRequested by remember { mutableStateOf(false) }
-    val languageName = (chipLanguages.firstOrNull { it.tag == tag } ?: AUTO_LANGUAGE).name
+    val currentLanguageName = (chipLanguages.firstOrNull { it.tag == currentTag } ?: AUTO_LANGUAGE).name
     val latestFinal by rememberUpdatedState(onFinal)
     val latestMessage by rememberUpdatedState(onMessage)
 
     fun listen() {
         onListenStart()
         stopRequested = false
-        state = VoiceState.LISTENING
+        currentState = VoiceState.LISTENING
         scope.launch {
             val clip = recordSpeech { stopRequested }
             if (clip == null) {
-                state = VoiceState.IDLE
+                currentState = VoiceState.IDLE
                 return@launch latestMessage("I didn't hear anything. Tap the mic and try again, or type instead.")
             }
-            state = VoiceState.UNDERSTANDING
-            val text = runCatching { transcribe(clip, languageName.takeUnless { tag == AUTO_LANGUAGE.tag }) }.getOrNull()?.trim()
-            state = VoiceState.IDLE
+            currentState = VoiceState.UNDERSTANDING
+            val text = runCatching { transcribe(clip, currentLanguageName.takeUnless { currentTag == AUTO_LANGUAGE.tag }) }.getOrNull()?.trim()
+            currentState = VoiceState.IDLE
             if (text.isNullOrBlank()) latestMessage("I couldn't understand that. Try again, or type instead.") else latestFinal(text)
         }
     }
@@ -183,37 +194,56 @@ fun VoiceMic(
         if (granted) listen() else latestMessage("NILA needs microphone access to listen. You can still type.")
     }
 
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        TextButton(
-            onClick = {
-                tag = nextVoiceLanguage(tag)
-                prefs.edit().putString(LANGUAGE_KEY, tag).apply()
-            },
-            enabled = state == VoiceState.IDLE,
-            modifier = Modifier.semantics { contentDescription = "Voice language: $languageName. Tap to change." },
-        ) {
-            // While busy the chip becomes the live status, so it is clear what NILA is doing.
-            when (state) {
-                VoiceState.LISTENING -> Text("Listening…", color = Lime, fontSize = 14.sp)
-                VoiceState.UNDERSTANDING -> Text("Understanding…", color = Lime, fontSize = 14.sp)
-                VoiceState.IDLE -> Text(voiceChipLabel(tag), color = Muted, fontSize = 14.sp)
+    return object : VoiceCapture {
+        override val state get() = currentState
+        override val tag get() = currentTag
+        override val languageName get() = currentLanguageName
+
+        override fun toggle() {
+            when {
+                // A second tap means "I'm done": stop recording and send what was said.
+                currentState == VoiceState.LISTENING -> stopRequested = true
+                currentState == VoiceState.UNDERSTANDING -> Unit
+                ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED -> listen()
+                else -> askPermission.launch(Manifest.permission.RECORD_AUDIO)
             }
         }
-        IconButton(
-            onClick = {
-                when {
-                    // A second tap means "I'm done": stop recording and send what was said.
-                    state == VoiceState.LISTENING -> stopRequested = true
-                    state == VoiceState.UNDERSTANDING -> Unit
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED -> listen()
-                    else -> askPermission.launch(Manifest.permission.RECORD_AUDIO)
-                }
-            },
+
+        override fun nextLanguage() {
+            currentTag = nextVoiceLanguage(currentTag)
+            prefs.edit().putString(LANGUAGE_KEY, currentTag).apply()
+        }
+    }
+}
+
+/** Language chip and mic for the chat input. Tap to speak; pause or tap again to send. */
+@Composable
+fun VoiceMic(
+    transcribe: suspend (wav: ByteArray, languageName: String?) -> String?,
+    onFinal: (String) -> Unit,
+    onMessage: (String) -> Unit,
+    onListenStart: () -> Unit = {},
+) {
+    val voice = rememberVoiceCapture(transcribe, onFinal, onMessage, onListenStart)
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(
+            onClick = voice::nextLanguage,
+            enabled = voice.state == VoiceState.IDLE,
+            modifier = Modifier.semantics { contentDescription = "Voice language: ${voice.languageName}. Tap to change." },
         ) {
+            // While busy the chip becomes the live status, so it is clear what NILA is doing.
+            when (voice.state) {
+                VoiceState.LISTENING -> Text("Listening…", color = Lime, fontSize = 14.sp)
+                VoiceState.UNDERSTANDING -> Text("Understanding…", color = Lime, fontSize = 14.sp)
+                VoiceState.IDLE -> Text(voiceChipLabel(voice.tag), color = Muted, fontSize = 14.sp)
+            }
+        }
+        IconButton(onClick = voice::toggle) {
             Icon(
                 painterResource(LucideR.drawable.lucide_ic_mic),
-                contentDescription = if (state == VoiceState.LISTENING) "Finish speaking" else "Speak",
-                tint = if (state == VoiceState.IDLE) Paper else Lime,
+                contentDescription = if (voice.state == VoiceState.LISTENING) "Finish speaking" else "Speak",
+                tint = if (voice.state == VoiceState.IDLE) Paper else Lime,
             )
         }
     }
