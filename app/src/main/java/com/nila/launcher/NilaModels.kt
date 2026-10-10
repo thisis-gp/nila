@@ -266,7 +266,9 @@ class NilaBrain(
         fun done(path: String, response: NilaResponse) = response.also {
             Log.i(TAG, "path=$path ms=${SystemClock.elapsedRealtime() - start} response=${it::class.simpleName}")
         }
-        fun answer(path: String, response: NilaResponse) = done(path, response).also { remember(input, it) }
+        // People and budget always come from the user's own words, whichever path chose search_food.
+        fun answer(path: String, response: NilaResponse) =
+            done(path, (response as? NilaResponse.FoodSearch)?.let { engine.foodConstraints(input, it) } ?: response).also { remember(input, it) }
         engine.calculate(input)?.let { return@withContext answer("calculator", it) }
         val keyword = engine.route(input)
         if (keyword is NilaIntent.Call && keyword.call.capabilityId == REMEMBER && assistant != null) {
@@ -280,7 +282,8 @@ class NilaBrain(
                 val routed = engine.route(command)
                 if (routed is NilaIntent.Call) return@withContext answer("rewrite:${routed.call.capabilityId}", engine.execute(routed))
             }
-            modelRoute(input)?.let { return@withContext answer("functiongemma", it) }
+            // Stock FunctionGemma scored 4.7% on NILA's 12 tools (training eval); with Gemma 4 loaded, chat picks the tool.
+            if (assistant == null) modelRoute(input)?.let { return@withContext answer("functiongemma", it) }
         }
         chat(input)?.let { answer("gemma", it) } ?: answer("fallback", engine.execute(NilaIntent.Converse(input)))
     }

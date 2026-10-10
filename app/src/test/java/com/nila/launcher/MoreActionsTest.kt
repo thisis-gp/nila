@@ -20,6 +20,12 @@ class MoreActionsTest {
     }
 
     @Test
+    fun phrasebookShoppingCommandsRouteDeterministically() {
+        assertEquals(NilaResponse.GrocerySearch("milk 1 litre"), respond("buy milk 1 litre"))
+        assertEquals(NilaResponse.FoodSearch("chicken biryani"), respond("order chicken biryani"))
+    }
+
+    @Test
     fun mapsAndSearch() {
         assertEquals(NilaResponse.Navigate("Indiranagar"), respond("take me to Indiranagar"))
         assertEquals(MapSearch("petrol pumps"), respond("petrol pumps near me"))
