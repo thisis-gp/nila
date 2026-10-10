@@ -41,6 +41,14 @@ class RewriteTest {
         val asked = "wake me at 6:30" to "Do you want an alarm at 6:30 pm?"
         assertTrue(numbersSaid("set an alarm for 6:30 pm", groundingText("yes", asked)))
         assertFalse(numbersSaid("set an alarm for 6:30 pm", groundingText("yes", null)))
+        // A fresh request with a number word is not a follow-up: an earlier 7 cannot approve "six" as 7.
+        val alarmAt7 = "set an alarm for 7 am" to "Alarm set for 07:00 in your Clock."
+        assertFalse(numbersSaid("set an alarm for 7 am", groundingText("set an alarm at six", alarmAt7)))
+        assertFalse(numbersSaid("set a timer for 7 minutes", groundingText("start a timer", alarmAt7)))
+        assertFalse(numbersSaid("set an alarm for 7 pm", groundingText("make it seven pm", alarmAt7)))
+        // References to the last exchange still borrow.
+        assertTrue(numbersSaid("set an alarm for 7 pm", groundingText("make it pm", alarmAt7)))
+        assertTrue(numbersSaid("set an alarm for 7 am", groundingText("do that again", alarmAt7)))
         // Huge numbers never throw on the FunctionGemma path either.
         assertFalse(numbersGrounded(mapOf("amount" to 5), "pay 123456789012345678901234567890"))
     }
