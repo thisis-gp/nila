@@ -817,7 +817,7 @@ private fun NilaApp(resumeVersion: Int) {
                                     ServiceAccount(
                                         name = "Web search",
                                         icon = LucideR.drawable.lucide_ic_globe,
-                                        detail = "Answers from the web through Tavily. Free key at tavily.com, no card needed.",
+                                        detail = "Live answers from the web, through Tavily.",
                                         connected = tavilyAuth.isConnected,
                                         onConnect = {},
                                         onDisconnect = { tavilyAuth.disconnect(); accountsRevision++ },
