@@ -79,6 +79,7 @@ class NilaEngine(
             ),
             // Deleting is a Commit action: it always stops at a confirmation card.
             permission = PermissionClass.COMMIT,
+            label = "Turn off an alarm",
             androidPermissions = setOf("com.android.alarm.permission.SET_ALARM"),
         ),
         CapabilityDescriptor(

@@ -131,6 +131,8 @@ class NilaModelsTest {
         val pending = engine.execute(engine.route("remove the alarm at 1:30")) as NilaResponse.NeedsConfirmation
         // Same next-occurrence rule as setting: 1:30 asked at 05:51 is 13:30.
         assertEquals(listOf("Turn off" to "The 13:30 alarm"), pending.lines)
+        // The card title is for people, not the instructions written for the model.
+        assertEquals("Turn off an alarm", pending.capability.label)
         assertEquals(NilaResponse.DismissAlarm(13, 30), engine.confirm(pending.token))
         // Single use: a second tap removes nothing.
         assertEquals(NilaResponse.Text("This confirmation was already used. Nothing was done."), engine.confirm(pending.token))

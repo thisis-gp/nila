@@ -444,7 +444,7 @@ private fun ResponseView(
     when (response) {
         // ponytail: plain tap confirms; biometric prompt comes with the confirmation flow.
         is NilaResponse.NeedsConfirmation -> ActionCard(
-            title = response.capability.description,
+            title = response.capability.label,
             detail = response.lines.joinToString("\n", postfix = "\nNothing happens until you confirm.") { (name, value) -> "$name: $value" },
             action = "Confirm",
         ) { confirm(response.token) }
