@@ -235,6 +235,7 @@ private fun NilaApp(resumeVersion: Int) {
                                 input = input,
                                 isThinking = isThinking,
                                 modelStatus = "Gemma 4 E2B ${brain.assistantState.label} · FunctionGemma ${brain.routerState.label}",
+                                transcribe = brain::transcribe,
                                 onInput = { input = it },
                                 onSubmit = ::submit,
                                 context = context,
@@ -295,6 +296,7 @@ private fun AgentSpace(
     input: String,
     isThinking: Boolean,
     modelStatus: String,
+    transcribe: suspend (wav: ByteArray, languageName: String) -> String?,
     onInput: (String) -> Unit,
     onSubmit: (String) -> Unit,
     context: Context,
@@ -373,7 +375,7 @@ private fun AgentSpace(
                     )
                 }
                 VoiceMic(
-                    onPartial = onInput,
+                    transcribe = transcribe,
                     onFinal = onSubmit,
                     onMessage = { addTurn("Voice", NilaResponse.Text(it)) },
                 )
