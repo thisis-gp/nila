@@ -59,32 +59,7 @@ fun normalizedSize(text: String): Pair<String, Double>? {
     return toBaseUnits(value, match.groupValues[2])
 }
 
-/**
- * Swiggy MCP access is still pending written confirmation (RESEARCH.md / HACKATHON.md). This is
- * a clearly labeled placeholder group, never fake data, occupying the exact slot a real Swiggy
- * result group will take once access arrives — swap this call for a real search() call, nothing
- * else about the flow changes. Shown alongside other providers' real results, not as a fallback.
- */
-fun swiggyPendingGroup(category: ShoppingCategory): ProviderGroup {
-    val surface = if (category == ShoppingCategory.FOOD) "Swiggy Food" else "Swiggy Instamart"
-    return ProviderGroup(
-        providerName = surface,
-        summary = "access pending",
-        items = emptyList(),
-        note = "Not connected yet — waiting on Swiggy's developer access confirmation.",
-    )
-}
 
-/** Same placeholder as swiggyPendingGroup, shaped for a ProductGroupChoices turn (search results) instead of GroupedChoices. */
-fun swiggyPendingProductGroup(category: ShoppingCategory): ProductProviderGroup {
-    val surface = if (category == ShoppingCategory.FOOD) "Swiggy Food" else "Swiggy Instamart"
-    return ProductProviderGroup(
-        providerName = surface,
-        summary = "access pending",
-        items = emptyList(),
-        note = "Not connected yet — waiting on Swiggy's developer access confirmation.",
-    )
-}
 
 /**
  * Shown instead of attempting a Zepto call when there's no stored token yet. Unlike Swiggy, Zepto

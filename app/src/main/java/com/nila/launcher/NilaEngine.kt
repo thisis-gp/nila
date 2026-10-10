@@ -54,7 +54,16 @@ sealed interface NilaResponse {
     /** A confirmed request to turn off an alarm: at [hour]:[minute], or the next alarm when [hour] is null. */
     data class DismissAlarm(val hour: Int?, val minute: Int) : NilaResponse
     data class OpenApp(val name: String, val packageName: String, val fallbackUrl: String) : NilaResponse
-    data class Choices(val intro: String, val items: List<Choice>) : NilaResponse
+    data class Navigate(val destination: String) : NilaResponse
+    /** The router chose search_groceries: Zepto and Swiggy Instamart are searched and shown side by side. */
+    data class GrocerySearch(val query: String) : NilaResponse
+    data class RouteCard(
+        val destination: String,
+        val distanceKm: Double,
+        val durationMin: Double,
+        val source: String,
+    ) : NilaResponse
+    data class Choices(val intro: String, val items: List<Choice>, val source: String = "OFFLINE FIXTURE") : NilaResponse
     /** Like Choices, but each item runs real work (a Zepto call, etc.) when tapped instead of a canned status string. */
     data class AsyncChoices(val intro: String, val items: List<AsyncChoice>) : NilaResponse
     /** Results grouped by provider (Zepto, Swiggy Instamart, ...), each collapsible, for comparing multiple MCPs side by side. */
@@ -63,6 +72,15 @@ sealed interface NilaResponse {
     data class ProductGroupChoices(val intro: String, val groups: List<ProductProviderGroup>) : NilaResponse
     data class Confirmation(val title: String, val detail: String, val price: String) : NilaResponse
     data class Remember(val fact: String) : NilaResponse
+    /** One step of the live Swiggy order flow, rendered by FoodCards.kt. */
+    data class Food(val card: FoodCard) : NilaResponse
+    /** The router chose search_food. The launcher starts the live Swiggy flow, or shows the labelled mock if Swiggy isn't connected. */
+    data class FoodSearch(
+        val query: String,
+        val people: Int? = null,
+        val budgetRupees: Int? = null,
+        val preference: String? = null,
+    ) : NilaResponse
     /**
      * A validated Commit call that has not run. [lines] are the call's own values, so the user sees exactly
      * what Confirm authorizes. Pass [token] to NilaEngine.confirm after the user approves; it works once.
@@ -139,8 +157,23 @@ class NilaEngine(
         ),
         CapabilityDescriptor(
             id = "search_food",
-            description = "Find restaurants or dishes to eat, only when the user asks for food, a meal, a dish or says they are hungry",
-            params = listOf(Param("query", ParamType.STRING)),
+            description = "Order food or find restaurants and dishes to eat, for example biryani, pizza or dinner.",
+            params = listOf(
+                Param("query", ParamType.STRING, label = "Dish or restaurant name only, like biryani"),
+                Param("preference", ParamType.STRING, required = false, label = "Taste or diet words the user said, like light, spicy or veg"),
+            ),
+            permission = PermissionClass.READ,
+        ),
+        CapabilityDescriptor(
+            id = "search_groceries",
+            description = "Buy groceries or household items from Zepto or Swiggy Instamart, for example milk, eggs, bread, atta or detergent.",
+            params = listOf(Param("query", ParamType.STRING, label = "Item and pack size as the user said, like milk 1 litre")),
+            permission = PermissionClass.READ,
+        ),
+        CapabilityDescriptor(
+            id = "get_directions",
+            description = "Show a map with the route, distance or travel time to a place, for example take me to or how far is.",
+            params = listOf(Param("destination", ParamType.STRING, label = "Place name only, like Indiranagar")),
             permission = PermissionClass.READ,
         ),
         CapabilityDescriptor(
@@ -218,6 +251,14 @@ class NilaEngine(
         return args
     }
 
+    private companion object {
+        const val MAX_PARTY = 20
+        val NUMBER_WORDS = mapOf(
+            "one" to 1, "two" to 2, "three" to 3, "four" to 4, "five" to 5,
+            "six" to 6, "seven" to 7, "eight" to 8, "nine" to 9, "ten" to 10,
+        )
+    }
+
     // Speech recognizers write "6:30 p.m."; fold a.m./p.m. into am/pm so the time is not misread.
     private fun normalize(input: String) = input.trim().lowercase().replace(Regex("""(?<=[\d\s])([ap])\.\s?m\.?"""), "$1m")
 
@@ -238,6 +279,26 @@ class NilaEngine(
      * Reads the alarm time exactly as the user said it. When a model picks create_alarm, these values
      * replace the model's: FunctionGemma dropped "pm" and ":45" on the iQOO 15.
      */
+    /**
+     * How many people and the budget, read from the user's own words like the alarm time is: a model
+     * invents numbers ("for three" is not a digit it can ground), so these never come from the model.
+     */
+    fun foodConstraints(input: String, search: NilaResponse.FoodSearch): NilaResponse.FoodSearch {
+        val text = normalize(input)
+        val budget = Regex("""(?:under|below|within|less than|up ?to|max|budget(?: of)?)\s*(?:rs\.?|₹|inr)?\s*(\d{2,6})""").find(text)
+            ?: Regex("""(?:₹|rs\.?\s?)(\d{2,6})""").find(text)
+        val party = Regex("""\bfor\s+(\d{1,2}|${NUMBER_WORDS.keys.joinToString("|")})\b(?!\s*(?:am|pm|:))(?:\s+(?:people|persons|of us))?""")
+        val people = party.find(text)?.groupValues?.get(1)?.let { it.toIntOrNull() ?: NUMBER_WORDS[it] }
+        // Gemma sometimes keeps "for three" or "under 800" in the dish name; the chips carry those now.
+        val dish = normalize(search.query).replace(party, " ").let { rest -> budget?.let { rest.replace(it.value, " ") } ?: rest }
+            .replace(Regex("""\s+"""), " ").trim()
+        return search.copy(
+            query = dish.ifBlank { search.query },
+            people = people?.takeIf { it in 1..MAX_PARTY },
+            budgetRupees = budget?.groupValues?.get(1)?.toIntOrNull(),
+        )
+    }
+
     fun alarmArgs(input: String): Map<String, Any>? {
         val text = normalize(input)
         val match = clockTime.find(text) ?: compactTime.find(text) ?: return null
@@ -302,10 +363,8 @@ class NilaEngine(
         }
         appToOpen(input)?.let { return NilaIntent.Call(ToolCall("launch_app", mapOf("name" to it))) }
 
-        if (listOf("food", "biryani", "dinner", "lunch").any(normalized::contains)) {
-            return NilaIntent.Call(ToolCall("search_food", mapOf("query" to input.trim())))
-        }
-
+        // Food and directions have no keyword rule: FunctionGemma reads the intent and
+        // extracts the dish or place, so "I'm starving" works as well as "find biryani".
         return NilaIntent.Converse(input)
     }
 
@@ -342,13 +401,13 @@ class NilaEngine(
             "open_app" -> apps[args["app"]]?.let { NilaResponse.OpenApp(it.first, it.second, it.third) }
                 ?: NilaResponse.Text("I can't open that app.")
             "remember_fact" -> NilaResponse.Remember(args["fact"] as String)
-            "search_food" -> NilaResponse.Choices(
-                intro = "I found two mock options that fit the request. Nothing has been ordered.",
-                items = listOf(
-                    Choice("Meghana Foods", "Chicken boneless biryani · 4.6★", "₹239", "24 min"),
-                    Choice("Mani's Dum Biryani", "Chicken dum biryani · 4.4★", "₹219", "29 min"),
-                ),
+            "search_food" -> NilaResponse.FoodSearch(
+                query = args["query"] as String,
+                // "chicken" for "chicken biryani" repeats the dish; only a word the dish doesn't already say is a preference.
+                preference = (args["preference"] as? String)?.takeIf { it.isNotBlank() && !(args["query"] as String).contains(it, ignoreCase = true) },
             )
+            "search_groceries" -> NilaResponse.GrocerySearch(args["query"] as String)
+            "get_directions" -> NilaResponse.Navigate(args["destination"] as String)
             "set_timer" -> {
                 val hours = args["hours"] as Int? ?: 0
                 val minutes = args["minutes"] as Int? ?: 0
@@ -444,6 +503,15 @@ class NilaEngine(
         val morning = hour % 12
         return if (LocalTime.of(morning, minute).isAfter(now())) morning else morning + 12
     }
+
+    /** Labelled offline fixture, shown only when Swiggy isn't connected. */
+    fun mockFood() = NilaResponse.Choices(
+        intro = "I found two mock options that fit the request. Nothing has been ordered.",
+        items = listOf(
+            Choice("Meghana Foods", "Chicken boneless biryani · 4.6★", "₹239", "24 min"),
+            Choice("Mani's Dum Biryani", "Chicken dum biryani · 4.4★", "₹219", "29 min"),
+        ),
+    )
 
     fun prepare(choice: Choice) = NilaResponse.Confirmation(
         title = "Review ${choice.title}",

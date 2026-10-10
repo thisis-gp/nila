@@ -9,11 +9,15 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -23,15 +27,18 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.sqrt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
@@ -107,7 +114,7 @@ class EndOfSpeech(private val threshold: Double = 900.0, private val quietMs: In
  * Records one spoken request from the microphone as WAV. Stops on its own after the speaker pauses, at
  * [MAX_CLIP_MS], or when [stopRequested] turns true. Returns null when nobody spoke.
  */
-@SuppressLint("MissingPermission") // VoiceMic checks RECORD_AUDIO before calling.
+@SuppressLint("MissingPermission") // VoiceCapture.toggle checks RECORD_AUDIO before calling.
 suspend fun recordSpeech(stopRequested: () -> Boolean): ByteArray? = withContext(Dispatchers.IO) {
     val minBuffer = AudioRecord.getMinBufferSize(VOICE_SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
     val chunk = ShortArray(VOICE_SAMPLE_RATE * CHUNK_MS / 1000)
@@ -139,43 +146,62 @@ suspend fun recordSpeech(stopRequested: () -> Boolean): ByteArray? = withContext
 
 enum class VoiceState { IDLE, LISTENING, UNDERSTANDING }
 
+/** Where one spoken request is: the agent screen's mic, chip and inline listening state all read it. */
+interface VoiceCapture {
+    val state: VoiceState
+    val tag: String
+    val languageName: String
+
+    /** Starts listening, or, while listening, stops and sends what was said. */
+    fun toggle()
+
+    /** Stops listening and drops whatever was being recorded or transcribed, e.g. when the person starts typing. */
+    fun cancel()
+
+    fun nextLanguage()
+}
+
 /**
- * Language chip and mic for the chat input. Tap to speak; pause or tap again to send. The clip goes to
- * [transcribe] (Gemma 4 E2B, on the phone) with the chip's language as a hint, and the text is sent like a
- * typed request, so voice gets the same rules, checks and confirmations as typing.
+ * Records one spoken request at a time. The clip goes to [transcribe] (Gemma 4 E2B, on the phone) with the
+ * chosen language as a hint, and the text goes to [onFinal], so voice gets the same rules as typing.
  */
 @Composable
-fun VoiceMic(
+fun rememberVoiceCapture(
     /** [languageName] is null for Auto, so Gemma detects the language itself. */
     transcribe: suspend (wav: ByteArray, languageName: String?) -> String?,
     onFinal: (String) -> Unit,
     onMessage: (String) -> Unit,
     /** Called as recording starts, so NILA stops talking and the mic does not record Lakshmi. */
     onListenStart: () -> Unit = {},
-) {
+): VoiceCapture {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("nila_voice", Context.MODE_PRIVATE) }
-    var tag by remember { mutableStateOf(prefs.getString(LANGUAGE_KEY, null) ?: AUTO_LANGUAGE.tag) }
-    var state by remember { mutableStateOf(VoiceState.IDLE) }
+    var currentTag by remember { mutableStateOf(prefs.getString(LANGUAGE_KEY, null) ?: AUTO_LANGUAGE.tag) }
+    var currentState by remember { mutableStateOf(VoiceState.IDLE) }
     var stopRequested by remember { mutableStateOf(false) }
-    val languageName = (chipLanguages.firstOrNull { it.tag == tag } ?: AUTO_LANGUAGE).name
+    // Each recording gets a number; cancel() moves past it so a late transcript from it is ignored.
+    val session = remember { AtomicInteger() }
+    val currentLanguageName = (chipLanguages.firstOrNull { it.tag == currentTag } ?: AUTO_LANGUAGE).name
     val latestFinal by rememberUpdatedState(onFinal)
     val latestMessage by rememberUpdatedState(onMessage)
 
     fun listen() {
         onListenStart()
         stopRequested = false
-        state = VoiceState.LISTENING
+        currentState = VoiceState.LISTENING
+        val mine = session.incrementAndGet()
         scope.launch {
-            val clip = recordSpeech { stopRequested }
+            val clip = recordSpeech { stopRequested || session.get() != mine }
+            if (session.get() != mine) return@launch
             if (clip == null) {
-                state = VoiceState.IDLE
+                currentState = VoiceState.IDLE
                 return@launch latestMessage("I didn't hear anything. Tap the mic and try again, or type instead.")
             }
-            state = VoiceState.UNDERSTANDING
-            val text = runCatching { transcribe(clip, languageName.takeUnless { tag == AUTO_LANGUAGE.tag }) }.getOrNull()?.trim()
-            state = VoiceState.IDLE
+            currentState = VoiceState.UNDERSTANDING
+            val text = runCatching { transcribe(clip, currentLanguageName.takeUnless { currentTag == AUTO_LANGUAGE.tag }) }.getOrNull()?.trim()
+            if (session.get() != mine) return@launch
+            currentState = VoiceState.IDLE
             if (text.isNullOrBlank()) latestMessage("I couldn't understand that. Try again, or type instead.") else latestFinal(text)
         }
     }
@@ -183,37 +209,57 @@ fun VoiceMic(
         if (granted) listen() else latestMessage("NILA needs microphone access to listen. You can still type.")
     }
 
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        TextButton(
-            onClick = {
-                tag = nextVoiceLanguage(tag)
-                prefs.edit().putString(LANGUAGE_KEY, tag).apply()
-            },
-            enabled = state == VoiceState.IDLE,
-            modifier = Modifier.semantics { contentDescription = "Voice language: $languageName. Tap to change." },
-        ) {
-            // While busy the chip becomes the live status, so it is clear what NILA is doing.
-            when (state) {
-                VoiceState.LISTENING -> Text("Listening…", color = Lime, fontSize = 14.sp)
-                VoiceState.UNDERSTANDING -> Text("Understanding…", color = Lime, fontSize = 14.sp)
-                VoiceState.IDLE -> Text(voiceChipLabel(tag), color = Muted, fontSize = 14.sp)
+    return object : VoiceCapture {
+        override val state get() = currentState
+        override val tag get() = currentTag
+        override val languageName get() = currentLanguageName
+
+        override fun toggle() {
+            when {
+                // A second tap means "I'm done": stop recording and send what was said.
+                currentState == VoiceState.LISTENING -> stopRequested = true
+                currentState == VoiceState.UNDERSTANDING -> Unit
+                ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED -> listen()
+                else -> askPermission.launch(Manifest.permission.RECORD_AUDIO)
             }
         }
-        IconButton(
-            onClick = {
-                when {
-                    // A second tap means "I'm done": stop recording and send what was said.
-                    state == VoiceState.LISTENING -> stopRequested = true
-                    state == VoiceState.UNDERSTANDING -> Unit
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED -> listen()
-                    else -> askPermission.launch(Manifest.permission.RECORD_AUDIO)
-                }
-            },
-        ) {
+
+        override fun cancel() {
+            if (currentState == VoiceState.IDLE) return
+            session.incrementAndGet()
+            currentState = VoiceState.IDLE
+        }
+
+        override fun nextLanguage() {
+            currentTag = nextVoiceLanguage(currentTag)
+            prefs.edit().putString(LANGUAGE_KEY, currentTag).apply()
+        }
+    }
+}
+
+/** Language chip and mic for the agent's input bar. [onMic] starts listening, or stops it while listening. */
+private val LanguageChipMinHeight = 48.dp
+
+@Composable
+fun VoiceMic(voice: VoiceCapture, onMic: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        // The language chip only shows while idle: the listening layer carries the live status, so the field
+        // beside it never gets squeezed.
+        if (voice.state == VoiceState.IDLE) {
+            Box(
+                Modifier.heightIn(min = LanguageChipMinHeight).clip(CircleShape).clickable(onClick = voice::nextLanguage)
+                    .semantics { contentDescription = "Voice language: ${voice.languageName}. Tap to change." }
+                    .padding(horizontal = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(voiceChipLabel(voice.tag), color = Muted, fontSize = 13.sp, maxLines = 1)
+            }
+        }
+        IconButton(onClick = onMic) {
             Icon(
                 painterResource(LucideR.drawable.lucide_ic_mic),
-                contentDescription = if (state == VoiceState.LISTENING) "Finish speaking" else "Speak",
-                tint = if (state == VoiceState.IDLE) Paper else Lime,
+                contentDescription = if (voice.state == VoiceState.LISTENING) "Finish speaking" else "Speak",
+                tint = if (voice.state == VoiceState.IDLE) Paper else Lime,
             )
         }
     }

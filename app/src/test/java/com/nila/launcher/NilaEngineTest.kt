@@ -117,15 +117,85 @@ class NilaEngineTest {
     }
 
     @Test
-    fun createsFoodComparison() {
-        val response = engine.respond("Order chicken biryani under 250")
-        assertTrue(response is NilaResponse.Choices)
-        assertEquals(2, (response as NilaResponse.Choices).items.size)
+    fun foodSearchHandsTheModelsQueryToTheLiveFlow() {
+        val call = ToolCall("search_food", mapOf("query" to "chicken biryani"))
+        assertEquals(NilaResponse.FoodSearch("chicken biryani"), engine.execute(NilaIntent.Call(call)))
+    }
+
+    @Test
+    fun grocerySearchHandsTheModelsQueryToTheComparison() {
+        val call = ToolCall("search_groceries", mapOf("query" to "milk 1 litre"))
+        assertEquals(NilaResponse.GrocerySearch("milk 1 litre"), engine.execute(NilaIntent.Call(call)))
+    }
+
+    @Test
+    fun directionsHandTheModelsDestinationToMaps() {
+        val call = ToolCall("get_directions", mapOf("destination" to "Indiranagar"))
+        assertEquals(NilaResponse.Navigate("Indiranagar"), engine.execute(NilaIntent.Call(call)))
+    }
+
+    @Test
+    fun readsPartySizeAndBudgetFromTheUsersWords() {
+        val search = NilaResponse.FoodSearch("dinner", preference = "light")
+        assertEquals(
+            search.copy(people = 3, budgetRupees = 800),
+            engine.foodConstraints("Find a light dinner for three under ₹800", search),
+        )
+        assertEquals(search.copy(people = 2), engine.foodConstraints("biryani for 2 people", search))
+        // The dish name keeps only the dish when the model leaves the party size in it.
+        assertEquals(
+            NilaResponse.FoodSearch("dinner", people = 3, budgetRupees = 800),
+            engine.foodConstraints("dinner for three under 800", NilaResponse.FoodSearch("dinner for three")),
+        )
+        // A time is not a party size.
+        assertEquals(search, engine.foodConstraints("order dinner for 8 pm", search))
+    }
+
+    @Test
+    fun bestFitPutsPlacesInsideTheBudgetFirst() {
+        fun place(name: String, rating: String, cost: String, eta: String) =
+            FoodRestaurant(name, name, "", rating, eta, "", cost, null, "", open = true)
+        val pricey = place("Social", "4.6", "₹1200 for two", "40-50 mins")
+        val cheap = place("Malgudi", "4.4", "₹250 for two", "35-40 mins")
+        val fast = place("Blues", "4.1", "₹400 for two", "15-20 mins")
+        val picks = bestFits(listOf(pricey, cheap, fast), NilaResponse.FoodSearch("biryani", people = 3, budgetRupees = 800))
+        assertEquals(listOf(cheap, fast, pricey), picks.map { it.first })
+        assertEquals("About ₹375 for 3, inside ₹800 · 35-40 mins · ★ 4.4", picks.first().second)
+        assertTrue(picks.last().second.startsWith("Over your ₹800 budget"))
+    }
+
+    @Test
+    fun closestDishMatchBeatsAHigherRatedNearMiss() {
+        fun dish(name: String, rating: String, eta: String) = FoodDish(
+            FoodItem(name, name, "₹200", true, null, "", false, "{}"),
+            FoodRestaurant(name, "Place $name", "", rating, eta, "", "", null, "", open = true),
+            "",
+        )
+        val wrap = dish("Hummus And Chipotle Paneer Wrap", "4.6", "10-15 mins")
+        val roll = dish("Paneer Tikka Roll", "4.5", "20-25 mins")
+        val ranked = rankDishes(listOf(wrap, roll), NilaResponse.FoodSearch("paneer roll"))
+        assertEquals(listOf(roll.item, wrap.item), ranked.map { it.item })
+        assertTrue(ranked.first().reason.startsWith("Closest match"))
+        assertEquals("TOP PICK", pickLabel(NilaResponse.FoodSearch("paneer roll")))
+        assertEquals("BEST FIT", pickLabel(NilaResponse.FoodSearch("paneer roll", budgetRupees = 300)))
+    }
+
+    @Test
+    fun zomatoMatchingNeedsTheSameRestaurantAndDish() {
+        assertTrue(sameRestaurant("Paradise Biryani", "Paradise Biryani - A Legend Since 1953"))
+        assertTrue(!sameRestaurant("Paradise Biryani", "Biryani Paradise Kitchen"))
+        assertTrue(sameDish("Paneer Tikka Roll", "Paneer Tikka Roll"))
+        assertTrue(sameDish("Chicken Biryani (pulav) · Regular (serves 1)", "Chicken Biryani (Pulav)"))
+    }
+
+    @Test
+    fun foodIsLeftToTheModelNotKeywords() {
+        assertEquals(NilaIntent.Converse("I'm starving, get me biryani"), engine.route("I'm starving, get me biryani"))
     }
 
     @Test
     fun preparesFoodChoiceWithoutOrdering() {
-        val choices = engine.respond("Order chicken biryani under 250") as NilaResponse.Choices
+        val choices = engine.mockFood()
 
         assertEquals(
             NilaResponse.Confirmation(

@@ -1,12 +1,12 @@
 package com.nila.launcher
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,12 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,10 +32,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.composables.icons.lucide.R as LucideR
+
+private val ScreenTitleSize = 34.sp
+private val SecondaryActionHeight = 48.dp
 
 @Composable
 internal fun NilaScreenCatalogue(
@@ -50,6 +50,7 @@ internal fun NilaScreenCatalogue(
     rememberedFact: String?,
     onChooseDefaultHome: () -> Unit,
     onForgetMemory: () -> Unit,
+    accounts: List<ServiceAccount>,
 ) {
     when (screen) {
         NilaScreen.Welcome -> WelcomeScreen(onOpen)
@@ -64,7 +65,7 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Memory -> MemoryScreen(onOpen, onBack, rememberedFact, onForgetMemory)
         NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
-        NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome)
+        NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, accounts)
         NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
         NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps -> Unit
     }
@@ -76,7 +77,7 @@ private fun WelcomeScreen(onOpen: (NilaScreen) -> Unit) {
         Modifier.fillMaxSize().background(Ink).safeDrawingPadding().padding(24.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text("NILA  ·  SETUP 1/3", color = Lime, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+        SectionLabel("NILA  ·  Setup 1/3", color = Lime)
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
             NilaMark(168.dp, Modifier.align(Alignment.CenterHorizontally))
             ScreenTitle("Your phone,\nwithout the hunt.")
@@ -84,7 +85,7 @@ private fun WelcomeScreen(onOpen: (NilaScreen) -> Unit) {
         }
         Column {
             PrimaryButton("Set up NILA") { onOpen(NilaScreen.Permissions) }
-            Text("PRIVATE BY DESIGN · ON YOUR DEVICE", Modifier.fillMaxWidth().padding(top = 12.dp), color = Muted, fontSize = 11.sp)
+            SectionLabel("Private by design · on your device", Modifier.fillMaxWidth().padding(top = 12.dp))
         }
     }
 }
@@ -104,7 +105,7 @@ private fun PermissionsScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) 
 private fun VoiceScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("VOICE MODE", onOpen, onBack) {
     Spacer(Modifier.height(12.dp))
     NilaMark(164.dp, Modifier.align(Alignment.CenterHorizontally), voice = true)
-    Text("VOICE PREVIEW · NOT LISTENING", Modifier.align(Alignment.CenterHorizontally), color = Lime, fontSize = 11.sp)
+    SectionLabel("Voice preview · not listening", Modifier.align(Alignment.CenterHorizontally), color = Lime)
     ScreenTitle("“Find chicken biryani for three under ₹800.”")
     BodyText("Lakshmi voice and on-device speech packs are not connected in this build. Use the typed demo for reliable judging.")
     PrimaryButton("Use sample request") { onOpen(NilaScreen.Food) }
@@ -112,8 +113,8 @@ private fun VoiceScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page
 
 @Composable
 private fun AnswerScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("SIMPLE ANSWER", onOpen, onBack) {
-    Text("18% OF ₹4,250", color = Lime, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-    Text("₹765", fontSize = 64.sp, lineHeight = 68.sp, fontWeight = FontWeight.Black)
+    SectionLabel("18% of ₹4,250", color = Lime)
+    SerifTitle("₹765", size = 64.sp)
     BodyText("4,250 × 0.18 = 765")
     SectionCard("Split the full amount", "Ask NILA how many people", "READ")
     SectionCard("Set an alarm", "Use an Android device action", "PREPARE")
@@ -140,14 +141,12 @@ private fun FoodScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page(
 
 @Composable
 private fun PreparedOrderScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("PREPARED · NOT ORDERED", onOpen, onBack) {
-    Text("CONFIRMATION REQUIRED", color = Orange, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    SectionLabel("Confirmation required", color = Orange)
     ScreenTitle("Review the exact action.")
     SectionCard("3 × Boneless chicken biryani", "Mock provider · Home · includes simulated fees", "₹717")
-    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF321F19))) {
-        Column(Modifier.padding(16.dp)) {
-            Text("NILA WILL", color = Orange, fontWeight = FontWeight.Bold)
-            BodyText("Record approval for this simulation. No real provider, payment, order or personal data is involved.")
-        }
+    NilaCard(color = CommitInk) {
+        SectionLabel("NILA will", color = Orange)
+        BodyText("Record approval for this simulation. No real provider, payment, order or personal data is involved.")
     }
     PrimaryButton("Confirm simulation") { onOpen(NilaScreen.ActionResult) }
     SecondaryButton("Change order", onClick = onBack)
@@ -159,7 +158,7 @@ private fun ActionResultScreen(onOpen: (NilaScreen) -> Unit) = Page("ACTION RESU
         Modifier.size(72.dp).background(Lime, RoundedCornerShape(36.dp)),
         contentAlignment = Alignment.Center,
     ) { Text("✓", color = Ink, fontSize = 34.sp, fontWeight = FontWeight.Black) }
-    Text("SIMULATION COMPLETE", color = Lime, fontWeight = FontWeight.Bold)
+    SectionLabel("Simulation complete", color = Lime)
     ScreenTitle("Prepared.\nYou stayed in control.")
     BodyText("The demo stopped before a real provider or payment. No external data was shared.")
     SectionCard("NILA-DEMO-2048", "Meghana Foods · ₹717", "SIMULATED")
@@ -173,11 +172,9 @@ private fun PeopleScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Pag
     BodyText("Demo content only. NILA has not read notifications, contacts or messages on this device.")
     SectionCard("Arjun Menon", "“Are we still meeting at the studio?” · mock WhatsApp", "MOCK · 4 MIN")
     SectionCard("Devananda", "Sent 3 launcher references · mock Messages", "MOCK · 21 MIN")
-    Card(colors = CardDefaults.cardColors(containerColor = CardInk)) {
-        Column(Modifier.padding(16.dp)) {
-            Text("DRAFT · NOT SENT", color = Lime, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            BodyText("Running a little late. I’ll be at the studio by 6:30.", Paper)
-        }
+    NilaCard {
+        SectionLabel("Draft · not sent", color = Lime)
+        BodyText("Running a little late. I’ll be at the studio by 6:30.", Paper)
     }
     SecondaryButton("Continue in NILA") { onOpen(NilaScreen.Home) }
 }
@@ -221,16 +218,41 @@ private fun ActivityScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = P
     SectionCard("Message to Arjun", "Stopped before sending", "MOCK · CANCELLED")
 }
 
+/** A signed-in service shown in Settings: Swiggy for ordering, Zomato for comparing. */
+internal data class ServiceAccount(
+    val name: String,
+    val detail: String,
+    val connected: Boolean,
+    val onConnect: () -> Unit,
+    val onDisconnect: () -> Unit,
+)
+
 @Composable
-private fun SettingsScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit, onChooseDefaultHome: () -> Unit) = Page("SETTINGS", onOpen, onBack) {
+private fun SettingsScreen(
+    onOpen: (NilaScreen) -> Unit,
+    onBack: () -> Unit,
+    onChooseDefaultHome: () -> Unit,
+    accounts: List<ServiceAccount>,
+) = Page("SETTINGS", onOpen, onBack) {
     ScreenTitle("NILA is yours.")
     BodyText("Language, voice, privacy and intelligence stay understandable.")
     PrimaryButton("Choose default Home app") { onChooseDefaultHome() }
     PrimaryButton("Voice languages · English · हिंदी · മലയാളം") { onOpen(NilaScreen.Languages) }
+    SectionLabel("Accounts", Modifier.padding(top = 8.dp))
+    accounts.forEach { account ->
+        SectionCard("${account.name} account", account.detail, if (account.connected) "CONNECTED" else "NOT CONNECTED")
+        if (account.connected) {
+            SecondaryButton("Disconnect ${account.name}") { account.onDisconnect() }
+        } else {
+            PrimaryButton("Connect ${account.name}") { account.onConnect() }
+        }
+    }
+    SectionLabel("Voice, memory and consent", Modifier.padding(top = 8.dp))
     SectionCard("Lakshmi voice", "Android on-device voice candidate", "NOT CONNECTED")
     SectionCard("Memory", "Typed demo fact stays in app storage", "LOCAL")
     SectionCard("Commit actions", "Pay, send, book, delete or share", "ALWAYS CONFIRM")
     PrimaryButton("Permission centre") { onOpen(NilaScreen.Permissions) }
+    SectionLabel("More", Modifier.padding(top = 8.dp))
     SecondaryButton("Welcome preview") { onOpen(NilaScreen.Welcome) }
     SecondaryButton("Capabilities") { onOpen(NilaScreen.Capabilities) }
     SecondaryButton("Memory") { onOpen(NilaScreen.Memory) }
@@ -279,14 +301,18 @@ private fun Page(
     Column(
         Modifier.fillMaxSize().background(Ink).safeDrawingPadding().padding(horizontal = 18.dp, vertical = 12.dp),
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (onBack != null) RoundIconButton(LucideR.drawable.lucide_ic_arrow_left, "Back", onBack) else Spacer(Modifier.size(44.dp))
-            Text(title, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-            RoundIconButton(LucideR.drawable.lucide_ic_house, "Home") { onOpen(NilaScreen.Home) }
+        Box(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+            if (onBack != null) RoundButton(LucideR.drawable.lucide_ic_chevron_left, "Back", onBack, Modifier.align(Alignment.CenterStart))
+            Text(
+                title,
+                color = LabelInk,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                fontSize = 10.sp,
+                letterSpacing = 0.15.em,
+                modifier = Modifier.align(Alignment.Center),
+            )
+            RoundButton(LucideR.drawable.lucide_ic_house, "Home", { onOpen(NilaScreen.Home) }, Modifier.align(Alignment.CenterEnd))
         }
         Column(
             Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 18.dp),
@@ -297,55 +323,30 @@ private fun Page(
 }
 
 @Composable
-private fun ScreenTitle(value: String, color: Color = Paper) = Text(
-    value,
-    color = color,
-    fontSize = 32.sp,
-    lineHeight = 34.sp,
-    fontWeight = FontWeight.SemiBold,
-)
+private fun ScreenTitle(value: String) = SerifTitle(value, size = ScreenTitleSize)
 
 @Composable
 private fun BodyText(value: String, color: Color = Muted) = Text(value, color = color, lineHeight = 20.sp)
 
 @Composable
 private fun SectionCard(title: String, detail: String, status: String) {
-    Card(
-        Modifier.fillMaxWidth().border(1.dp, Color(0xFF3A3A35), RoundedCornerShape(18.dp)),
-        colors = CardDefaults.cardColors(containerColor = Panel),
-        shape = RoundedCornerShape(18.dp),
-    ) {
-        Column(Modifier.padding(15.dp)) {
-            Text(status, color = Lime, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-            Text(title, Modifier.padding(top = 7.dp), fontWeight = FontWeight.Bold)
-            Text(detail, Modifier.padding(top = 4.dp), color = Muted, fontSize = 12.sp)
-        }
+    NilaCard {
+        SectionLabel(status, color = Lime)
+        Text(title, color = Paper, fontWeight = FontWeight.Bold)
+        Text(detail, color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
     }
 }
 
 @Composable
-private fun PrimaryButton(label: String, onClick: () -> Unit) = Button(
-    onClick = onClick,
-    modifier = Modifier.fillMaxWidth().height(52.dp),
-    shape = RoundedCornerShape(16.dp),
-) { Text(label) }
+private fun PrimaryButton(label: String, onClick: () -> Unit) = PrimaryAction(label, onClick)
 
 @Composable
 private fun SecondaryButton(label: String, onClick: () -> Unit) = OutlinedButton(
     onClick = onClick,
-    modifier = Modifier.fillMaxWidth().height(48.dp),
-    shape = RoundedCornerShape(16.dp),
-) { Text(label) }
-
-@Composable
-private fun RoundIconButton(
-    icon: Int,
-    label: String,
-    onClick: () -> Unit,
-) = IconButton(
-    onClick = onClick,
-    modifier = Modifier.size(44.dp).background(Panel, CircleShape),
-) { Icon(painterResource(icon), contentDescription = label, tint = Paper, modifier = Modifier.size(20.dp)) }
+    modifier = Modifier.fillMaxWidth().height(SecondaryActionHeight),
+    shape = RoundedCornerShape(ActionRadius),
+    border = BorderStroke(1.dp, Stroke),
+) { Text(label, color = Paper) }
 
 @Composable
 private fun NilaMark(size: androidx.compose.ui.unit.Dp, modifier: Modifier = Modifier, voice: Boolean = false) {
