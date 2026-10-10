@@ -183,17 +183,20 @@ private fun MemoryScreen(
     facts: List<MemoryFact>,
     onForgetFact: (String) -> Unit,
     onForgetAll: () -> Unit,
-) = Page("MEMORY · ON DEVICE", onOpen, onBack) {
-    ScreenTitle("What NILA\nremembers.")
-    BodyText("Saved facts stay on this device and can be removed here.")
+) = Page("MY NILA · ON THIS PHONE", onOpen, onBack) {
+    ScreenTitle("My NILA")
+    BodyText("What NILA has learned about you and your people from your chats. It stays on this phone, and you can forget any of it here.")
     if (facts.isEmpty()) {
-        SectionCard("No saved memories", "Tell NILA ‘remember …’ to save a fact.", "EMPTY")
+        SectionCard("Nothing yet", "Just chat: \"my wife loves butter chicken\" or \"I'm vegetarian on Tuesdays\".", "EMPTY")
     } else {
-        facts.forEach { fact ->
-            NilaCard {
-                SectionLabel(fact.kind.label.uppercase(), color = Lime)
-                Text(fact.text, color = Paper, fontWeight = FontWeight.Bold)
-                TextAction("Forget", onClick = { onForgetFact(fact.id) })
+        factsByPerson(facts).forEach { (about, known) ->
+            SectionLabel(aboutLabel(about), Modifier.padding(top = 8.dp))
+            known.forEach { fact ->
+                NilaCard {
+                    SectionLabel(fact.kind.label.uppercase(), color = Lime)
+                    Text(fact.text, color = Paper, fontWeight = FontWeight.Bold)
+                    TextAction("Forget", onClick = { onForgetFact(fact.id) })
+                }
             }
         }
         SecondaryButton("Forget everything") { onForgetAll() }

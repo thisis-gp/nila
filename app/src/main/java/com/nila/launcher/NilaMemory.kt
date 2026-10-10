@@ -23,14 +23,82 @@ enum class MemoryKind(val label: String) {
     }
 }
 
-/** One thing the user asked NILA to remember. Stays on the phone. */
-data class MemoryFact(val id: String, val text: String, val kind: MemoryKind, val savedAt: Long)
+/** One thing NILA knows about the user or someone close to them ([about]: "me", "wife", "amma"). Stays on the phone. */
+data class MemoryFact(val id: String, val text: String, val kind: MemoryKind, val savedAt: Long, val about: String = ME)
 
-internal fun newFact(text: String, kind: MemoryKind, savedAt: Long) = MemoryFact(UUID.randomUUID().toString(), text.trim(), kind, savedAt)
+internal const val ME = "me"
+
+internal fun newFact(text: String, kind: MemoryKind, savedAt: Long, about: String = ME) =
+    MemoryFact(UUID.randomUUID().toString(), text.trim(), kind, savedAt, aboutKey(about))
 
 /** Adds [fact] unless it is blank or the same text (ignoring case, spacing and a closing full stop) is already saved. */
 internal fun withFact(facts: List<MemoryFact>, fact: MemoryFact): List<MemoryFact> =
-    if (fact.text.isBlank() || facts.any { sameText(it.text, fact.text) }) facts else facts + fact
+    if (fact.text.isBlank() || facts.any { sameText(it.text, fact.text) && it.about == fact.about }) facts else facts + fact
+
+private val SelfWords = setOf("", "me", "i", "myself", "user", "the user", "self", "you", "mine")
+
+/** Who a fact is about, as one lowercase key: "My Wife" and "wife" are the same person; "I" is "me". */
+internal fun aboutKey(raw: String?): String {
+    val key = raw.orEmpty().trim().lowercase().removePrefix("my ").removeSuffix("'s").trim()
+    return if (key in SelfWords) ME else key
+}
+
+/** "You", or the person as written: "Wife", "Amma". */
+internal fun aboutLabel(about: String): String = if (about == ME) "You" else about.replaceFirstChar(Char::uppercase)
+
+/** Facts grouped by person, the user first, then everyone else in the order NILA learned about them. */
+internal fun factsByPerson(facts: List<MemoryFact>): List<Pair<String, List<MemoryFact>>> =
+    facts.groupBy { it.about }.toList().sortedWith(compareBy<Pair<String, List<MemoryFact>>> { it.first != ME }.thenBy { p -> p.second.minOf { it.savedAt } })
+
+private val PersonalCue = Regex(
+    """\b(my|our)\s+(wife|husband|partner|son|daughter|kids?|children|mom|mother|amma|dad|father|appa|brother|sister|friend|boss|grandma|grandpa|baby)\b|""" +
+        """\b(i|i'm|i am)\s+(love|like|hate|prefer|am allergic|allergic|vegetarian|vegan|don't eat|do not eat|can't eat)\b|""" +
+        """\bmy\s+(favourite|favorite|birthday|anniversary|name|diet|allergy)\b|\b(favourite|favorite)\b""",
+)
+
+/** True when a message may carry a personal detail worth keeping; only then is Gemma asked to pick it out. */
+internal fun mightBePersonal(text: String): Boolean = PersonalCue.containsMatchIn(text.lowercase())
+
+/** A saved fact must be made of the user's own words: every subject word of it appears in what they said. */
+internal fun groundedFact(fact: String, said: String): Boolean {
+    val subject = factWords(fact).filter { it !in RelationWords }
+    return subject.isNotEmpty() && subject.all { mentions(said, it) }
+}
+
+private val RelationWords = setOf(
+    "wife", "husband", "partner", "son", "daughter", "kid", "kids", "children", "mom", "mother", "amma", "dad", "father",
+    "appa", "brother", "sister", "friend", "boss", "grandma", "grandpa", "baby", "user", "she", "he", "her", "his", "their",
+)
+
+private val FavouriteOf = Regex("""\bmy\s+([\p{L}]+?)(?:'s|s)?\s+(?:favourite|favorite|usual)(?:\s+(?:food|dish|meal|order))?\b""")
+
+/** "order my wife's favourite" → the person ("wife"); null when no one's favourite is asked for. */
+internal fun favouriteOf(text: String): String? = FavouriteOf.find(text.lowercase())?.groupValues?.get(1)?.let(::aboutKey)
+
+/** The dish or item [about] likes most recently, in the fact's own words: "butter chicken". */
+internal fun favouriteFor(about: String, facts: List<MemoryFact>): String? =
+    facts.filter { it.about == about && it.kind == MemoryKind.Preference }.maxByOrNull { it.savedAt }
+        ?.let { factWords(it.text).filter { w -> w !in RelationWords }.joinToString(" ").ifBlank { null } }
+
+/** "order my wife's favourite" → "order butter chicken", or null when NILA doesn't know it yet. */
+internal fun withFavourite(text: String, facts: List<MemoryFact>): String? {
+    val about = favouriteOf(text) ?: return null
+    val dish = favouriteFor(about, facts) ?: return null
+    return FavouriteOf.replace(text.lowercase(), dish)
+}
+
+private val AskAbout = Regex("""\bwhat do you know about\s+(?:my\s+)?([\p{L} ]+?)\s*\??$""")
+
+/** "what do you know about my wife" → "wife"; "…about me" → "me". */
+internal fun askedAbout(text: String): String? = AskAbout.find(text.lowercase().trim())?.groupValues?.get(1)?.let(::aboutKey)
+
+/** Everything NILA knows about one person, or that it knows nothing yet. */
+internal fun personSummary(about: String, facts: List<MemoryFact>): String {
+    val known = facts.filter { it.about == about }
+    val who = if (about == ME) "you" else "your $about"
+    return if (known.isEmpty()) "I don't know anything about $who yet. Tell me, like \"my wife loves butter chicken\"."
+    else "About $who:\n" + known.joinToString("\n") { "• ${it.text} (${it.kind.label.lowercase()})" }
+}
 
 /** The single fact older builds saved joins the list as an Other fact. */
 internal fun migrated(facts: List<MemoryFact>, legacy: String?, savedAt: Long): List<MemoryFact> =
@@ -43,7 +111,10 @@ private fun comparable(text: String) = text.trim().lowercase().replace(Regex("""
 /** The answer to "what do you remember": every fact with its kind, or a plain "nothing yet". */
 internal fun memorySummary(facts: List<MemoryFact>): String =
     if (facts.isEmpty()) "You have not asked me to remember anything yet."
-    else "You asked me to remember:\n" + facts.joinToString("\n") { "• ${it.text} (${it.kind.label.lowercase()})" }
+    else "You asked me to remember:\n" + facts.joinToString("\n") { fact ->
+        val who = if (fact.about == ME) "" else "${aboutLabel(fact.about)}: "
+        "• $who${fact.text} (${fact.kind.label.lowercase()})"
+    }
 
 /**
  * The facts, as a JSON list in the `nila_memory` preferences. Reads migrate the old single `fact` key once.
@@ -58,8 +129,8 @@ internal class NilaMemory(context: Context) {
         return migrated(stored, legacy, System.currentTimeMillis()).also(::write)
     }
 
-    fun save(text: String, kind: MemoryKind): List<MemoryFact> =
-        withFact(facts(), newFact(text, kind, System.currentTimeMillis())).also(::write)
+    fun save(text: String, kind: MemoryKind, about: String = ME): List<MemoryFact> =
+        withFact(facts(), newFact(text, kind, System.currentTimeMillis(), about)).also(::write)
 
     fun delete(id: String): List<MemoryFact> = facts().filterNot { it.id == id }.also(::write)
 
@@ -71,7 +142,7 @@ internal class NilaMemory(context: Context) {
 
     private fun encode(facts: List<MemoryFact>): String = JSONArray().apply {
         facts.forEach { fact ->
-            put(JSONObject().put("id", fact.id).put("text", fact.text).put("kind", fact.kind.name).put("savedAt", fact.savedAt))
+            put(JSONObject().put("id", fact.id).put("text", fact.text).put("kind", fact.kind.name).put("savedAt", fact.savedAt).put("about", fact.about))
         }
     }.toString()
 
@@ -81,7 +152,7 @@ internal class NilaMemory(context: Context) {
         return (0 until list.length()).mapNotNull { i ->
             val o = list.optJSONObject(i) ?: return@mapNotNull null
             val text = o.optString("text").ifBlank { return@mapNotNull null }
-            MemoryFact(o.optString("id").ifBlank { UUID.randomUUID().toString() }, text, MemoryKind.from(o.optString("kind")), o.optLong("savedAt"))
+            MemoryFact(o.optString("id").ifBlank { UUID.randomUUID().toString() }, text, MemoryKind.from(o.optString("kind")), o.optLong("savedAt"), aboutKey(o.optString("about")))
         }
     }
 
@@ -135,7 +206,7 @@ private fun mentions(text: String, word: String): Boolean {
 
 /** "You like filter coffee" when [name] is what a Preference fact is about; null when no Preference fits. */
 internal fun memoryBoost(name: String, facts: List<MemoryFact>): String? =
-    facts.filter { it.kind == MemoryKind.Preference }.firstNotNullOfOrNull { fact ->
+    facts.filter { it.kind == MemoryKind.Preference && it.about == ME }.firstNotNullOfOrNull { fact ->
         val subject = factWords(fact.text).ifEmpty { return@firstNotNullOfOrNull null }
         val matched = subject.filter { mentions(name, it) }
         matched.takeIf { it.size >= minOf(STRONG_MATCH_WORDS, subject.size) }?.let { "You like ${it.joinToString(" ")}" }
@@ -143,7 +214,7 @@ internal fun memoryBoost(name: String, facts: List<MemoryFact>): String? =
 
 /** True when any word of a Preference fact is in [name]; groceries are already narrowed by the search word. */
 internal fun sharesPreferenceWord(name: String, facts: List<MemoryFact>): Boolean =
-    facts.filter { it.kind == MemoryKind.Preference }.flatMap { factWords(it.text) }.any { mentions(name, it) }
+    facts.filter { it.kind == MemoryKind.Preference && it.about == ME }.flatMap { factWords(it.text) }.any { mentions(name, it) }
 
 /** "check: peanuts" when [text] names an allergen from an Allergy fact; null otherwise. */
 internal fun allergyCheck(text: String, facts: List<MemoryFact>): String? =
@@ -161,7 +232,7 @@ private val VegWord = Regex("""(?<!non[- ])\b(veg|vegetarian|vegan)\b""")
 
 /** True when a Diet fact says veg and its day or time, if it names one, is now. */
 internal fun wantsVeg(facts: List<MemoryFact>, now: LocalDateTime): Boolean =
-    facts.any { it.kind == MemoryKind.Diet && VegWord.containsMatchIn(it.text.lowercase()) && appliesAt(it.text, now) }
+    facts.any { it.kind == MemoryKind.Diet && it.about == ME && VegWord.containsMatchIn(it.text.lowercase()) && appliesAt(it.text, now) }
 
 /** What memory changes about one food search, worked out once when the search runs. */
 internal data class FoodMemory(val facts: List<MemoryFact>, val vegPreferred: Boolean) {
@@ -178,7 +249,7 @@ internal data class MemorySuggestion(val label: String, val request: String)
 /** In the morning, the newest Preference as "Filter coffee for breakfast?"; null at other times or with nothing liked. */
 internal fun morningSuggestion(facts: List<MemoryFact>, now: LocalTime): MemorySuggestion? {
     if (now.hour !in SUGGESTION_START_HOUR until SUGGESTION_END_HOUR) return null
-    val liked = facts.filter { it.kind == MemoryKind.Preference }.maxByOrNull { it.savedAt } ?: return null
+    val liked = facts.filter { it.kind == MemoryKind.Preference && it.about == ME }.maxByOrNull { it.savedAt } ?: return null
     val subject = factWords(liked.text).joinToString(" ").ifBlank { return null }
     return MemorySuggestion("${subject.replaceFirstChar(Char::uppercase)} for breakfast?", "order $subject")
 }
@@ -193,6 +264,6 @@ internal fun chatFacts(facts: List<MemoryFact>): List<MemoryFact> =
 /** The chat persona with the user's own facts appended; unchanged when there are none. */
 internal fun personaWith(persona: String, facts: List<MemoryFact>): String {
     val chosen = chatFacts(facts).ifEmpty { return persona }
-    return persona + "\nThings the user told you: " + chosen.joinToString("; ") { it.text } +
+    return persona + "\nThings the user told you: " + chosen.joinToString("; ") { if (it.about == ME) it.text else "${it.about}: ${it.text}" } +
         ".\nUse them naturally when they help, and never invent other facts about the user."
 }

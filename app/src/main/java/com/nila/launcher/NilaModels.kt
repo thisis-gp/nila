@@ -277,7 +277,44 @@ class NilaBrain(
         return null
     }
 
-    suspend fun respond(input: String): NilaResponse = withContext(llm) {
+    /**
+     * My NILA first: "what do you know about my wife" answers from memory, and "order my wife's favourite"
+     * becomes "order butter chicken" before anything routes it. Unknown favourites are asked for, never guessed.
+     */
+    suspend fun respond(input: String): NilaResponse {
+        askedAbout(input)?.let { return NilaResponse.Text(personSummary(it, facts())) }
+        val who = favouriteOf(input) ?: return answerFor(input)
+        val resolved = withFavourite(input, facts())
+            ?: return NilaResponse.Text("I don't know your $who's favourite yet. Tell me, like \"my $who loves butter chicken\".")
+        return answerFor(resolved)
+    }
+
+    /**
+     * Picks a lasting personal detail out of an ordinary message ("my wife loves butter chicken") for My NILA.
+     * Only messages that look personal reach Gemma, and the fact must be made of the user's own words.
+     */
+    suspend fun learn(input: String): NilaResponse.Remember? = withContext(llm) {
+        if (!mightBePersonal(input) || favouriteOf(input) != null || askedAbout(input) != null) return@withContext null
+        // "remember that …" was already saved by the rules.
+        if (Regex("""^\s*(please\s+)?remember\b""", RegexOption.IGNORE_CASE).containsMatchIn(input)) return@withContext null
+        val model = assistant ?: return@withContext null
+        val proposed = runCatching {
+            model.createConversation(
+                ConversationConfig(
+                    systemInstruction = Contents.of(LEARN),
+                    samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0),
+                    tools = listOfNotNull(engine.capabilities[REMEMBER]).map { tool(CapabilityTool(it)) },
+                    automaticToolCalling = false,
+                ),
+            ).use { it.sendMessage(input) }
+        }.getOrNull()?.toolCalls?.firstOrNull { it.name == REMEMBER } ?: return@withContext null
+        val fact = (proposed.arguments["fact"] as? String)?.trim().orEmpty()
+        trace("my-nila learn grounded=${groundedFact(fact, input)}")
+        if (!groundedFact(fact, input)) return@withContext null
+        NilaResponse.Remember(fact, MemoryKind.from(proposed.arguments["kind"] as? String), aboutKey(proposed.arguments["about"] as? String))
+    }
+
+    private suspend fun answerFor(input: String): NilaResponse = withContext(llm) {
         val start = SystemClock.elapsedRealtime()
         fun done(path: String, response: NilaResponse) = response.also {
             Log.i(TAG, "path=$path ms=${SystemClock.elapsedRealtime() - start} response=${it::class.simpleName}")
@@ -358,7 +395,10 @@ class NilaBrain(
             )?.use { it.sendMessage(input) }
         }.getOrNull()?.toolCalls?.firstOrNull { it.name == REMEMBER }
         trace("gemma remember kind=${proposed?.arguments?.get("kind") != null}")
-        return saved.copy(kind = MemoryKind.from(proposed?.arguments?.get("kind") as? String))
+        return saved.copy(
+            kind = MemoryKind.from(proposed?.arguments?.get("kind") as? String),
+            about = aboutKey(proposed?.arguments?.get("about") as? String),
+        )
     }
 
     /**
@@ -504,6 +544,15 @@ class NilaBrain(
         const val TAG = "NilaBrain"
         const val HISTORY_TURNS = 4
         const val REMEMBER = "remember_fact"
+
+        /** For My NILA: keep a lasting personal detail from an ordinary message, or nothing. */
+        val LEARN = """
+            Read the user's message. If it states a lasting personal detail about the user or someone close to them,
+            such as what they like or their favourite food, how they eat, an allergy, a birthday, a name, a routine or a place,
+            call remember_fact once: fact is a short phrase in the user's own words (like "loves butter chicken"),
+            kind is its kind, and about is who it is about (me for the user, else the person as the user calls them, like wife or amma).
+            If the message is only a request or a question, or has no such detail, do not call any tool.
+        """.trimIndent()
         const val ALARM_HELP = "I couldn't read that time, so no alarm is set. Try \"set an alarm for 1:30 pm\"."
         const val NO_ACTION_TAKEN = "I haven't done that. Chat can't take actions. To set an alarm, say a time like \"set an alarm for 1:30 pm\" and tap Set alarm on the card."
         const val NOT_LOADED_YET = "I'm still starting up on this phone — give it a moment and try again. " +

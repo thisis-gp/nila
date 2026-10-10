@@ -432,7 +432,7 @@ private fun NilaApp(resumeVersion: Int) {
                     else -> performNow(context, routed)
                 }
             }
-            if (response is NilaResponse.Remember) facts = memory.save(response.fact, response.kind)
+            if (response is NilaResponse.Remember) facts = memory.save(response.fact, response.kind, response.about)
             turns[pendingIndex] = Turn(prompt, response)
             if (speakReply) spokenText(response)?.let(lakshmi::speak)
             speakReply = false
@@ -440,6 +440,11 @@ private fun NilaApp(resumeVersion: Int) {
             justReplied = true
             delay(900) // the dock head visibly "speaks" for a beat right after a reply lands
             justReplied = false
+            // After the reply is on screen: keep any personal detail the message carried, and say so.
+            if (response !is NilaResponse.Remember) brain.learn(prompt)?.let { learned ->
+                facts = memory.save(learned.fact, learned.kind, learned.about)
+                turns += Turn("My NILA", learned)
+            }
         }
     }
 
@@ -630,7 +635,7 @@ private fun NilaApp(resumeVersion: Int) {
 }
 
 /** Turns NILA adds on its own (a provider follow-up, an action's result) carry a label, not something the person said. */
-private val FollowUpLabels = setOf("Zepto", "Zepto tools result", "Action result", "Prepared action")
+private val FollowUpLabels = setOf("Zepto", "Zepto tools result", "Action result", "Prepared action", "My NILA")
 
 internal fun isFollowUpTurn(label: String): Boolean = label in FollowUpLabels
 
@@ -915,9 +920,14 @@ private fun ResponseView(
         is NilaResponse.NeedsConfirmation -> CommitCard(response) { confirm(response.token) }
         is NilaResponse.Text -> AnswerCard(response.value)
         is NilaResponse.Remember -> NilaCard {
-            SectionLabel("Remembered", color = Lime)
-            Text("I'll remember: ${response.fact}", color = Paper, fontSize = 15.sp, lineHeight = 22.sp)
-            Text(response.kind.label, color = Muted, fontSize = 12.sp)
+            SectionLabel("Saved to My NILA", color = Lime)
+            Text(
+                if (response.about == ME) "I'll remember: ${response.fact}" else "${aboutLabel(response.about)}: ${response.fact}",
+                color = Paper,
+                fontSize = 15.sp,
+                lineHeight = 22.sp,
+            )
+            Text("${response.kind.label} · on this phone · forget it in Settings › My NILA", color = Muted, fontSize = 12.sp)
         }
         // Only reached if a dismissal was not confirmed through the card; it is never sent without confirmation.
         is NilaResponse.DismissAlarm -> AnswerCard("This alarm was not turned off.")
