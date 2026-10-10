@@ -1,0 +1,161 @@
+name: NILA PR review
+
+on:
+  pull_request:
+    types: [review_requested]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nila-review-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      ${{ github.event_name == 'pull_request' &&
+      github.event.action == 'review_requested' &&
+      github.event.requested_reviewer.login == 'thisis-gp' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) }}
+    runs-on: ubuntu-latest
+    environment: prod
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pr_number: ${{ steps.context.outputs.pr_number }}
+      head_sha: ${{ steps.context.outputs.head_sha }}
+    steps:
+      - name: Set review context
+        id: context
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/pull/${{ steps.context.outputs.pr_number }}/head
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch base and verify reviewed commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ steps.context.outputs.head_sha }}
+        run: |
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0=http.extraheader \
+          GIT_CONFIG_VALUE_0="$AUTH_HEADER" \
+            git fetch --no-tags origin "$BASE_SHA"
+          unset AUTH_HEADER GH_TOKEN GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          git update-ref refs/remotes/review/base FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          if git cat-file -e refs/remotes/review/base:.github/codex/prompts/review.md 2>/dev/null; then
+            git show refs/remotes/review/base:.github/codex/prompts/review.md > .nila-review-prompt.md
+          else
+            cp .github/codex/prompts/review.md .nila-review-prompt.md
+          fi
+          if git cat-file -e refs/remotes/review/base:.github/codex/prompts/review-output.schema.json 2>/dev/null; then
+            git show refs/remotes/review/base:.github/codex/prompts/review-output.schema.json > .nila-review-schema.json
+          else
+            cp .github/codex/prompts/review-output.schema.json .nila-review-schema.json
+          fi
+      - name: Install Claude Code CLI
+        run: npm install --global @anthropic-ai/claude-code@2.1.296
+      - name: Run read-only Creditclaim review
+        env:
+          # Owner-approved external review provider; PR diffs are sent to Creditclaim/DeepSeek.
+          ANTHROPIC_BASE_URL: https://creditclaim.reskilll.com/llm
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.CREDITCLAIM_API_KEY }}
+          ANTHROPIC_API_KEY: ""
+          ANTHROPIC_MODEL: deepseek/deepseek-v4-pro
+        run: |
+          if [ -z "$ANTHROPIC_AUTH_TOKEN" ]; then
+            echo "::error::Add a rotated Creditclaim token as the repository Actions secret CREDITCLAIM_API_KEY."
+            exit 1
+          fi
+          git diff --merge-base refs/remotes/review/base HEAD -- > .nila-pr.diff
+          claude --bare \
+            --tools "Read,Glob,Grep" \
+            --allowedTools "Read,Glob,Grep" \
+            --model "$ANTHROPIC_MODEL" \
+            --max-turns 8 \
+            --output-format json \
+            --json-schema "$(cat .nila-review-schema.json)" \
+            -p "$(cat .nila-review-prompt.md)" \
+            > "$RUNNER_TEMP/claude-review.json"
+          jq -ce '.structured_output | select(type == "object")' \
+            "$RUNNER_TEMP/claude-review.json" > codex-review.json || {
+              echo "::error::Claude did not return a structured review object."
+              exit 1
+            }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nila-review-${{ steps.context.outputs.pr_number }}-${{ steps.context.outputs.head_sha }}
+          path: codex-review.json
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: review
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: nila-review-${{ needs.review.outputs.pr_number }}-${{ needs.review.outputs.head_sha }}
+          path: review
+      - name: Validate and post review
+        uses: actions/github-script@v7
+        env:
+          REVIEW_FILE: review/codex-review.json
+          PR_NUMBER: ${{ needs.review.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.review.outputs.head_sha }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const review = JSON.parse(fs.readFileSync(process.env.REVIEW_FILE, 'utf8'));
+            if (!review || !['clean', 'findings'].includes(review.verdict) ||
+                typeof review.summary !== 'string' || review.summary.length > 100 ||
+                !Array.isArray(review.findings) || review.findings.length > 10 ||
+                (review.verdict === 'clean' && review.findings.length !== 0) ||
+                (review.verdict === 'findings' && review.findings.length === 0)) {
+              throw new Error('Malformed or ambiguous Codex review; refusing approval or merge.');
+            }
+            const severities = new Set(['P0', 'P1', 'P2', 'P3']);
+            for (const finding of review.findings) {
+              if (!finding || !severities.has(finding.severity) ||
+                  typeof finding.file !== 'string' || !finding.file || finding.file.length > 180 ||
+                  !Number.isInteger(finding.line) || finding.line < 1 ||
+                  typeof finding.finding !== 'string' || !finding.finding || finding.finding.length > 240 ||
+                  typeof finding.fix !== 'string' || !finding.fix || finding.fix.length > 160) {
+                throw new Error('Malformed Codex finding; refusing approval or merge.');
+              }
+            }
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: issue_number });
+            if (pr.head.sha !== process.env.HEAD_SHA || pr.state !== 'open') {
+              throw new Error('PR head changed or PR closed; refusing to publish a stale review.');
+            }
+            const marker = '<!-- nila-codex-review -->';
+            const body = review.findings.length
+              ? `${marker}\n## NILA review — findings\n\n${review.findings.map(f => `- **${f.severity}** \`${f.file}:${f.line}\` — ${f.finding} Fix: ${f.fix}`).join('\n')}`
+              : `${marker}\n## NILA review — clean\n\nNo actionable findings. ${review.summary}`;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+            const prior = comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
+            if (prior) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: prior.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
