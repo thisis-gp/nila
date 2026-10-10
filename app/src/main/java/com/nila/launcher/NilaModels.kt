@@ -252,7 +252,8 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
                 ).contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim()
             }
         }.onFailure { Log.w(TAG, "transcribe failed", it) }.getOrNull()
-            .also { Log.i(TAG, "transcribe ms=${SystemClock.elapsedRealtime() - start} bytes=${wav.size} lang=$languageName text=$it") }
+            // Timing and size only: a transcript is what the user said and must never reach device logs.
+            .also { Log.i(TAG, "transcribe ms=${SystemClock.elapsedRealtime() - start} bytes=${wav.size} chars=${it?.length ?: 0}") }
             ?.takeIf { it.isNotBlank() }
     }
 
