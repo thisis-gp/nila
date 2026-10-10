@@ -95,6 +95,7 @@ class MainActivity : ComponentActivity() {
 
 data class Turn(val user: String, val response: NilaResponse)
 private data class PendingZeptoOrder(val item: String, val client: ZeptoMcpClient)
+private data class ActiveZeptoSession(val client: ZeptoMcpClient, val addressLabel: String)
 
 /** Builds the tap-to-add-to-cart turn for a Zepto search result. Prepare-tier only: addToCart never places or pays for an order. */
 private fun zeptoProductTurn(
@@ -199,6 +200,10 @@ private fun NilaApp(resumeVersion: Int) {
     var justReplied by remember { mutableStateOf(false) }
     val zeptoAuth = remember { ZeptoAuth(context) }
     var pendingZeptoOrder by remember { mutableStateOf<PendingZeptoOrder?>(null) }
+    // Zepto requires a selected store before search works at all, so the first "buy" of a session
+    // still asks for an address. Once chosen, reuse that same client+store for every later "buy"
+    // in this session instead of asking again every time.
+    var activeZeptoSession by remember { mutableStateOf<ActiveZeptoSession?>(null) }
 
     fun submit(prompt: String = input) {
         if (prompt.isBlank() || isThinking) return
@@ -303,11 +308,68 @@ private fun NilaApp(resumeVersion: Int) {
                         ?: error("Address was saved but could not be found again.")
                     pending.client.selectSavedAddress(newAddress.id)
                     val parsed = parseOrderItem(pending.item)
-                    pending.client.searchProducts(parsed.searchQuery) to parsed.desiredSize
+                    Triple(pending.client.searchProducts(parsed.searchQuery), parsed.desiredSize, newAddress.label)
                 }
                 withContext(Dispatchers.Main) {
                     outcome.fold(
-                        onSuccess = { (products, desiredSize) -> turns += zeptoProductTurn(pending.item, products, pending.client, context, scope, { t -> turns += t }, desiredSize) },
+                        onSuccess = { (products, desiredSize, addressLabel) ->
+                            activeZeptoSession = ActiveZeptoSession(pending.client, addressLabel.ifBlank { "Saved address" })
+                            turns += zeptoProductTurn(pending.item, products, pending.client, context, scope, { t -> turns += t }, desiredSize)
+                        },
+                        onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
+                    )
+                }
+            }
+            return
+        }
+        if (prompt.lowercase().contains("buy now") || prompt.lowercase().contains("checkout")) {
+            input = ""
+            if (!zeptoAuth.isConnected) {
+                turns += Turn(prompt, NilaResponse.GroupedChoices("Options:", listOf(zeptoNotConnectedGroup(zeptoAuth, context, scope) { t -> turns += t })))
+                return
+            }
+            val client = activeZeptoSession?.client ?: ZeptoMcpClient(zeptoAuth)
+            turns += Turn(prompt, NilaResponse.Text("Checking your Zepto cart..."))
+            scope.launch(Dispatchers.IO) {
+                val outcome = runCatching { client.viewCartItems() }
+                withContext(Dispatchers.Main) {
+                    outcome.fold(
+                        onSuccess = { items ->
+                            if (items.isEmpty()) {
+                                turns += Turn("Zepto", NilaResponse.Text("Your Zepto cart is empty. Say \"buy <item>\" to add something first."))
+                                return@fold
+                            }
+                            val total = items.sumOf { it.priceInPaisa.toLong() * it.quantity }
+                            val lines = items.joinToString("\n") { "${it.name} x${it.quantity} — ₹%.2f".format(it.priceInPaisa * it.quantity / 100.0) }
+                            turns += Turn("Zepto", NilaResponse.Text("$lines\n\nTotal: ₹%.2f".format(total / 100.0)))
+                            scope.launch(Dispatchers.IO) {
+                                val addresses = runCatching { client.listSavedAddresses() }.getOrElse { emptyList() }
+                                withContext(Dispatchers.Main) {
+                                    if (addresses.isEmpty()) {
+                                        turns += Turn("Zepto", NilaResponse.Text("No saved delivery address — add one in the Zepto app, then say \"buy now\" again."))
+                                    } else {
+                                        val addressChoices = addresses.map { address ->
+                                            AsyncChoice(address.label.ifBlank { "Saved address" }, address.addressLine, "", "") {
+                                                scope.launch(Dispatchers.IO) {
+                                                    val selectOutcome = runCatching { client.selectSavedAddress(address.id) }
+                                                    withContext(Dispatchers.Main) {
+                                                        activeZeptoSession = ActiveZeptoSession(client, address.label.ifBlank { "Saved address" })
+                                                        selectOutcome.fold(
+                                                            onSuccess = {
+                                                                turns += Turn("Zepto", NilaResponse.Text("Delivering to ${address.label.ifBlank { "this address" }}. Total ₹%.2f. NILA stops here — open Zepto to pay and finish the order:".format(total / 100.0)))
+                                                                turns += Turn("Zepto", NilaResponse.OpenApp("Zepto", "com.zeptoconsumerapp", "https://www.zeptonow.com"))
+                                                            },
+                                                            onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        turns += Turn("Zepto", NilaResponse.AsyncChoices("Deliver to which address?", addressChoices))
+                                    }
+                                }
+                            }
+                        },
                         onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
                     )
                 }
@@ -341,6 +403,21 @@ private fun NilaApp(resumeVersion: Int) {
                     )
                     return
                 }
+                val active = activeZeptoSession
+                if (active != null) {
+                    turns += Turn(prompt, NilaResponse.Text("Searching Zepto for \"$item\" — delivering to ${active.addressLabel}..."))
+                    scope.launch(Dispatchers.IO) {
+                        val parsed = parseOrderItem(item)
+                        val outcome = runCatching { active.client.searchProducts(parsed.searchQuery) }
+                        withContext(Dispatchers.Main) {
+                            outcome.fold(
+                                onSuccess = { products -> turns += zeptoProductTurn(item, products, active.client, context, scope, { t -> turns += t }, parsed.desiredSize) },
+                                onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
+                            )
+                        }
+                    }
+                    return
+                }
                 turns += Turn(prompt, NilaResponse.Text("Checking your Zepto delivery address..."))
                 scope.launch(Dispatchers.IO) {
                 val client = ZeptoMcpClient(zeptoAuth)
@@ -362,6 +439,7 @@ private fun NilaApp(resumeVersion: Int) {
                                             client.searchProducts(parsed.searchQuery)
                                         }
                                         withContext(Dispatchers.Main) {
+                                            activeZeptoSession = ActiveZeptoSession(client, address.label.ifBlank { "Saved address" })
                                             searchOutcome.fold(
                                                 onSuccess = { products -> turns += zeptoProductTurn(item, products, client, context, scope, { t -> turns += t }, parsed.desiredSize) },
                                                 onFailure = { turns += Turn("Zepto", NilaResponse.Text("Zepto error: ${it.message}")) },
@@ -585,6 +663,9 @@ private fun AgentSpace(
             Column(Modifier.weight(1f)) {
                 Text("NILA", color = Lime, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
                 Text(modelStatus, color = Muted, fontSize = 11.sp)
+            }
+            IconButton(onClick = { onSubmit("zepto cart") }) {
+                Text("🛒", fontSize = 20.sp)
             }
             NilaMascot(mood = mood, size = 36.dp)
         }

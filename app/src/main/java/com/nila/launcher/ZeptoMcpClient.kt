@@ -5,6 +5,7 @@ import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicInteger
 
 data class ZeptoTool(val name: String, val description: String)
+data class CartItem(val name: String, val priceInPaisa: Int, val quantity: Int)
 data class SavedAddress(val id: String, val label: String, val addressLine: String)
 data class ZeptoProduct(
     val productVariantId: String,
@@ -134,4 +135,14 @@ class ZeptoMcpClient(private val auth: ZeptoAuth) {
 
     /** Human-readable cart summary. No outputSchema declared for this tool, so the content text is the reliable part. */
     fun viewCart(): String = resultText(callTool("view_cart", JSONObject()))
+
+    /** Confirmed 2026-10-10 against the real account: structuredContent.items[], same as the text summary but structured for a price total. */
+    fun viewCartItems(): List<CartItem> {
+        val result = callTool("view_cart", JSONObject())
+        val items = result.optJSONObject("structuredContent")?.optJSONArray("items") ?: JSONArray()
+        return (0 until items.length()).map { index ->
+            val item = items.getJSONObject(index)
+            CartItem(item.optString("name", "Item"), item.optInt("price", 0), item.optInt("quantity", 1))
+        }
+    }
 }
