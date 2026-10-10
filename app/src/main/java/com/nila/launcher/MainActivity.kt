@@ -255,11 +255,15 @@ private fun NilaApp(resumeVersion: Int) {
             override fun pickAddress(address: SavedAddress, item: String?) =
                 runFood("Deliver to ${address.label.ifBlank { "saved address" }}") { groceryFlow.deliverTo(address, item) }
             override fun changeAddress(item: String?) = runFood("Change address") { groceryFlow.chooseAddress(item) }
-            override fun openCart() = runFood("Zepto cart") { groceryFlow.cart() }
+            override fun openCart() = runFood("Your carts") { groceryFlow.cart() }
             override fun changeLine(item: CartItem, quantity: Int) =
                 runFood(if (quantity > item.quantity) "One more" else "One less") { groceryFlow.changeLine(item, quantity) }
             override fun review() = runFood("Review order") { groceryFlow.review() }
             override fun place() = runFood("Place order") { groceryFlow.place() }
+            override fun changeInstamartLine(item: InstamartItem, quantity: Int) =
+                runFood(if (quantity > 0) "Update Instamart cart" else "Remove ${item.name}") { groceryFlow.changeInstamartLine(item, quantity) }
+            override fun reviewInstamart() = runFood("Review Instamart order") { groceryFlow.reviewInstamart() }
+            override fun placeInstamart(review: GroceryCard.InstamartReview) = runFood("Place Instamart order") { groceryFlow.placeInstamart(review) }
             override fun back(card: GroceryCard) = runFood("Back") { NilaResponse.Grocery(card) }
             override fun lastProducts() = groceryFlow.lastProducts
             override fun lastCart() = groceryFlow.lastCart
@@ -724,7 +728,7 @@ private fun AgentSpace(
         Modifier.fillMaxSize().padding(horizontal = ScreenGutter, vertical = 12.dp),
     ) {
         TopAction(onBack = onClose) {
-            onOpenCart?.let { RoundButton(LucideR.drawable.lucide_ic_shopping_cart, "Zepto cart", it) }
+            onOpenCart?.let { RoundButton(LucideR.drawable.lucide_ic_shopping_cart, "Your carts", it) }
             if (!bodyHasMascot) Box(
                 Modifier.size(MascotTapSize).clip(CircleShape)
                     .clickable(onClickLabel = if (showStatus) "Hide model status" else "Show model status") { showStatus = !showStatus },

@@ -45,10 +45,13 @@ sealed interface GroceryCard {
     /** [item] is null when the address is picked on the way to checkout rather than for a search. */
     data class Addresses(val item: String?, val addresses: List<SavedAddress>) : GroceryCard
     data class Products(val address: SavedAddress, val item: String, val groups: List<ProductProviderGroup>, val cheapest: String?) : GroceryCard
-    data class Cart(val address: SavedAddress?, val items: List<CartItem>) : GroceryCard
+    /** Both carts: Zepto's and, when Swiggy is connected, Instamart's. Each is ordered on its own. */
+    data class Cart(val address: SavedAddress?, val items: List<CartItem>, val instamart: InstamartCart?) : GroceryCard
     /** [preview] is Zepto's own order preview text: items, fees and the final total. */
     data class Review(val address: SavedAddress, val items: List<CartItem>, val preview: String) : GroceryCard
-    data class Placed(val address: SavedAddress, val result: String) : GroceryCard
+    /** Instamart's live bill and the cash method it offers, before checkout. */
+    data class InstamartReview(val cart: InstamartCart, val method: String, val addressId: String) : GroceryCard
+    data class Placed(val provider: String, val addressLabel: String, val result: String) : GroceryCard
     data class Problem(val message: String) : GroceryCard
 }
 
@@ -58,8 +61,11 @@ internal interface GroceryActions {
     fun changeAddress(item: String?)
     fun openCart()
     fun changeLine(item: CartItem, quantity: Int)
+    fun changeInstamartLine(item: InstamartItem, quantity: Int)
     fun review()
     fun place()
+    fun reviewInstamart()
+    fun placeInstamart(review: GroceryCard.InstamartReview)
     fun back(card: GroceryCard)
     fun lastProducts(): GroceryCard.Products?
     fun lastCart(): GroceryCard.Cart?
@@ -144,6 +150,7 @@ internal class GroceryFlow(
             },
             if (picks.isEmpty()) "No Zepto results for \"$item\"." else null,
         )
+        instamart.cart() // syncs Instamart's steppers with its real cart
         val instamartGroup = instamart.group(item, instamart.search(parsed.searchQuery, parsed.desiredSize), scope, onProblem)
         val cheapest = listOf(zeptoGroup, instamartGroup)
             .flatMap { group -> group.items.map { group.providerName to it } }
@@ -154,11 +161,36 @@ internal class GroceryFlow(
 
     suspend fun cart(): NilaResponse = step { loadCart() }
 
-    private suspend fun loadCart(): GroceryCard = GroceryCard.Cart(address, zepto { it.viewCartItems() }).also { lastCart = it }
+    private suspend fun loadCart(): GroceryCard =
+        GroceryCard.Cart(address, zepto { it.viewCartItems() }, instamart.cart()).also { lastCart = it }
 
     suspend fun changeLine(line: CartItem, quantity: Int): NilaResponse = step {
         zepto { it.setCartQuantity(deviceId, line.productVariantId, line.storeProductId, line.name, quantity) }
         loadCart()
+    }
+
+    suspend fun changeInstamartLine(item: InstamartItem, quantity: Int): NilaResponse = step {
+        if (!instamart.setLine(item, quantity)) onProblem("Instamart couldn't update the cart right now.")
+        loadCart()
+    }
+
+    /** Instamart's live bill, read again right before ordering because the cart may have changed in the Swiggy app. */
+    suspend fun reviewInstamart(): NilaResponse = step {
+        val cart = instamart.cart() ?: return@step GroceryCard.Problem("Connect Swiggy in Settings to order from Instamart.")
+        val addressId = cart.addressId
+        val method = cart.cashMethod
+        when {
+            cart.lines.isEmpty() -> GroceryCard.Problem("Your Instamart cart is empty. Add something first.")
+            addressId == null -> GroceryCard.Problem("Instamart has no delivery address. Choose one in the Swiggy app.")
+            method == null -> GroceryCard.Problem("Instamart isn't offering cash on delivery for this cart. Finish it in the Swiggy app.")
+            else -> GroceryCard.InstamartReview(cart, method, addressId)
+        }
+    }
+
+    /** Places a real Instamart Cash on Delivery order. Only reached from the Instamart review's confirm. */
+    suspend fun placeInstamart(review: GroceryCard.InstamartReview): NilaResponse = step {
+        GroceryCard.Placed("Swiggy Instamart", review.cart.addressLabel ?: "your Swiggy address", instamart.checkout(review.addressId, review.method))
+            .also { lastCart = null }
     }
 
     /** Zepto's real preview: no order exists yet. Without a chosen address the store is unknown, so ask first. */
@@ -172,7 +204,7 @@ internal class GroceryFlow(
     /** Places a real Cash on Delivery order. Only reached from the Review card's confirm. */
     suspend fun place(): NilaResponse = step {
         val at = address ?: error("no delivery address chosen")
-        GroceryCard.Placed(at, zepto { it.placeCodOrder(at.id) }).also { lastCart = null }
+        GroceryCard.Placed("Zepto", at.label.ifBlank { "saved address" }, zepto { it.placeCodOrder(at.id) }).also { lastCart = null }
     }
 
     private companion object {
@@ -189,6 +221,7 @@ internal fun GroceryCardView(card: GroceryCard, actions: GroceryActions) {
         is GroceryCard.Products -> GroceryProductsCard(card, actions)
         is GroceryCard.Cart -> GroceryCartCard(card, actions)
         is GroceryCard.Review -> GroceryReviewCard(card, actions)
+        is GroceryCard.InstamartReview -> InstamartReviewCard(card, actions)
         is GroceryCard.Placed -> GroceryPlacedCard(card)
         is GroceryCard.Problem -> NilaCard {
             SectionLabel("Zepto", color = Orange)
@@ -243,97 +276,185 @@ private fun GroceryProductsCard(card: GroceryCard.Products, actions: GroceryActi
         card.cheapest?.let { Text(it, color = Lime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
         DeliverTo(card.address) { actions.changeAddress(card.item) }
         card.groups.forEach { ProductProviderGroupCard(it) }
-        PrimaryAction("View Zepto cart", onClick = actions::openCart)
-        Text("Instamart items go to your Instamart cart in the Swiggy app.", color = Muted, fontSize = 11.sp)
+        PrimaryAction("View carts", onClick = actions::openCart)
     }
 }
 
-// ---- Step 3: cart ------------------------------------------------------------
+// ---- Step 3: both carts ------------------------------------------------------
 
 @Composable
 private fun GroceryCartCard(card: GroceryCard.Cart, actions: GroceryActions) {
     val total = cartTotalPaise(card.items)
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         actions.lastProducts()?.let { products -> BackLink("Add more") { actions.back(products) } }
-        StepHeader(3, "Your Zepto cart", ZEPTO_SOURCE)
-        Surface(color = CardInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (card.items.isEmpty()) Text("Your cart is empty. Ask NILA for something to add.", color = Muted, fontSize = 13.sp)
-                card.items.forEach { line ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        FoodImage(line.imageUrl, Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)))
-                        Text(line.name, color = Paper, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 10.dp))
-                        QuantityStepper(
-                            quantity = line.quantity,
-                            onLess = { actions.changeLine(line, line.quantity - 1) },
-                            onMore = { actions.changeLine(line, line.quantity + 1) },
-                        )
-                        Text(paiseText(line.priceInPaisa.toLong() * line.quantity), color = Paper, fontSize = 14.sp, modifier = Modifier.width(64.dp).padding(start = 8.dp))
-                    }
-                }
+        StepHeader(3, "Your carts", "Zepto · Instamart · live")
+        Text("Each app delivers its own cart, so each is ordered on its own.", color = Muted, fontSize = 13.sp)
+
+        SectionLabel("Zepto · ${if (card.items.isEmpty()) "empty" else paiseText(total)}", Modifier.padding(top = 6.dp), color = Paper)
+        CartBox {
+            if (card.items.isEmpty()) Text("Nothing in your Zepto cart.", color = Muted, fontSize = 13.sp)
+            card.items.forEach { line ->
+                CartLine(
+                    line.imageUrl, line.name, line.quantity, paiseText(line.priceInPaisa.toLong() * line.quantity),
+                    onLess = { actions.changeLine(line, line.quantity - 1) },
+                    onMore = { actions.changeLine(line, line.quantity + 1) },
+                )
+            }
+            if (card.items.isNotEmpty()) {
                 HorizontalDivider(color = Panel)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Items total", color = Paper, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                    Text(paiseText(total), color = Paper, fontWeight = FontWeight.Black, fontSize = 20.sp)
-                }
+                TotalRow("Items total", paiseText(total))
                 Text("Delivery fee and taxes come from Zepto on the next step.", color = Muted, fontSize = 11.sp)
-                DeliverTo(card.address) { actions.changeAddress(null) }
+            }
+            DeliverTo(card.address) { actions.changeAddress(null) }
+            if (card.items.isNotEmpty()) PrimaryAction("Review Zepto order · ${paiseText(total)}", onClick = actions::review)
+        }
+
+        val instamart = card.instamart
+        val instamartSummary = when {
+            instamart == null -> "not connected"
+            instamart.lines.isEmpty() -> "empty"
+            else -> instamart.toPay.orEmpty()
+        }
+        SectionLabel("Swiggy Instamart · $instamartSummary", Modifier.padding(top = 6.dp), color = Paper)
+        CartBox {
+            when {
+                instamart == null -> Text("Connect Swiggy in Settings to see your Instamart cart.", color = Muted, fontSize = 13.sp)
+                instamart.lines.isEmpty() -> Text("Nothing in your Instamart cart.", color = Muted, fontSize = 13.sp)
+                else -> {
+                    instamart.lines.forEach { (item, quantity) ->
+                        CartLine(
+                            item.imageUrl, item.name, quantity, paiseText(item.pricePaise * quantity),
+                            onLess = { actions.changeInstamartLine(item, quantity - 1) },
+                            onMore = { actions.changeInstamartLine(item, quantity + 1) },
+                        )
+                    }
+                    HorizontalDivider(color = Panel)
+                    instamart.bill.forEach { (label, value) -> BillRow(label, value) }
+                    instamart.toPay?.let { TotalRow("To pay", it) }
+                    instamart.addressLabel?.let { Text("To $it", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    instamart.warning?.let { Text(it, color = Orange, fontSize = 12.sp) }
+                    PrimaryAction("Review Instamart order${instamart.toPay?.let { " · $it" }.orEmpty()}", onClick = actions::reviewInstamart)
+                }
             }
         }
-        PrimaryAction("Review order · ${paiseText(total)}", onClick = actions::review, enabled = card.items.isNotEmpty())
+    }
+}
+
+@Composable
+private fun CartBox(content: @Composable () -> Unit) {
+    Surface(color = CardInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { content() }
+    }
+}
+
+@Composable
+private fun CartLine(imageUrl: String?, name: String, quantity: Int, price: String, onLess: () -> Unit, onMore: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        FoodImage(imageUrl, Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)))
+        Text(name, color = Paper, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 10.dp))
+        QuantityStepper(quantity = quantity, onLess = onLess, onMore = onMore)
+        Text(price, color = Paper, fontSize = 14.sp, modifier = Modifier.width(64.dp).padding(start = 8.dp))
+    }
+}
+
+@Composable
+private fun BillRow(label: String, value: String) {
+    Row {
+        Text(label, color = Muted, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Text(value, color = Muted, fontSize = 13.sp)
+    }
+}
+
+@Composable
+private fun TotalRow(label: String, value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Paper, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        Text(value, color = Paper, fontWeight = FontWeight.Black, fontSize = 20.sp)
     }
 }
 
 // ---- Step 4: review and the Commit gate --------------------------------------
 
+/** The Commit gate both apps share: a real order, two taps within five seconds, then it locks. */
 @Composable
-private fun GroceryReviewCard(card: GroceryCard.Review, actions: GroceryActions) {
+private fun CommitGate(heading: String, lines: List<String>, address: String, warning: String, onPlace: () -> Unit) {
     var armed by remember { mutableStateOf(false) }
     var placed by remember { mutableStateOf(false) }
-    // The second tap must come soon after the first; otherwise the gate closes again.
     LaunchedEffect(armed) {
         if (armed) {
             delay(5_000)
             armed = false
         }
     }
+    Surface(color = CommitInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(heading, color = Orange, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            lines.forEach { Text(it, color = Paper, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
+            Text(address, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(4.dp))
+            Button(
+                onClick = {
+                    if (!armed) armed = true else {
+                        placed = true
+                        onPlace()
+                    }
+                },
+                enabled = !placed,
+                colors = ButtonDefaults.buttonColors(containerColor = if (armed) Orange else Lime, contentColor = Ink),
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                Text(
+                    when {
+                        placed -> "Placing order…"
+                        armed -> "Tap again to place the order"
+                        else -> "Place order · pay on delivery"
+                    },
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Text(warning, color = Muted, fontSize = 11.sp)
+        }
+    }
+}
+
+@Composable
+private fun GroceryReviewCard(card: GroceryCard.Review, actions: GroceryActions) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        actions.lastCart()?.let { cart -> BackLink("Edit cart") { actions.back(cart) } }
-        StepHeader(4, "Review and order", ZEPTO_SOURCE)
+        actions.lastCart()?.let { cart -> BackLink("Edit carts") { actions.back(cart) } }
+        StepHeader(4, "Review your Zepto order", ZEPTO_SOURCE)
         NilaCard {
             SectionLabel("Zepto's bill")
             Text(card.preview, color = Paper, fontSize = 13.sp, lineHeight = 19.sp)
         }
-        Surface(color = CommitInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("REAL ORDER · CASH ON DELIVERY", color = Orange, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                card.items.forEach { Text("${it.quantity} × ${it.name}", color = Paper, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
-                Text("To ${card.address.label.ifBlank { "saved address" }} · ${card.address.addressLine}", color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(4.dp))
-                Button(
-                    onClick = {
-                        if (!armed) armed = true else {
-                            placed = true
-                            actions.place()
-                        }
-                    },
-                    enabled = !placed,
-                    colors = ButtonDefaults.buttonColors(containerColor = if (armed) Orange else Lime, contentColor = Ink),
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
-                    shape = RoundedCornerShape(16.dp),
-                ) {
-                    Text(
-                        when {
-                            placed -> "Placing order…"
-                            armed -> "Tap again to place the order"
-                            else -> "Place order · pay on delivery"
-                        },
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-                Text("This places a real Zepto order. You pay the rider in cash when it arrives.", color = Muted, fontSize = 11.sp)
-            }
+        CommitGate(
+            heading = "REAL ZEPTO ORDER · CASH ON DELIVERY",
+            lines = card.items.map { "${it.quantity} × ${it.name}" },
+            address = "To ${card.address.label.ifBlank { "saved address" }} · ${card.address.addressLine}",
+            warning = "This places a real Zepto order. You pay the rider in cash when it arrives.",
+            onPlace = actions::place,
+        )
+    }
+}
+
+@Composable
+private fun InstamartReviewCard(card: GroceryCard.InstamartReview, actions: GroceryActions) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        actions.lastCart()?.let { cart -> BackLink("Edit carts") { actions.back(cart) } }
+        StepHeader(4, "Review your Instamart order", "Swiggy Instamart · live")
+        CartBox {
+            SectionLabel("Instamart's bill")
+            card.cart.bill.forEach { (label, value) -> BillRow(label, value) }
+            card.cart.toPay?.let { TotalRow("To pay", it) }
+            card.cart.warning?.let { Text(it, color = Orange, fontSize = 12.sp) }
         }
+        CommitGate(
+            heading = "REAL INSTAMART ORDER · ${card.method.uppercase()}",
+            lines = card.cart.lines.map { (item, quantity) -> "$quantity × ${item.name}" },
+            address = "To ${card.cart.addressLabel ?: "your Swiggy address"}",
+            warning = "This places a real Swiggy Instamart order. It can't be cancelled from NILA.",
+            onPlace = { actions.placeInstamart(card) },
+        )
     }
 }
 
@@ -343,9 +464,9 @@ private fun GroceryReviewCard(card: GroceryCard.Review, actions: GroceryActions)
 private fun GroceryPlacedCard(card: GroceryCard.Placed) {
     Surface(color = Lime, shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Ordered on Zepto.\nPay the rider on delivery.", color = Ink, fontSize = 28.sp, fontFamily = FontFamily.Serif, lineHeight = 32.sp)
+            Text("Ordered on ${card.provider}.\nPay the rider on delivery.", color = Ink, fontSize = 28.sp, fontFamily = FontFamily.Serif, lineHeight = 32.sp)
             Text(card.result, color = Ink.copy(alpha = 0.75f), fontSize = 13.sp)
-            Text("To ${card.address.label.ifBlank { "saved address" }}", color = Ink.copy(alpha = 0.6f), fontSize = 11.sp)
+            Text("To ${card.addressLabel}", color = Ink.copy(alpha = 0.6f), fontSize = 11.sp)
         }
     }
 }
