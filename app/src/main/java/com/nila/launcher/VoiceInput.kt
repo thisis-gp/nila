@@ -50,7 +50,11 @@ fun nextVoiceLanguage(tag: String): String {
  * What the user sees when listening fails. Never silent: typing always remains.
  * [inputStatus] says whether this phone can download the language, so we only point to a download that exists.
  */
+/** Our own error code: this phone has no on-device recognizer, so NILA refuses to listen rather than send audio online. */
+const val ERROR_NO_ON_DEVICE_RECOGNIZER = -100
+
 fun voiceErrorMessage(error: Int, languageName: String, inputStatus: SpeechInputStatus? = null): String = when (error) {
+    ERROR_NO_ON_DEVICE_RECOGNIZER -> "This phone can't recognise speech on the device, and NILA won't send your voice online. Type instead."
     SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "I didn't catch that. Tap the mic and try again."
     SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED, SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ->
         if (inputStatus == SpeechInputStatus.DOWNLOADABLE || inputStatus == SpeechInputStatus.DOWNLOADING) {
@@ -74,13 +78,15 @@ class VoiceListener(
 ) {
     private var recognizer: SpeechRecognizer? = null
 
-    /** True when speech is processed on the phone rather than by an online service. */
+    /** True when speech can be processed on the phone. Without it NILA does not listen at all. */
     val onDevice = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
 
     fun start(tag: String) {
         stop()
-        if (!onDevice && !SpeechRecognizer.isRecognitionAvailable(context)) return onFailed(SpeechRecognizer.ERROR_CLIENT)
-        val created = if (onDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(context) else SpeechRecognizer.createSpeechRecognizer(context)
+        // Privacy: the system recognizer may stream audio to a server and EXTRA_PREFER_OFFLINE is only a hint,
+        // so NILA listens only with the on-device recognizer.
+        if (!onDevice) return onFailed(ERROR_NO_ON_DEVICE_RECOGNIZER)
+        val created = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
         recognizer = created
         created.setRecognitionListener(object : RecognitionListener {
             override fun onPartialResults(partialResults: Bundle) = firstResult(partialResults)?.let(onPartial) ?: Unit

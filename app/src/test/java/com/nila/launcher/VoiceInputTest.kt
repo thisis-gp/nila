@@ -26,6 +26,12 @@ class VoiceInputTest {
     }
 
     @Test
+    fun withoutOnDeviceRecognitionNilaRefusesInsteadOfGoingOnline() {
+        val message = voiceErrorMessage(ERROR_NO_ON_DEVICE_RECOGNIZER, "English (India)")
+        assertTrue("won't send your voice online" in message && "Type instead" in message)
+    }
+
+    @Test
     fun everyErrorStillOffersTyping() {
         listOf(
             SpeechRecognizer.ERROR_NO_MATCH,
