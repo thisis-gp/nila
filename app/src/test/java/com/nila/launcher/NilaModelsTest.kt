@@ -163,5 +163,10 @@ class NilaModelsTest {
     fun calculatorStaysAheadOfModels() {
         assertEquals(NilaResponse.Text("18% of 4250 is 765"), engine.calculate("What is 18% of 4250?"))
         assertEquals(null, engine.calculate("hi"))
+        // A follow-up keeps the amount and changes the rate, worked out here rather than by Gemma.
+        assertEquals(NilaResponse.Text("20% of 4250 is 850"), engine.calculateFollowUp("and 20%", "what is 18% of 4250"))
+        assertEquals(NilaResponse.Text("15% of 4250 is 637.5"), engine.calculateFollowUp("what about 15 percent?", "18% of 4250"))
+        assertEquals(null, engine.calculateFollowUp("and 20%", "set a timer for 5 minutes"))
+        assertEquals(null, engine.calculateFollowUp("set a timer for 20 minutes", "18% of 4250"))
     }
 }
