@@ -127,6 +127,35 @@ class NilaModelsTest {
     }
 
     @Test
+    fun removingAnAlarmIsRoutedAndNeverConfusedWithSettingOne() {
+        assertEquals(NilaIntent.Call(ToolCall("remove_alarm", mapOf("hour" to 1, "minute" to 30))), engine.route("cancel the alarm for 1:30"))
+        assertEquals(NilaIntent.Call(ToolCall("remove_alarm", emptyMap())), engine.route("turn off my alarm"))
+        assertEquals(NilaIntent.Call(ToolCall("remove_alarm", mapOf("hour" to 7, "minute" to 0, "meridiem" to "am"))), engine.route("delete alarm at 7 am"))
+        // Setting still sets.
+        assertTrue((engine.route("set an alarm for 7 am") as NilaIntent.Call).call.capabilityId == "create_alarm")
+    }
+
+    @Test
+    fun removingAnAlarmStopsAtConfirmationShowingTheExactTime() {
+        val engine = NilaEngine(now = { LocalTime.of(5, 51) })
+        val pending = engine.execute(engine.route("remove the alarm at 1:30")) as NilaResponse.NeedsConfirmation
+        // Same next-occurrence rule as setting: 1:30 asked at 05:51 is 13:30.
+        assertEquals(listOf("Turn off" to "The 13:30 alarm"), pending.lines)
+        // The card title is for people, not the instructions written for the model.
+        assertEquals("Turn off an alarm", pending.capability.label)
+        assertEquals(NilaResponse.DismissAlarm(13, 30), engine.confirm(pending.token))
+        // Single use: a second tap removes nothing.
+        assertEquals(NilaResponse.Text("This confirmation was already used. Nothing was done."), engine.confirm(pending.token))
+    }
+
+    @Test
+    fun removingWithoutATimeMeansTheNextAlarm() {
+        val pending = engine.execute(engine.route("cancel my alarm")) as NilaResponse.NeedsConfirmation
+        assertEquals(listOf("Turn off" to "Your next alarm"), pending.lines)
+        assertEquals(NilaResponse.DismissAlarm(null, 0), engine.confirm(pending.token))
+    }
+
+    @Test
     fun calculatorStaysAheadOfModels() {
         assertEquals(NilaResponse.Text("18% of 4250 is 765"), engine.calculate("What is 18% of 4250?"))
         assertEquals(null, engine.calculate("hi"))

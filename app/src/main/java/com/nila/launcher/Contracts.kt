@@ -21,6 +21,8 @@ data class CapabilityDescriptor(
     val permission: PermissionClass,
     /** Android permissions the capability needs. They must already be declared in the APK manifest. */
     val androidPermissions: Set<String> = emptySet(),
+    /** What people see, for example on a confirmation card. [description] is written for the model. */
+    val label: String = description,
 ) {
     val needsConfirmation get() = permission == PermissionClass.COMMIT
 }
