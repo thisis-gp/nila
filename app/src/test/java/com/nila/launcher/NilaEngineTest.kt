@@ -189,6 +189,13 @@ class NilaEngineTest {
     }
 
     @Test
+    fun inventedOrSilentTranscriptsAreNotSent() {
+        assertEquals(null, spokenTranscript("NONE"))
+        assertEquals(null, spokenTranscript("English: Hello, I'm a student.\nHindi: नमस्ते"))
+        assertEquals("set an alarm for 6", spokenTranscript(" set an alarm for 6 "))
+    }
+
+    @Test
     fun foodIsLeftToTheModelNotKeywords() {
         assertEquals(NilaIntent.Converse("I'm starving, get me biryani"), engine.route("I'm starving, get me biryani"))
     }

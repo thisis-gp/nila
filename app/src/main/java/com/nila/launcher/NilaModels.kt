@@ -177,10 +177,23 @@ fun transcriptionPrompt(languageName: String?) = if (languageName == null) {
     // Auto: the speaker may use any of NILA's languages, or mix them in one sentence.
     "Transcribe this speech exactly as spoken. The speaker uses English, Hindi or Malayalam, and may mix them. " +
         "Write each language in its own script: Malayalam in Malayalam script, Hindi in Devanagari, English in Latin letters. " +
-        "Output only the transcript, with no answer, translation or notes."
+        "Output only the transcript, with no answer, translation or notes. If there is no clear speech, output exactly: NONE"
 } else {
     "Transcribe this speech exactly as spoken. The speaker most likely uses $languageName. " +
-        "Write it in that language's own script. Output only the transcript, with no answer, translation or notes."
+        "Write it in that language's own script. Output only the transcript, with no answer, translation or notes. " +
+        "If there is no clear speech, output exactly: NONE"
+}
+
+/**
+ * Null for a transcript that isn't something the person said: "NONE" for silence, or the labelled
+ * "English: … Hindi: … Malayalam: …" lines Gemma invented from background noise on the iQOO, which
+ * were then sent as a request.
+ */
+fun spokenTranscript(raw: String?): String? {
+    val text = raw?.trim().orEmpty()
+    if (text.isEmpty() || text.equals("NONE", ignoreCase = true)) return null
+    if (Regex("""(?im)^\s*(english|hindi|malayalam)\s*:""").containsMatchIn(text)) return null
+    return text
 }
 
 /** Exposes a capability's schema to LiteRT-LM. Execution stays in NilaEngine, never inside the model runtime. */
@@ -412,7 +425,7 @@ class NilaBrain(
         }.onFailure { Log.w(TAG, "transcribe failed", it) }.getOrNull()
             // Timing and size only: a transcript is what the user said and must never reach device logs.
             .also { Log.i(TAG, "transcribe ms=${SystemClock.elapsedRealtime() - start} bytes=${wav.size} chars=${it?.length ?: 0}") }
-            ?.takeIf { it.isNotBlank() }
+            .let(::spokenTranscript)
     }
 
     /**
