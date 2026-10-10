@@ -456,7 +456,7 @@ private fun ResponseView(
     addTurn: (String, NilaResponse) -> Unit,
 ) {
     when (response) {
-        // ponytail: plain tap confirms; biometric prompt comes with the confirmation flow.
+        // Confirmation is this card only: the iQOO 15 loan devices have fingerprint locked for the hackathon.
         is NilaResponse.NeedsConfirmation -> ActionCard(
             title = response.capability.label,
             detail = response.lines.joinToString("\n", postfix = "\nNothing happens until you confirm.") { (name, value) -> "$name: $value" },

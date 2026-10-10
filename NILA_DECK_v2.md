@@ -55,7 +55,7 @@ Gemini and other assistants are starting to run tasks inside apps. NILA is diffe
 It searches on its own. It asks before it acts.
 Read (automatic): search, filter and compare.
 Prepare (you review): draft messages, plans and carts.
-Commit (fingerprint): pay, buy, send, or share personal data.
+Commit (you confirm): pay, buy, send, or share personal data.
 The bigger the consequence, the stronger the check.
 Speech and intent parsing happen on the phone. [CONFIRM: true in the build we demo?]
 
@@ -69,7 +69,7 @@ Office Kit connects to the laptop for builds, evals and a fallback model.
 A launcher is the most phone-native thing you can build. It's the first screen you see every time you unlock.
 - The model runs on the phone. Intent parsing runs on the Snapdragon NPU, so it's fast, private and works offline. [CONFIRM: NPU or GPU in the demo build?]
 - It is the home screen of the iQOO 15 we're presenting from.
-- Every payment or send needs a fingerprint.
+- Every payment or send waits for you to confirm the exact details.
 - Office Kit links the phone to a laptop for building and testing.
 
 ## 11. NEW: What works today

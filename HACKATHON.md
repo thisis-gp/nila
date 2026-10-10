@@ -24,7 +24,7 @@ The finale page assigns 25% to HackTracker device data and 75% to jury evaluatio
 2. FunctionGemma emits a typed Swiggy search call.
 3. NILA renders comparable trusted cards from real Food MCP results.
 4. The user chooses an option and reviews the exact cart, address, price and provider.
-5. NILA stops at a visible biometric confirmation before the commit action.
+5. NILA stops at a visible confirmation card before the commit action, and runs it only after the user taps Confirm.
 6. NILA records the approved or cancelled action locally.
 
 ### Ecosystem proof
