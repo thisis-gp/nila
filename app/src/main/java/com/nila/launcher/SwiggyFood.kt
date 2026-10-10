@@ -43,6 +43,9 @@ data class FoodItem(
 
 data class FoodSize(val groupId: String, val id: String, val name: String, val price: String, val isDefault: Boolean)
 
+/** A dish from a search across restaurants, with the place it comes from and why NILA ranked it there. */
+data class FoodDish(val item: FoodItem, val restaurant: FoodRestaurant, val reason: String)
+
 data class FoodCartLine(val itemId: String, val name: String, val quantity: Int, val price: String)
 
 data class FoodCartView(
@@ -93,6 +96,13 @@ sealed interface FoodCard {
         val picks: List<Pair<FoodRestaurant, String>>,
     ) : FoodCard
     data class Menu(val address: FoodAddress, val restaurant: FoodRestaurant, val items: List<FoodItem>) : FoodCard
+    /** The dish the user asked for, from every nearby place that has it. Restaurants stay one tap away. */
+    data class Dishes(
+        val address: FoodAddress,
+        val query: String,
+        val intent: NilaResponse.FoodSearch,
+        val dishes: List<FoodDish>,
+    ) : FoodCard
     data class Cart(val address: FoodAddress, val restaurant: FoodRestaurant, val cart: FoodCartView) : FoodCard
     data class Payment(
         val address: FoodAddress,
@@ -131,7 +141,8 @@ internal class FoodFlow(private val context: Context) {
     /** The cards a Back link returns to, shown again without asking Swiggy. */
     var lastResults: FoodCard.Restaurants? = null
         private set
-    var lastMenu: FoodCard.Menu? = null
+    /** Where "Add more" goes from the cart: the dish list or the restaurant menu the user added from. */
+    var lastMenu: FoodCard? = null
         private set
     var lastCart: FoodCard.Cart? = null
         private set
@@ -209,6 +220,8 @@ internal class FoodFlow(private val context: Context) {
 
     suspend fun restaurants(address: FoodAddress, query: String): NilaResponse {
         // A taste word ("light", "spicy") goes into Swiggy's search; if that finds nothing, the dish alone.
+        // The dish first: "paneer roll" means paneer rolls from every place nearby, not a list of restaurants.
+        val dishResult = call("search_menu", JSONObject().put("query", query).put("addressId", address.id))
         val worded = listOfNotNull(intent.preference, query).joinToString(" ")
         var list = call("search_restaurants", JSONObject().put("query", worded).put("addressId", address.id))
             ?.let(::parseRestaurants) ?: return problem("Searching restaurants")
@@ -217,7 +230,10 @@ internal class FoodFlow(private val context: Context) {
                 ?.let(::parseRestaurants).orEmpty()
         }
         if (list.isEmpty()) return card(FoodCard.Problem("No restaurants found for \"$query\" near ${address.label}."))
-        return card(FoodCard.Restaurants(address, query, list, intent, bestFits(list, intent)).also { lastResults = it })
+        val results = FoodCard.Restaurants(address, query, list, intent, bestFits(list, intent)).also { lastResults = it }
+        val dishes = dishResult?.let { rankDishes(parseDishes(it, list), intent) }.orEmpty()
+        if (dishes.isEmpty()) return card(results)
+        return card(FoodCard.Dishes(address, query, intent, dishes).also { lastMenu = it })
     }
 
     suspend fun menu(address: FoodAddress, restaurant: FoodRestaurant, query: String): NilaResponse {
@@ -474,6 +490,60 @@ internal fun bestFits(list: List<FoodRestaurant>, intent: NilaResponse.FoodSearc
         r to reasons.joinToString(" · ")
     }
 }
+
+/** Dishes from a search across restaurants; a place known to be closed drops out. */
+private fun parseDishes(result: JSONObject, restaurants: List<FoodRestaurant>): List<FoodDish> =
+    parseMenuItems(result).mapNotNull { item ->
+        val raw = runCatching { JSONObject(item.raw) }.getOrNull() ?: return@mapNotNull null
+        if (raw.pick("inStock") == "0") return@mapNotNull null
+        val id = raw.pick("restaurant_id", "restaurantId") ?: return@mapNotNull null
+        val place = restaurants.firstOrNull { it.id == id }
+            ?: FoodRestaurant(id, raw.pick("restaurant_name", "restaurantName").orEmpty(), "", raw.pick("rating").orEmpty(), "", "", "", null, "", open = true)
+        if (!place.open) return@mapNotNull null
+        FoodDish(item, place, "")
+    }
+
+/** Best fit first: inside the budget for the party, then rating, then speed, then price. */
+internal fun rankDishes(dishes: List<FoodDish>, intent: NilaResponse.FoodSearch): List<FoodDish> {
+    val people = intent.people ?: 1
+    fun cost(d: FoodDish) = digitsOf(d.item.chosenSize?.price ?: d.item.price)?.let { it * people }
+    fun fits(d: FoodDish) = intent.budgetRupees?.let { budget -> cost(d)?.let { it <= budget } } ?: true
+    fun minutes(d: FoodDish) = digitsOf(d.restaurant.eta) ?: Int.MAX_VALUE
+    fun match(d: FoodDish) = nameMatch(d.item.name, intent.query)
+    val best = dishes.maxOfOrNull { match(it) } ?: 0.0
+    return dishes.sortedWith(
+        compareByDescending<FoodDish> { match(it) }
+            .thenByDescending { fits(it) }
+            .thenByDescending { it.restaurant.rating.toDoubleOrNull() ?: 0.0 }
+            .thenBy { minutes(it) }
+            .thenBy { cost(it) ?: Int.MAX_VALUE },
+    ).map { dish ->
+        val reason = buildList {
+            if (best > 0 && match(dish) == best) add("Closest match")
+            add(dish.restaurant.name)
+            if (dish.restaurant.rating.isNotBlank()) add("★ ${dish.restaurant.rating}")
+            if (dish.restaurant.eta.isNotBlank()) add(dish.restaurant.eta)
+            val total = cost(dish)
+            if (intent.people != null && total != null) add("₹$total for ${partyWords(people)}")
+            if (intent.budgetRupees != null && !fits(dish)) add("over budget")
+        }.joinToString(" · ")
+        dish.copy(reason = reason)
+    }
+}
+
+/**
+ * How much of what the user said the dish name covers: 1.0 when every word is there ("paneer tikka roll"
+ * for "paneer roll"), 0.5 for half ("paneer wrap"). Swiggy's own order mixes near-misses in.
+ */
+internal fun nameMatch(name: String, query: String): Double {
+    val words = query.lowercase().split(Regex("""\W+""")).filter { it.length > 2 }.ifEmpty { return 0.0 }
+    val lower = name.lowercase()
+    return words.count { lower.contains(it) }.toDouble() / words.size
+}
+
+/** "Best fit" only when the user set limits to fit; with just a dish it is NILA's top pick, and says so. */
+internal fun pickLabel(intent: NilaResponse.FoodSearch) =
+    if (intent.budgetRupees != null || intent.people != null || intent.preference != null) "BEST FIT" else "TOP PICK"
 
 private fun partyWords(people: Int) = if (people == 1) "one" else "$people"
 

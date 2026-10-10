@@ -159,6 +159,22 @@ class NilaEngineTest {
     }
 
     @Test
+    fun closestDishMatchBeatsAHigherRatedNearMiss() {
+        fun dish(name: String, rating: String, eta: String) = FoodDish(
+            FoodItem(name, name, "₹200", true, null, "", false, "{}"),
+            FoodRestaurant(name, "Place $name", "", rating, eta, "", "", null, "", open = true),
+            "",
+        )
+        val wrap = dish("Hummus And Chipotle Paneer Wrap", "4.6", "10-15 mins")
+        val roll = dish("Paneer Tikka Roll", "4.5", "20-25 mins")
+        val ranked = rankDishes(listOf(wrap, roll), NilaResponse.FoodSearch("paneer roll"))
+        assertEquals(listOf(roll.item, wrap.item), ranked.map { it.item })
+        assertTrue(ranked.first().reason.startsWith("Closest match"))
+        assertEquals("TOP PICK", pickLabel(NilaResponse.FoodSearch("paneer roll")))
+        assertEquals("BEST FIT", pickLabel(NilaResponse.FoodSearch("paneer roll", budgetRupees = 300)))
+    }
+
+    @Test
     fun foodIsLeftToTheModelNotKeywords() {
         assertEquals(NilaIntent.Converse("I'm starving, get me biryani"), engine.route("I'm starving, get me biryani"))
     }

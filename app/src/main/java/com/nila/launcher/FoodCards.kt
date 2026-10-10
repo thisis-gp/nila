@@ -47,6 +47,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,7 +59,7 @@ internal interface FoodActions {
     fun locate(query: String)
     fun back(card: FoodCard)
     fun lastResults(): FoodCard.Restaurants?
-    fun lastMenu(): FoodCard.Menu?
+    fun lastMenu(): FoodCard?
     fun lastCart(): FoodCard.Cart?
     fun changeAddress(query: String)
     fun refine(address: FoodAddress, search: NilaResponse.FoodSearch)
@@ -85,6 +86,7 @@ internal fun FoodCardView(card: FoodCard, actions: FoodActions) {
         is FoodCard.Addresses -> AddressesCard(card, actions)
         is FoodCard.Restaurants -> RestaurantsCard(card, actions)
         is FoodCard.Menu -> MenuCard(card, actions)
+        is FoodCard.Dishes -> DishesCard(card, actions)
         is FoodCard.Cart -> CartCard(card, actions)
         is FoodCard.Payment -> PaymentCard(card, actions)
         is FoodCard.Order -> OrderCard(card, actions)
@@ -402,7 +404,7 @@ private fun RestaurantsCard(card: FoodCard.Restaurants, actions: FoodActions) {
             Text(" · Change", color = Lime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
         card.picks.forEachIndexed { index, (restaurant, reason) ->
-            PickCard(restaurant, reason, best = index == 0) { actions.openRestaurant(card.address, restaurant, card.query) }
+            PickCard(restaurant, reason, badge = pickLabel(card.intent).takeIf { index == 0 }) { actions.openRestaurant(card.address, restaurant, card.query) }
         }
         val rest = card.restaurants.filter { r -> card.picks.none { it.first == r } }
         if (rest.isNotEmpty()) {
@@ -429,7 +431,8 @@ private fun RestaurantsCard(card: FoodCard.Restaurants, actions: FoodActions) {
 
 /** One of the best fits: image-led like the compare step in the prototype, with why NILA picked it. */
 @Composable
-private fun PickCard(restaurant: FoodRestaurant, reason: String, best: Boolean, onOpen: () -> Unit) {
+private fun PickCard(restaurant: FoodRestaurant, reason: String, badge: String?, onOpen: () -> Unit) {
+    val best = badge != null
     Surface(
         color = CardInk,
         shape = RoundedCornerShape(20.dp),
@@ -467,9 +470,9 @@ private fun PickCard(restaurant: FoodRestaurant, reason: String, best: Boolean, 
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (best) {
+                if (badge != null) {
                     Text(
-                        "BEST FIT",
+                        badge,
                         color = Ink,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Black,
@@ -588,6 +591,93 @@ private fun RestaurantRow(restaurant: FoodRestaurant, onOpen: () -> Unit) {
     }
 }
 
+// ---- Step 2: the dish, from every place that has it ---------------------------
+
+private const val DISH_PREVIEW = 6
+
+@Composable
+private fun DishesCard(card: FoodCard.Dishes, actions: FoodActions) {
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        StepHeader(2, foodIntentTitle(card.intent))
+        IntentChips(card.intent) { actions.refine(card.address, it) }
+        Row(
+            Modifier.clickable { actions.changeAddress(card.query) }.padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("To ${card.address.label}", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(" · Change", color = Lime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+        val shown = if (showAll) card.dishes else card.dishes.take(DISH_PREVIEW)
+        shown.forEachIndexed { index, dish ->
+            DishRow(dish, badge = pickLabel(card.intent).takeIf { index == 0 }) { item -> actions.changeItem(card.address, dish.restaurant, item, +1) }
+        }
+        if (!showAll && card.dishes.size > DISH_PREVIEW) {
+            Text(
+                "See ${card.dishes.size - DISH_PREVIEW} more",
+                color = Lime,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clickable { showAll = true }.padding(vertical = 4.dp),
+            )
+        }
+        actions.lastResults()?.let { results -> BackLink("Browse restaurants instead") { actions.back(results) } }
+    }
+}
+
+@Composable
+private fun DishRow(dish: FoodDish, badge: String?, onAdd: (FoodItem) -> Unit) {
+    val best = badge != null
+    var size by remember(dish.item.id) { mutableStateOf(dish.item.chosenSize) }
+    val item = dish.item.copy(chosenSize = size)
+    Surface(
+        color = CardInk,
+        shape = RoundedCornerShape(20.dp),
+        border = if (best) BorderStroke(1.5.dp, Lime) else null,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(104.dp).height(116.dp)) {
+                FoodImage(item.imageUrl, Modifier.size(104.dp).clip(RoundedCornerShape(16.dp)))
+                Surface(
+                    color = Paper,
+                    shape = RoundedCornerShape(10.dp),
+                    shadowElevation = 4.dp,
+                    modifier = Modifier.align(Alignment.BottomCenter).width(80.dp).clickable { onAdd(item) },
+                ) {
+                    Text(
+                        "ADD",
+                        color = VegGreen,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(vertical = 5.dp).fillMaxWidth(),
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+            Column(Modifier.weight(1f).padding(start = 14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    VegMark(item.veg)
+                    if (badge != null) {
+                        Text(
+                            badge,
+                            color = Ink,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 1.sp,
+                            modifier = Modifier.background(Lime, RoundedCornerShape(50)).padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+                Text(item.name, color = Paper, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(size?.price ?: item.price, color = Paper, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                if (item.sizes.size > 1) SizeChips(item.sizes, size) { size = it }
+                Text(dish.reason, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
 // ---- Step 3: menu ------------------------------------------------------------
 
 @Composable
@@ -665,7 +755,7 @@ private fun SizeChips(sizes: List<FoodSize>, selected: FoodSize?, onPick: (FoodS
 private fun CartCard(card: FoodCard.Cart, actions: FoodActions) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         StepHeader(4, "Your cart")
-        actions.lastMenu()?.let { menu -> BackLink("Add more from ${card.restaurant.name}") { actions.back(menu) } }
+        actions.lastMenu()?.let { menu -> BackLink("Add more") { actions.back(menu) } }
         Surface(color = CardInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(card.cart.restaurantName, color = Paper, fontWeight = FontWeight.Bold, fontSize = 16.sp)
