@@ -330,12 +330,13 @@ class NilaEngine(
     }
 
     /**
-     * "and 20%" or "what about 15%" right after "18% of 4250": the same amount at the new rate, worked out
+     * "and 20%" or "what about 15%" after "18% of 4250": the same amount at the new rate, worked out
      * here, never by a model (Gemma once answered "20% of 425 is 90.9" on the iQOO 15).
      */
-    fun calculateFollowUp(input: String, previous: String?): NilaResponse? {
+    fun calculateFollowUp(input: String, earlier: List<String>): NilaResponse? {
         val rate = percentFollowUp.matchEntire(normalize(input))?.groupValues?.get(1) ?: return null
-        val amount = previous?.let { percentage.find(normalize(it)) }?.groupValues?.get(2) ?: return null
+        // The latest amount in the conversation, newest first: after "and 20%" it is NILA's "20% of 4250 is 850".
+        val amount = earlier.firstNotNullOfOrNull { percentage.find(normalize(it))?.groupValues?.get(2) } ?: return null
         return calculate("$rate% of $amount")
     }
 

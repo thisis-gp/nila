@@ -283,7 +283,7 @@ class NilaBrain(
         fun answer(path: String, response: NilaResponse) =
             done(path, (response as? NilaResponse.FoodSearch)?.let { engine.foodConstraints(input, it) } ?: response).also { remember(input, it) }
         engine.calculate(input)?.let { return@withContext answer("calculator", it) }
-        engine.calculateFollowUp(input, history.lastOrNull()?.first)?.let { return@withContext answer("calculator:follow-up", it) }
+        engine.calculateFollowUp(input, history.reversed().flatMap { (user, nila) -> listOf(nila, user) })?.let { return@withContext answer("calculator:follow-up", it) }
         val keyword = engine.route(input)
         if (keyword is NilaIntent.Call && keyword.call.capabilityId == REMEMBER && assistant != null) {
             return@withContext answer("rules+gemma:$REMEMBER", rememberWithKind(input, engine.execute(keyword)))
