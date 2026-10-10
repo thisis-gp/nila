@@ -213,8 +213,12 @@ internal class FoodFlow(private val context: Context) {
             .put("addressCategory", form.category)
             .put("userName", form.name)
             .put("userPhone", form.phone)
-        call("create_address", args) ?: return problem("Saving the address")
-        return start(query)
+            .put("addressTag", form.house)
+        val created = call("create_address", args)?.let { findString(it, "addressId") } ?: return problem("Saving the address")
+        // Deliver to the address just saved; restarting from the last-used one showed "To Hotel2" after adding WeWork.
+        val saved = call("get_addresses")?.let(::parseAddresses).orEmpty().firstOrNull { it.id == created }
+            ?: FoodAddress(created, form.house, full)
+        return deliverTo(saved, query)
     }
 
     suspend fun refine(address: FoodAddress, search: NilaResponse.FoodSearch): NilaResponse {
