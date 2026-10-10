@@ -44,6 +44,10 @@ class MoreActionsTest {
         assertEquals(SoundChange("silent"), respond("put my phone on silent"))
         assertEquals(SoundChange("vibrate"), respond("vibrate mode"))
         assertEquals(SoundChange("mute"), respond("mute"))
+        // "ring" also means call; "ring mode" made a "Call mode" card on the iQOO 15.
+        assertEquals(SoundChange("ring"), respond("ring mode"))
+        assertNull(callTarget("ring mode"))
+        assertEquals(Call("Amma"), respond("ring Amma"))
     }
 
     @Test
