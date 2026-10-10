@@ -185,6 +185,8 @@ private fun NilaApp(resumeVersion: Int) {
                 runFood(foodIntentTitle(search)) { foodFlow.refine(address, search) }
             override fun pickAddress(address: FoodAddress, query: String) =
                 runFood("Deliver to ${address.label}") { foodFlow.deliverTo(address, query) }
+            override fun applyCoupon(payment: FoodCard.Payment, coupon: FoodCoupon) =
+                runFood("Apply ${coupon.code}") { foodFlow.applyCoupon(payment, coupon) }
             override fun back(card: FoodCard) = runFood("Back") { NilaResponse.Food(card) }
             override fun lastResults() = foodFlow.lastResults
             override fun lastMenu() = foodFlow.lastMenu

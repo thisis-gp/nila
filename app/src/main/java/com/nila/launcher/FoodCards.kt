@@ -57,6 +57,7 @@ import kotlinx.coroutines.delay
 /** What the food cards can ask NILA to do next. Implemented in MainActivity. */
 internal interface FoodActions {
     fun locate(query: String)
+    fun applyCoupon(payment: FoodCard.Payment, coupon: FoodCoupon)
     fun back(card: FoodCard)
     fun lastResults(): FoodCard.Restaurants?
     fun lastMenu(): FoodCard?
@@ -608,6 +609,15 @@ private fun DishesCard(card: FoodCard.Dishes, actions: FoodActions) {
             Text("To ${card.address.label}", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             Text(" · Change", color = Lime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
+        // The comparison in one line: what the same dish costs across the places that have it.
+        val prices = card.dishes.mapNotNull { Regex("""\d+""").find(it.item.chosenSize?.price ?: it.item.price)?.value?.toIntOrNull() }
+        if (prices.size > 1) {
+            Text(
+                "₹${prices.min()}–₹${prices.max()} across ${card.dishes.map { it.restaurant.id }.distinct().size} places",
+                color = Muted,
+                fontSize = 12.sp,
+            )
+        }
         val shown = if (showAll) card.dishes else card.dishes.take(DISH_PREVIEW)
         shown.forEachIndexed { index, dish ->
             DishRow(dish, badge = pickLabel(card.intent).takeIf { index == 0 }) { item -> actions.changeItem(card.address, dish.restaurant, item, +1) }
@@ -860,6 +870,7 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
                 modifier = Modifier.clickable(enabled = !placed) { showAll = true }.padding(vertical = 4.dp),
             )
         }
+        OffersBlock(card, enabled = !placed) { actions.applyCoupon(card, it) }
         Spacer(Modifier.height(4.dp))
         Surface(color = CommitInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -900,6 +911,63 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
                     )
                 }
                 Text("This places a real Swiggy order and charges you.", color = Muted, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+/** The best usable coupon up front with one Apply tap; the rest stay folded. */
+@Composable
+private fun OffersBlock(card: FoodCard.Payment, enabled: Boolean, onApply: (FoodCoupon) -> Unit) {
+    var showAll by remember { mutableStateOf(false) }
+    val applied = card.applied
+    if (applied != null) {
+        Surface(color = RatingGreen.copy(alpha = 0.18f), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+            Text(
+                "${applied.code} applied" + applied.saving.takeIf(String::isNotBlank)?.let { " · you save $it" }.orEmpty(),
+                color = Paper,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(12.dp),
+            )
+        }
+        return
+    }
+    val usable = card.coupons.filter { it.usable }
+    if (usable.isEmpty()) {
+        if (card.coupons.isNotEmpty()) Text("No coupon fits this cart yet", color = Muted, fontSize = 12.sp)
+        return
+    }
+    Text("OFFERS", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(top = 4.dp))
+    Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+        Column {
+            (if (showAll) usable else usable.take(1)).forEachIndexed { index, coupon ->
+                if (index > 0) HorizontalDivider(color = Panel)
+                Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(coupon.code, color = Lime, fontWeight = FontWeight.Black, fontSize = 13.sp, letterSpacing = 1.sp)
+                        Text(coupon.title, color = Paper, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                    Text(
+                        "Apply",
+                        color = Ink,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        modifier = Modifier.clip(RoundedCornerShape(50)).background(Lime)
+                            .clickable(enabled = enabled) { onApply(coupon) }
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                    )
+                }
+            }
+            if (!showAll && usable.size > 1) {
+                HorizontalDivider(color = Panel)
+                Text(
+                    "${usable.size - 1} more offers",
+                    color = Lime,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.fillMaxWidth().clickable { showAll = true }.padding(horizontal = 14.dp, vertical = 10.dp),
+                )
             }
         }
     }

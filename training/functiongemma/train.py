@@ -8,6 +8,11 @@ Outputs in /kaggle/working:
   eval.json                         base vs tuned accuracy per tool on the held-out split
 """
 
+import os
+
+# 12 tool schemas make ~1800-token prompts; fragmentation, not size, broke batch 2 on the T4.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import glob
 import json
 import os
@@ -16,7 +21,7 @@ import shutil
 import subprocess
 import sys
 
-subprocess.run([sys.executable, "-m", "pip", "install", "-q", "transformers==4.57.1", "trl==0.25.1", "datasets==4.4.1"], check=True)
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "transformers==4.57.1", "trl==0.25.1", "datasets==4.4.1", "liger-kernel"], check=True)
 
 import torch  # noqa: E402
 from datasets import load_dataset  # noqa: E402
@@ -101,8 +106,12 @@ trainer = SFTTrainer(
     args=SFTConfig(
         output_dir=CHECKPOINT,
         num_train_epochs=EPOCHS,
-        per_device_train_batch_size=2,
-        gradient_accumulation_steps=16,
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=8,
+        # 12 tool schemas make ~1800-token prompts: the full 262k-vocab logits ran out of T4 memory even at
+        # batch 1. Liger's fused loss never builds them; fp16 autocast makes a step ~3x faster (fp32 masters).
+        use_liger_kernel=True,
+        fp16=True,
         learning_rate=LEARNING_RATE,
         lr_scheduler_type="cosine",
         warmup_ratio=0.05,

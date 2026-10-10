@@ -57,6 +57,9 @@ data class FoodCartView(
 
 data class FoodPayOption(val label: String, val method: String, val intentApp: String?, val iconUrl: String? = null)
 
+/** A Swiggy offer for this cart. [usable] is Swiggy's own applicability answer for this cart and address. */
+data class FoodCoupon(val code: String, val title: String, val saving: String, val usable: Boolean)
+
 data class NewAddressForm(
     val house: String,
     val street: String,
@@ -109,6 +112,8 @@ sealed interface FoodCard {
         val restaurant: FoodRestaurant,
         val cart: FoodCartView,
         val options: List<FoodPayOption>,
+        val coupons: List<FoodCoupon> = emptyList(),
+        val applied: FoodCoupon? = null,
     ) : FoodCard
     data class Order(
         val title: String,
@@ -145,6 +150,8 @@ internal class FoodFlow(private val context: Context) {
     var lastMenu: FoodCard? = null
         private set
     var lastCart: FoodCard.Cart? = null
+        private set
+    var lastPayment: FoodCard.Payment? = null
         private set
 
     private suspend fun call(tool: String, args: JSONObject = JSONObject()): JSONObject? = withContext(Dispatchers.IO) {
@@ -298,7 +305,18 @@ internal class FoodFlow(private val context: Context) {
         val usual = memory.getString(LAST_PAYMENT, null)
         // The method used last time comes first, so checkout is one tap unless the user wants another.
         val ordered = options.sortedByDescending { it.label == usual }
-        return card(FoodCard.Payment(address, restaurant, cart, ordered))
+        val coupons = call("fetch_food_coupons", JSONObject().put("restaurantId", restaurant.id).put("addressId", address.id))
+            ?.let(::parseCoupons).orEmpty()
+        return card(FoodCard.Payment(address, restaurant, cart, ordered, coupons).also { lastPayment = it })
+    }
+
+    /** Applies one coupon; Swiggy answers with the repriced cart, which replaces the bill on the same card. */
+    suspend fun applyCoupon(payment: FoodCard.Payment, coupon: FoodCoupon): NilaResponse {
+        val result = call("apply_food_coupon", JSONObject().put("couponCode", coupon.code).put("addressId", payment.address.id))
+            ?: return problem("Applying ${coupon.code}")
+        val repriced = parseCart(result, payment.restaurant.name).takeIf { it.lines.isNotEmpty() }
+            ?: parseCart(call("get_food_cart", JSONObject().put("addressId", payment.address.id).put("restaurantName", payment.restaurant.name)) ?: result, payment.restaurant.name)
+        return card(payment.copy(cart = repriced, applied = coupon).also { lastPayment = it })
     }
 
     /** Commit: places a real Swiggy order. Only reachable from the two-tap confirmation. */
@@ -511,6 +529,7 @@ internal fun rankDishes(dishes: List<FoodDish>, intent: NilaResponse.FoodSearch)
     fun minutes(d: FoodDish) = digitsOf(d.restaurant.eta) ?: Int.MAX_VALUE
     fun match(d: FoodDish) = nameMatch(d.item.name, intent.query)
     val best = dishes.maxOfOrNull { match(it) } ?: 0.0
+    val cheapest = dishes.filter { match(it) == best }.mapNotNull { cost(it) }.minOrNull()
     return dishes.sortedWith(
         compareByDescending<FoodDish> { match(it) }
             .thenByDescending { fits(it) }
@@ -520,6 +539,7 @@ internal fun rankDishes(dishes: List<FoodDish>, intent: NilaResponse.FoodSearch)
     ).map { dish ->
         val reason = buildList {
             if (best > 0 && match(dish) == best) add("Closest match")
+            if (cost(dish) != null && cost(dish) == cheapest) add("Lowest price")
             add(dish.restaurant.name)
             if (dish.restaurant.rating.isNotBlank()) add("★ ${dish.restaurant.rating}")
             if (dish.restaurant.eta.isNotBlank()) add(dish.restaurant.eta)
@@ -544,6 +564,26 @@ internal fun nameMatch(name: String, query: String): Double {
 /** "Best fit" only when the user set limits to fit; with just a dish it is NILA's top pick, and says so. */
 internal fun pickLabel(intent: NilaResponse.FoodSearch) =
     if (intent.budgetRupees != null || intent.people != null || intent.preference != null) "BEST FIT" else "TOP PICK"
+
+/**
+ * Offers Swiggy lists for this cart, usable ones first, biggest saving first. Swiggy's tool asks to recommend
+ * only coupons valid for cash on delivery, so offers it marks online- or card-only are left out.
+ */
+private fun parseCoupons(result: JSONObject): List<FoodCoupon> =
+    allObjects(result)
+        .mapNotNull { o ->
+            val code = o.pick("couponCode", "coupon_code", "code") ?: return@mapNotNull null
+            val terms = listOfNotNull(o.pick("description", "terms", "tnc", "subTitle"), o.pick("title", "header")).joinToString(" ")
+            if (Regex("""(?i)\b(card|online payment|upi only|prepaid)\b""").containsMatchIn(terms) && !terms.contains("cash", ignoreCase = true)) return@mapNotNull null
+            FoodCoupon(
+                code = code,
+                title = o.pick("title", "header", "description", "subTitle") ?: code,
+                saving = o.pick("discountAmount", "discount_amount", "savings", "discount")?.let(::rupees).orEmpty(),
+                usable = o.pick("isApplicable", "applicable", "is_applicable", "valid")?.let { it == "true" || it == "1" } ?: true,
+            )
+        }
+        .distinctBy { it.code }
+        .sortedWith(compareByDescending<FoodCoupon> { it.usable }.thenByDescending { digitsOf(it.saving) ?: 0 })
 
 private fun partyWords(people: Int) = if (people == 1) "one" else "$people"
 
