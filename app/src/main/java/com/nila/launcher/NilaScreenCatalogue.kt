@@ -27,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -63,6 +65,7 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
         NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome)
+        NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
         NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps -> Unit
     }
 }
@@ -223,7 +226,7 @@ private fun SettingsScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit, onC
     ScreenTitle("NILA is yours.")
     BodyText("Language, voice, privacy and intelligence stay understandable.")
     PrimaryButton("Choose default Home app") { onChooseDefaultHome() }
-    SectionCard("Languages", "English · हिंदी · മലയാളം", "PLANNED")
+    PrimaryButton("Voice languages · English · हिंदी · മലയാളം") { onOpen(NilaScreen.Languages) }
     SectionCard("Lakshmi voice", "Android on-device voice candidate", "NOT CONNECTED")
     SectionCard("Memory", "Typed demo fact stays in app storage", "LOCAL")
     SectionCard("Commit actions", "Pay, send, book, delete or share", "ALWAYS CONFIRM")
@@ -233,6 +236,51 @@ private fun SettingsScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit, onC
     SecondaryButton("Memory") { onOpen(NilaScreen.Memory) }
     SecondaryButton("People & messages") { onOpen(NilaScreen.People) }
     SecondaryButton("Activity & approvals") { onOpen(NilaScreen.Activity) }
+}
+
+@Composable
+private fun LanguagesScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("VOICE LANGUAGES", onOpen, onBack) {
+    val context = LocalContext.current
+    var input by remember { mutableStateOf<Map<String, SpeechInputStatus>>(emptyMap()) }
+    var output by remember { mutableStateOf<Map<String, SpeechOutputStatus>>(emptyMap()) }
+    var checks by remember { mutableStateOf(0) }
+    var message by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(checks) {
+        probeSpeechInput(context) { input = it }
+        probeSpeechOutput(context) { output = it }
+    }
+
+    ScreenTitle("Speak in your\nlanguage.")
+    BodyText("NILA checks this phone's on-device speech packs. Typing works in every language, even when a pack is missing.")
+    voiceLanguages.forEach { language ->
+        val support = LanguageSupport(
+            language,
+            input[language.tag] ?: SpeechInputStatus.UNKNOWN,
+            output[language.tag] ?: SpeechOutputStatus.UNKNOWN,
+        )
+        val checked = language.tag in input && language.tag in output
+        SectionCard(
+            title = language.name,
+            detail = "Listening: ${support.input.label}\nSpeaking: ${support.output.label}",
+            status = when {
+                !checked -> "CHECKING…"
+                support.voiceReady -> "VOICE READY · OFFLINE"
+                else -> "TEXT ONLY FOR NOW"
+            },
+        )
+        if (support.input == SpeechInputStatus.DOWNLOADABLE) {
+            SecondaryButton("Download ${language.name} speech pack") {
+                message = if (downloadSpeechInput(context, language.tag)) "Download requested. Tap Check again in a minute." else "This phone cannot download that pack from here."
+            }
+        }
+    }
+    if (output.values.any { it == SpeechOutputStatus.NEEDS_DOWNLOAD || it == SpeechOutputStatus.UNAVAILABLE }) {
+        SecondaryButton("Install speaking voices") {
+            if (!installSpeechOutput(context)) message = "No voice installer is available on this phone."
+        }
+    }
+    message?.let { BodyText(it, Lime) }
+    PrimaryButton("Check again") { message = null; checks++ }
 }
 
 @Composable
