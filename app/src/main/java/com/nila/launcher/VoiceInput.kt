@@ -139,6 +139,8 @@ fun VoiceMic(
     transcribe: suspend (wav: ByteArray, languageName: String) -> String?,
     onFinal: (String) -> Unit,
     onMessage: (String) -> Unit,
+    /** Called as recording starts, so NILA stops talking and the mic does not record Lakshmi. */
+    onListenStart: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -151,6 +153,7 @@ fun VoiceMic(
     val latestMessage by rememberUpdatedState(onMessage)
 
     fun listen() {
+        onListenStart()
         stopRequested = false
         state = VoiceState.LISTENING
         scope.launch {
