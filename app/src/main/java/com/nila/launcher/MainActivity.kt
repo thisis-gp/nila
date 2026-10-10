@@ -183,7 +183,12 @@ private fun NilaApp(resumeVersion: Int) {
             override fun checkout(address: FoodAddress, restaurant: FoodRestaurant, cart: FoodCartView) =
                 runFood("Checkout") { foodFlow.payment(address, restaurant, cart) }
             override fun place(address: FoodAddress, cart: FoodCartView, option: FoodPayOption) =
-                runFood("Place order · ${option.label}") { foodFlow.place(address, cart, option) }
+                runFood("Place order · ${option.label}") {
+                    foodFlow.place(address, cart, option).also { response ->
+                        // Hand straight to the UPI app with the amount filled in; the card keeps a button to reopen it.
+                        ((response as? NilaResponse.Food)?.card as? FoodCard.Order)?.pending?.upiLink?.let(::openUpi)
+                    }
+                }
             override fun openUpi(link: String) {
                 // NPCI routes UPI payments through the payment app; this is the one hop NILA can't avoid.
                 runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link))) }

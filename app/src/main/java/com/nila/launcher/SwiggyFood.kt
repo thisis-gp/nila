@@ -332,8 +332,14 @@ private fun allStrings(node: Any?, out: MutableList<String> = mutableListOf(), d
     return out
 }
 
+/**
+ * The app-specific link first: Swiggy answered with upiIntentUrl = "gpay://upi/pay?...", which the old
+ * upi:// match missed, so Place order showed no way to pay. bridgeUrl is Swiggy's https fallback.
+ */
 private fun findUpiLink(node: Any?): String? =
-    allStrings(node).firstOrNull { it.startsWith("upi://") || it.startsWith("intent://") || it.contains("upi://pay") }
+    (node as? JSONObject)?.let { findString(it, "upiIntentUrl") }
+        ?: allStrings(node).firstOrNull { it.startsWith("upi://") || it.startsWith("intent://") || it.contains("upi://pay") || it.contains("://upi/pay") }
+        ?: (node as? JSONObject)?.let { findString(it, "bridgeUrl") }
 
 /** Swiggy images are either full URLs or Cloudinary IDs on its media CDN. */
 private fun imageUrl(o: JSONObject, vararg keys: String): String? {
