@@ -420,6 +420,28 @@ class NilaBrain(
      * on ("im hungry get me some biryani" came back as chat on the iQOO 15). A proposed call goes through
      * the same [act] checks as FunctionGemma's, so chat never acts on its own.
      */
+    /**
+     * Answers a web question from the search results' own text, on the phone. Search services often return
+     * only pages, and a list of links was all NILA showed. Null when Gemma isn't loaded or has nothing to say.
+     */
+    suspend fun answerFromWeb(question: String, results: List<WebResult>): String? = withContext(llm) {
+        val model = assistant ?: return@withContext null
+        val context = results.take(WEB_RESULTS_READ).mapIndexed { i, r -> "${i + 1}. ${r.title}: ${r.snippet.take(WEB_SNIPPET_CHARS)}" }.joinToString("
+")
+        if (context.isBlank()) return@withContext null
+        runCatching {
+            model.createConversation(
+                ConversationConfig(
+                    systemInstruction = Contents.of(WEB_ANSWER),
+                    samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0),
+                ),
+            ).use { it.sendMessage("Question: $question
+
+Search results:
+$context").contents.contents.filterIsInstance<Content.Text>().joinToString("") { t -> t.text }.trim() }
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+    }
+
     private fun chat(input: String): NilaResponse? {
         val model = assistant ?: return null
         val response = runCatching {
@@ -467,6 +489,13 @@ class NilaBrain(
             permission = PermissionClass.READ,
         )
         /** NILA's phrasebook: every command the keyword rules understand. Gemma maps any wording onto one. */
+        const val WEB_RESULTS_READ = 5
+        const val WEB_SNIPPET_CHARS = 400
+        val WEB_ANSWER = """
+            Answer the question in two or three short, plain sentences using only the search results given.
+            Lead with the answer itself. If the results don't contain it, say you couldn't find it. No lists, no links.
+        """.trimIndent()
+
         val REWRITE = """
             You turn the user's new message into ONE command for NILA, a phone assistant, using the conversation for context.
             Pick from these commands and fill the <parts> with the user's own words, names and numbers, in English:

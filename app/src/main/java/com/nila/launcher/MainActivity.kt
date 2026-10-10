@@ -424,20 +424,11 @@ private fun NilaApp(resumeVersion: Int) {
      */
     fun searchWeb(query: String) {
         scope.launch(Dispatchers.IO) {
-            val outcome = runCatching { tavilyAuth.apiKey?.takeIf(String::isNotBlank)?.let { TavilySearch.search(it, query) } ?: InstantAnswer.search(query) }
-            withContext(Dispatchers.Main) {
-                val answer = outcome.getOrNull()
-                answer?.summary?.let { turns += Turn("Web search", NilaResponse.Text(it)) }
-                val browse = AsyncChoice("Open \"$query\" in the browser", "Full results", "", "") {
-                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://duckduckgo.com/?q=" + Uri.encode(query)))) }
-                }
-                val sources = answer?.items.orEmpty().map { result ->
-                    AsyncChoice(result.title, result.snippet.take(140), "", "") {
-                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result.url))) }
-                    }
-                }
-                turns += Turn("Web search", NilaResponse.AsyncChoices(if (sources.isEmpty()) "Nothing quick to show here." else "Sources:", sources + browse))
-            }
+            val found = runCatching { tavilyAuth.apiKey?.takeIf(String::isNotBlank)?.let { TavilySearch.search(it, query) } ?: InstantAnswer.search(query) }.getOrNull()
+            val sources = found?.items.orEmpty()
+            // The service's own answer when it has one, else Gemma reads the top results: always an answer, not a page list.
+            val answer = found?.summary ?: brain.answerFromWeb(query, sources) ?: "I couldn't find a clear answer to that."
+            withContext(Dispatchers.Main) { turns += Turn("Web search", WebAnswer(query, answer, sources)) }
         }
     }
 
@@ -1121,6 +1112,7 @@ private fun ResponseView(
         // Resolved into the live flow in submit(); shown only if that ever fails to happen.
         is NilaResponse.FoodSearch -> AnswerCard("Looking for ${response.query}…")
         is NilaResponse.GrocerySearch -> AnswerCard("Comparing Zepto and Swiggy Instamart for ${response.query}…")
+        is WebAnswer -> WebAnswerView(response, context)
         // Confirmation is this card only: the iQOO 15 loan devices have fingerprint locked for the hackathon.
         is NilaResponse.NeedsConfirmation -> CommitCard(response) { confirm(response.token) }
         is NilaResponse.Text -> AnswerCard(response.value)
@@ -1462,6 +1454,27 @@ private fun dismissAlarm(context: Context, alarm: NilaResponse.DismissAlarm): Ni
                 onSuccess = { returnToNila(context); NilaResponse.Text("Asked the Clock app to turn off your $which alarm.") },
                 onFailure = { NilaResponse.Text("The Clock app on this phone can't turn off alarms for NILA. Nothing was changed.") },
             )
+        }
+    }
+}
+
+/** The answer first; the pages it came from fold into one line, opened only if wanted. */
+@Composable
+private fun WebAnswerView(response: WebAnswer, context: Context) {
+    var showSources by remember { mutableStateOf(false) }
+    NilaCard {
+        SectionLabel("WEB")
+        Text(response.answer, color = Paper, fontSize = 15.sp, lineHeight = 22.sp)
+        if (response.sources.isNotEmpty()) {
+            TextAction(if (showSources) "Hide sources" else "Sources (${response.sources.size})", onClick = { showSources = !showSources })
+        }
+        if (showSources) {
+            response.sources.forEach { source ->
+                TextAction(source.title, onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(source.url))) } })
+            }
+            TextAction("Open in browser", onClick = {
+                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://duckduckgo.com/?q=" + Uri.encode(response.question)))) }
+            })
         }
     }
 }

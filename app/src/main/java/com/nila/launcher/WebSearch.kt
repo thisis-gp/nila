@@ -89,3 +89,6 @@ object InstantAnswer {
         return TavilySearch.Answer(abstract, lead + items)
     }
 }
+
+/** A web question answered in a few sentences, with the pages it came from folded away underneath. */
+data class WebAnswer(val question: String, val answer: String, val sources: List<WebResult>) : NilaResponse
