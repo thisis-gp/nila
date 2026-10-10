@@ -35,6 +35,10 @@ class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
     private val percentage = Regex("""(\d+(?:\.\d+)?)\s*%\s*(?:of)?\s*(\d+(?:\.\d+)?)""")
     private val alarm = Regex("""alarm\s+(?:for\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?""")
     private val remember = Regex("""remember(?: that)?\s+(.+)""")
+    private val clockTime = Regex("""(?<![\d:])(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?!\d)""")
+    private val smallTalk = Regex(
+        """^\s*(hi+|hello|hey|namaste|thanks|thank you|good (morning|afternoon|evening|night)|who are you|what are you|what('?s| is) your name|what can you do|how are you|help)\b""",
+    )
     private val apps = mapOf(
         "youtube" to Triple("YouTube", "com.google.android.youtube", "https://youtube.com"),
         "netflix" to Triple("Netflix", "com.netflix.mediaclient", "https://netflix.com"),
@@ -46,10 +50,10 @@ class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
     val capabilities = listOf(
         CapabilityDescriptor(
             id = "create_alarm",
-            description = "Set an alarm. Give the hour as the user said it and meridiem (am or pm) only if they said one.",
+            description = "Set an alarm or wake-up time, for example \"wake me up at 6\" or \"alarm for 7:30 pm\". Give the hour as the user said it and meridiem (am or pm) only if they said one.",
             params = listOf(
                 Param("hour", ParamType.INT),
-                Param("minute", ParamType.INT),
+                Param("minute", ParamType.INT, required = false),
                 Param("meridiem", ParamType.STRING, required = false),
             ),
             permission = PermissionClass.PREPARE,
@@ -57,7 +61,7 @@ class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
         ),
         CapabilityDescriptor(
             id = "open_app",
-            description = "Open an immersive app: ${apps.keys.joinToString()}",
+            description = "Open one of these apps by name: ${apps.keys.joinToString()}",
             params = listOf(Param("app", ParamType.STRING)),
             permission = PermissionClass.READ,
         ),
@@ -69,25 +73,37 @@ class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
         ),
         CapabilityDescriptor(
             id = "search_food",
-            description = "Find and compare food options",
+            description = "Find restaurants or dishes to eat, only when the user asks for food, a meal, a dish or says they are hungry",
             params = listOf(Param("query", ParamType.STRING)),
             permission = PermissionClass.READ,
         ),
     ).plus(extraCapabilities).associateBy { it.id }
 
-    fun respond(input: String): NilaResponse {
+    fun respond(input: String): NilaResponse = calculate(input) ?: execute(route(input))
+
+    /** Greetings and questions about NILA itself. These go straight to conversation, never to a tool. */
+    fun isSmallTalk(input: String) = smallTalk.containsMatchIn(input.lowercase())
+
+    /**
+     * Reads the alarm time exactly as the user said it. When a model picks create_alarm, these values
+     * replace the model's: FunctionGemma dropped "pm" and ":45" on the iQOO 15.
+     */
+    fun alarmArgs(input: String): Map<String, Any>? {
+        val match = clockTime.find(input.lowercase()) ?: return null
+        val args = mutableMapOf<String, Any>("hour" to match.groupValues[1].toInt(), "minute" to match.groupValues[2].ifBlank { "0" }.toInt())
+        match.groupValues[3].ifEmpty { null }?.let { args["meridiem"] = it }
+        return args
+    }
+
+    /** Deterministic fast path: blank input and exact arithmetic never go through a router or model. */
+    fun calculate(input: String): NilaResponse? {
         val normalized = input.trim().lowercase()
         if (normalized.isBlank()) return NilaResponse.Text("Tell me what you want to do.")
-
-        // Deterministic fast path: exact arithmetic never goes through a router.
-        percentage.find(normalized)?.let { match ->
-            val rate = match.groupValues[1].toBigDecimal()
-            val amount = match.groupValues[2].toBigDecimal()
-            val result = amount.multiply(rate).divide(BigDecimal(100)).setScale(2, RoundingMode.HALF_UP)
-            return NilaResponse.Text("${match.groupValues[1]}% of ${match.groupValues[2]} is ${result.stripTrailingZeros().toPlainString()}")
-        }
-
-        return execute(route(input))
+        val match = percentage.find(normalized) ?: return null
+        val rate = match.groupValues[1].toBigDecimal()
+        val amount = match.groupValues[2].toBigDecimal()
+        val result = amount.multiply(rate).divide(BigDecimal(100)).setScale(2, RoundingMode.HALF_UP)
+        return NilaResponse.Text("${match.groupValues[1]}% of ${match.groupValues[2]} is ${result.stripTrailingZeros().toPlainString()}")
     }
 
     // ponytail: keyword router standing in for FunctionGemma; swap in the model behind the same NilaIntent output.
@@ -144,8 +160,9 @@ class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
         val args = call.args
         return when (call.capabilityId) {
             "create_alarm" -> alarmHour(args["hour"] as Int, args["meridiem"] as String?)
-                ?.takeIf { (args["minute"] as Int) in 0..59 }
-                ?.let { NilaResponse.Alarm(it, args["minute"] as Int) }
+                // "Wake me up at 6" means 6:00.
+                ?.takeIf { (args["minute"] as Int? ?: 0) in 0..59 }
+                ?.let { NilaResponse.Alarm(it, args["minute"] as Int? ?: 0) }
                 ?: NilaResponse.Text("That alarm time is not valid.")
             "open_app" -> apps[args["app"]]?.let { NilaResponse.OpenApp(it.first, it.second, it.third) }
                 ?: NilaResponse.Text("I can't open that app.")
