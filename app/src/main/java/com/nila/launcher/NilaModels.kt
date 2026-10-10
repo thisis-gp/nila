@@ -300,7 +300,8 @@ class NilaBrain(
         val raw = runCatching {
             model.createConversation(
                 ConversationConfig(
-                    systemInstruction = Contents.of(REWRITE),
+                    // With the user's facts, "play some music" can become "play arijit singh" from "I like Arijit Singh".
+                    systemInstruction = Contents.of(personaWith(REWRITE, facts())),
                     samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0),
                 ),
             ).use { conversation ->

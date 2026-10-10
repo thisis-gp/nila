@@ -1461,14 +1461,14 @@ private fun performNow(context: Context, response: NilaResponse): NilaResponse =
     is Timer -> response.also { NilaTimer.start(context, it.seconds) }
     is TimerControl -> NilaResponse.Text(controlTimer(response.action))
     is MapSearch -> openUri(context, "geo:0,0?q=" + Uri.encode(response.query), "Showing ${response.query} nearby in Maps.", "No maps app is available.")
-    is PlayMusic -> if (response.query == null) NilaResponse.Text(pressMediaKey(context, "play")) else start(
+    is PlayMusic -> if (response.query == null) NilaResponse.Text(resumeOrStartMusic(context)) else rememberMusic(context, response.query).let { start(
         context,
         Intent(android.provider.MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
             .putExtra(android.app.SearchManager.QUERY, response.query)
             .putExtra(android.provider.MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*"),
         "Playing ${response.query}.",
         "No music app can play that.",
-    )
+    ) }
     is MediaKey -> NilaResponse.Text(pressMediaKey(context, response.action))
     is SoundChange -> NilaResponse.Text(changeSound(context, response.action))
     is SettingsPage -> start(context, Intent(settingsAction(response.page)), "Opening ${if (response.page == "main") "" else response.page + " "}settings.", "That settings page isn't available.")
@@ -1483,6 +1483,40 @@ private fun start(context: Context, intent: Intent, done: String, failed: String
     NilaResponse.Text(runCatching { context.startActivity(intent) }.fold({ done }, { failed }))
 
 private fun openUri(context: Context, uri: String, done: String, failed: String) = start(context, Intent(Intent.ACTION_VIEW, Uri.parse(uri)), done, failed)
+
+/**
+ * "Play some music": resume what was playing, and if nothing starts (no paused session to resume, the case on
+ * the iQOO where NILA said "Playing." and stayed silent), ask the music app to play something on its own.
+ */
+private fun resumeOrStartMusic(context: Context): String {
+    pressMediaKey(context, "play")
+    val audio = context.getSystemService(android.media.AudioManager::class.java)
+    val last = lastMusic(context)
+    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+        if (audio.isMusicActive) return@postDelayed
+        runCatching {
+            context.startActivity(
+                Intent(android.provider.MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
+                    .putExtra(android.app.SearchManager.QUERY, last.orEmpty())
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }, MUSIC_START_CHECK_MS)
+    return last?.let { "Playing $it again." } ?: "Starting your music."
+}
+
+private const val MUSIC_PREFS = "nila_music"
+private const val LAST_MUSIC = "last_query"
+
+/** What the user last asked to play, so "play some music" picks up where they were. Stays on the phone. */
+private fun rememberMusic(context: Context, query: String) =
+    context.getSharedPreferences(MUSIC_PREFS, Context.MODE_PRIVATE).edit().putString(LAST_MUSIC, query).apply()
+
+private fun lastMusic(context: Context): String? =
+    context.getSharedPreferences(MUSIC_PREFS, Context.MODE_PRIVATE).getString(LAST_MUSIC, null)
+
+/** How long to wait for a resumed session to become audible before asking the music app to play. */
+private const val MUSIC_START_CHECK_MS = 900L
 
 private fun pressMediaKey(context: Context, action: String): String {
     val code = when (action) {
