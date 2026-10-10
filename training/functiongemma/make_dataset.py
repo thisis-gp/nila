@@ -65,6 +65,12 @@ TOOLS = [
         ["query"],
     ),
     tool(
+        "search_groceries",
+        "Buy groceries or household items from Zepto or Swiggy Instamart, for example milk, eggs, bread, atta or detergent.",
+        [("query", "string", "Item and pack size as the user said, like milk 1 litre")],
+        ["query"],
+    ),
+    tool(
         "get_directions",
         "Show a map with the route, distance or travel time to a place, for example take me to or how far is.",
         [("destination", "string", "Place name only, like Indiranagar")],
@@ -252,6 +258,12 @@ def rows(rng):
     for taste, dish in TASTES:
         for extra in rng.sample(PARTY, 3):
             out.append((f"find a {taste} {dish} {extra}", call("search_food", {"query": dish, "preference": taste})))
+    groceries = ["milk 1 litre", "eggs", "bread", "atta 5 kg", "detergent", "curd 400 g", "bananas", "onions 1 kg",
+                 "toothpaste", "maggi", "coffee powder", "sugar 1 kg", "paneer 200 g", "dishwash liquid"]
+    for x in groceries:
+        for t in rng.sample(["buy {x}", "get me {x}", "order {x} from zepto", "add {x} to my cart", "I need {x}",
+                             "{x} from instamart", "we're out of {x}", "can you get {x}", "{x} chahiye"], 3):
+            out.append((t.format(x=x), call("search_groceries", {"query": x})))
     for text in CHAT:
         for variant in {text, text.capitalize(), text + "?" if not text.endswith("?") else text}:
             out.append((variant, call("chat", {"message": variant})))
