@@ -32,6 +32,20 @@ class RewriteTest {
     }
 
     @Test
+    fun onlyAReplyWithoutNumbersBorrowsThemFromTheLastExchange() {
+        val earlier = "set an alarm for 7 am" to "Alarm set for 07:00 in your Clock."
+        // The request says 5: an old 7 must not approve a rewrite to 7 minutes.
+        assertFalse(numbersSaid("set a timer for 7 minutes", groundingText("timer 5 minutes", earlier)))
+        assertTrue(numbersSaid("set a timer for 5 minutes", groundingText("timer 5 minutes", earlier)))
+        // "yes" answers the last exchange, so its numbers count.
+        val asked = "wake me at 6:30" to "Do you want an alarm at 6:30 pm?"
+        assertTrue(numbersSaid("set an alarm for 6:30 pm", groundingText("yes", asked)))
+        assertFalse(numbersSaid("set an alarm for 6:30 pm", groundingText("yes", null)))
+        // Huge numbers never throw on the FunctionGemma path either.
+        assertFalse(numbersGrounded(mapOf("amount" to 5), "pay 123456789012345678901234567890"))
+    }
+
+    @Test
     fun aNoteIsNeverAZeptoOrder() {
         // "i need" is a Zepto trigger; with "notes" in it, it is a note.
         assertNull(extractOrderItem("i need 2 apples put in the notes"))

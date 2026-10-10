@@ -92,9 +92,10 @@ fun coerceArgs(raw: Map<String, Any?>, capability: CapabilityDescriptor?): Map<S
  * FunctionGemma turned "remind me at 9 pm" into hour = 10 on the iQOO 15.
  */
 fun numbersGrounded(args: Map<String, Any>, input: String): Boolean {
-    val said = Regex("""\d+""").findAll(input).map { it.value.toLong() }.toSet()
+    // Compared as digit strings: toLong() on a huge number the user typed would throw.
+    val said = Regex("""\d+""").findAll(input).map { it.value.trimStart('0').ifEmpty { "0" } }.toSet()
     // Zero is a default ("at 9" means minute 0), not an invented value.
-    return args.values.filterIsInstance<Number>().all { (it.toDouble() % 1.0 == 0.0) && (it.toLong() == 0L || it.toLong() in said) }
+    return args.values.filterIsInstance<Number>().all { (it.toDouble() % 1.0 == 0.0) && (it.toLong() == 0L || it.toLong().toString() in said) }
 }
 
 private fun wholeNumber(value: Any): Long? = when (value) {
@@ -129,6 +130,14 @@ fun numbersSaid(command: String, said: String): Boolean {
     val heard = numbers(said).toSet()
     return numbers(command).all { it in heard }
 }
+
+/**
+ * What a rewrite's numbers may come from. A message with numbers of its own grounds them alone: an old "7"
+ * must not approve a rewrite of "5 minutes" to 7. Only a reply with no numbers ("yes", "make it pm") may
+ * borrow them, and only from the last exchange, the one it answers.
+ */
+fun groundingText(input: String, lastTurn: Pair<String, String>?): String =
+    if (Regex("""\d""").containsMatchIn(input) || lastTurn == null) input else "$input ${lastTurn.first} ${lastTurn.second}"
 
 /** Asks Gemma for a transcript only, in the language's own script, never an answer to the request. */
 fun transcriptionPrompt(languageName: String?) = if (languageName == null) {
@@ -252,8 +261,7 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             }
         }.getOrNull() ?: return null
         val command = cleanCommand(raw) ?: return null
-        val said = input + " " + history.joinToString(" ") { "${it.first} ${it.second}" }
-        return command.takeIf { numbersSaid(it, said) }
+        return command.takeIf { numbersSaid(it, groundingText(input, history.lastOrNull())) }
             .also { Log.i(TAG, if (it == null) "rewrite dropped: unsaid numbers" else "rewrite -> command (${it.length} chars)") }
     }
 
