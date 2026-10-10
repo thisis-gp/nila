@@ -4,9 +4,12 @@ import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.roundToLong
 
 /** One pack size of an Instamart product, with the IDs its cart needs. */
 data class InstamartItem(
@@ -31,6 +34,11 @@ data class InstamartCart(
     val paymentMethods: List<String>,
 ) {
     /** Cash on delivery when Swiggy offers it: online payment would hand off to a UPI app, which this card does not do. */
+    /** The same order to place: lines and quantities, the amount to pay and the address all unchanged. */
+    fun sameOrderAs(other: InstamartCart) =
+        lines.associate { it.first.spinId to it.second } == other.lines.associate { it.first.spinId to it.second } &&
+            toPay == other.toPay && addressId == other.addressId
+
     val cashMethod: String? get() = paymentMethods.firstOrNull { Regex("""(?i)\b(cash|cod)\b""").containsMatchIn(it) }
 }
 
@@ -42,6 +50,8 @@ data class InstamartCart(
 internal class InstamartShop(private val context: Context) {
     private var client: McpClient? = null
     private val cart = linkedMapOf<String, Pair<InstamartItem, Int>>()
+    // update_cart replaces the whole cart, so changes run one at a time, in the order they were tapped.
+    private val cartLock = Mutex()
     private val memory = NilaMemory(context)
 
     val connected: Boolean get() = SwiggyAuth.currentSession(context) != null
@@ -96,39 +106,19 @@ internal class InstamartShop(private val context: Context) {
     suspend fun cart(): InstamartCart? {
         if (!connected) return null
         val result = call("get_cart") ?: return null
-        val data = allObjects(result).firstOrNull { it.has("billBreakdown") || it.has("cartTotalAmount") || it.has("cartAbsent") }
-            ?: return InstamartCart(emptyList(), emptyList(), null, null, null, null, emptyList())
-        val items = data.optJSONArray("items")
-        val lines = (0 until (items?.length() ?: 0)).mapNotNull { i ->
-            val o = items!!.optJSONObject(i) ?: return@mapNotNull null
-            val price = o.optDouble("discountedFinalPrice", o.optDouble("mrp", 0.0))
-            InstamartItem(
-                name = o.optString("itemName", "Item"),
-                pack = o.optString("itemVariant"),
-                pricePaise = (price * PAISE_PER_RUPEE).toLong(),
-                mrpPaise = (o.optDouble("mrp", price) * PAISE_PER_RUPEE).toLong(),
-                imageUrl = instamartImage(o),
-                spinId = o.optString("spinId").ifBlank { return@mapNotNull null },
-                skuId = o.optString("skuId").ifBlank { null },
-            ) to o.optInt("quantity", 1)
+        val parsed = parseInstamartCart(result, addressId())
+        cartLock.withLock {
+            cart.clear()
+            parsed.lines.forEach { (item, quantity) -> cart[item.spinId] = item to quantity }
         }
-        cart.clear()
-        lines.forEach { (item, quantity) -> cart[item.spinId] = item to quantity }
-        val breakdown = data.optJSONObject("billBreakdown")
-        val billItems = breakdown?.optJSONArray("lineItems")
-        val address = data.optJSONObject("selectedAddressDetails")
-        val methods = data.optJSONArray("availablePaymentMethods")
-        return InstamartCart(
-            lines = lines,
-            bill = (0 until (billItems?.length() ?: 0)).mapNotNull { i ->
-                billItems!!.optJSONObject(i)?.let { line -> line.optString("label") to line.optString("value") }
-            },
-            toPay = breakdown?.optJSONObject("toPay")?.pick("value") ?: data.pick("cartTotalAmount"),
-            addressId = address?.pick("id") ?: addressId(),
-            addressLabel = address?.let { it.pick("annotation", "name") ?: it.pick("address") } ?: data.pick("selectedAddress"),
-            warning = data.pick("addressWarning") ?: data.optJSONObject("cartWarning")?.pick("message") ?: data.pick("cartAbsentReason"),
-            paymentMethods = (0 until (methods?.length() ?: 0)).map { methods!!.optString(it) },
-        )
+        return parsed
+    }
+
+    /** The address chosen in NILA, with its full line, so Zepto can deliver to the same place. Null without Swiggy. */
+    suspend fun nilaAddress(): FoodAddress? {
+        if (!connected) return null
+        val id = addressId() ?: return null
+        return call("get_addresses")?.let(::parseAddresses)?.firstOrNull { it.id == id }
     }
 
     suspend fun setLine(item: InstamartItem, quantity: Int): Boolean = setQuantity(item, quantity)
@@ -147,7 +137,7 @@ internal class InstamartShop(private val context: Context) {
     }
 
     /** Instamart's update_cart replaces the whole cart, so the full list is sent each time; 0 removes the item. */
-    private suspend fun setQuantity(item: InstamartItem, quantity: Int): Boolean {
+    private suspend fun setQuantity(item: InstamartItem, quantity: Int): Boolean = cartLock.withLock {
         val address = addressId() ?: return false
         if (quantity <= 0) cart.remove(item.spinId) else cart[item.spinId] = item to quantity
         val lines = JSONArray()
@@ -155,7 +145,7 @@ internal class InstamartShop(private val context: Context) {
             lines.put(JSONObject().put("spinId", line.spinId).put("quantity", count).apply { line.skuId?.let { put("skuId", it) } })
         }
         if (lines.length() == 0) return call("clear_cart") != null
-        return call("update_cart", JSONObject().put("selectedAddressId", address).put("items", lines)) != null
+        call("update_cart", JSONObject().put("selectedAddressId", address).put("items", lines)) != null
     }
 
     private companion object {
@@ -184,8 +174,8 @@ private fun parseInstamart(result: JSONObject): List<InstamartItem> {
             InstamartItem(
                 name = v.optString("displayName").ifBlank { name },
                 pack = v.optString("quantityDescription"),
-                pricePaise = (offer * PAISE_PER_RUPEE).toLong(),
-                mrpPaise = ((price?.optDouble("mrp", offer) ?: offer) * PAISE_PER_RUPEE).toLong(),
+                pricePaise = (offer * PAISE_PER_RUPEE).roundToLong(),
+                mrpPaise = ((price?.optDouble("mrp", offer) ?: offer) * PAISE_PER_RUPEE).roundToLong(),
                 imageUrl = instamartImage(v) ?: instamartImage(product),
                 spinId = v.optString("spinId").ifBlank { return@mapNotNull null },
                 skuId = v.optString("skuId").ifBlank { null },
@@ -203,4 +193,39 @@ private fun instamartImage(o: JSONObject): String? {
         ?: o.pick("imageUrl", "image", "imageId")
         ?: return null
     return if (raw.startsWith("http")) raw else "https://media-assets.swiggy.com/swiggy/image/upload/fl_lossy,f_auto,q_auto,w_300/$raw"
+}
+
+/** get_cart's payload as an [InstamartCart]. [fallbackAddressId] is used when Swiggy names no selected address. */
+internal fun parseInstamartCart(result: JSONObject, fallbackAddressId: String?): InstamartCart {
+    val data = allObjects(result).firstOrNull { it.has("billBreakdown") || it.has("cartTotalAmount") || it.has("cartAbsent") }
+        ?: return InstamartCart(emptyList(), emptyList(), null, fallbackAddressId, null, null, emptyList())
+    val items = data.optJSONArray("items")
+    val lines = (0 until (items?.length() ?: 0)).mapNotNull { i ->
+        val o = items!!.optJSONObject(i) ?: return@mapNotNull null
+        val price = o.optDouble("discountedFinalPrice", o.optDouble("mrp", 0.0))
+        InstamartItem(
+            name = o.optString("itemName", "Item"),
+            pack = o.optString("itemVariant"),
+            pricePaise = (price * PAISE_PER_RUPEE).roundToLong(),
+            mrpPaise = (o.optDouble("mrp", price) * PAISE_PER_RUPEE).roundToLong(),
+            imageUrl = instamartImage(o),
+            spinId = o.optString("spinId").ifBlank { return@mapNotNull null },
+            skuId = o.optString("skuId").ifBlank { null },
+        ) to o.optInt("quantity", 1)
+    }
+    val breakdown = data.optJSONObject("billBreakdown")
+    val billItems = breakdown?.optJSONArray("lineItems")
+    val address = data.optJSONObject("selectedAddressDetails")
+    val methods = data.optJSONArray("availablePaymentMethods")
+    return InstamartCart(
+        lines = lines,
+        bill = (0 until (billItems?.length() ?: 0)).mapNotNull { i ->
+            billItems!!.optJSONObject(i)?.let { line -> line.optString("label") to line.optString("value") }
+        },
+        toPay = breakdown?.optJSONObject("toPay")?.pick("value") ?: data.pick("cartTotalAmount"),
+        addressId = address?.pick("id") ?: fallbackAddressId,
+        addressLabel = address?.let { it.pick("annotation", "name") ?: it.pick("address") } ?: data.pick("selectedAddress"),
+        warning = data.pick("addressWarning") ?: data.optJSONObject("cartWarning")?.pick("message") ?: data.pick("cartAbsentReason"),
+        paymentMethods = (0 until (methods?.length() ?: 0)).map { methods!!.optString(it) },
+    )
 }
