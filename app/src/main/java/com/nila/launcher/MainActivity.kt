@@ -592,6 +592,7 @@ private fun NilaApp(resumeVersion: Int) {
                                 accounts = accountsRevision.let { listOf(
                                     ServiceAccount(
                                         name = "Swiggy",
+                                        icon = LucideR.drawable.lucide_ic_utensils,
                                         detail = "Orders food for you. Sign in again every 5 days.",
                                         connected = swiggySession != null,
                                         onConnect = {
@@ -603,6 +604,7 @@ private fun NilaApp(resumeVersion: Int) {
                                     ),
                                     ServiceAccount(
                                         name = "Zomato",
+                                        icon = LucideR.drawable.lucide_ic_utensils,
                                         detail = "Compares your Swiggy cart with the same order on Zomato.",
                                         connected = zomatoSession != null,
                                         onConnect = {
@@ -614,6 +616,7 @@ private fun NilaApp(resumeVersion: Int) {
                                     ),
                                     ServiceAccount(
                                         name = "Zepto",
+                                        icon = LucideR.drawable.lucide_ic_shopping_basket,
                                         detail = "Groceries in minutes, next to Swiggy Instamart.",
                                         connected = zeptoAuth.isConnected,
                                         onConnect = {
@@ -629,7 +632,8 @@ private fun NilaApp(resumeVersion: Int) {
                                     ),
                                     ServiceAccount(
                                         name = "Web search",
-                                        detail = "Answers from the web through Tavily. Free key at tavily.com, no card needed.",
+                                        icon = LucideR.drawable.lucide_ic_globe,
+                                        detail = "Live answers from the web, through Tavily.",
                                         connected = tavilyAuth.isConnected,
                                         onConnect = {},
                                         onDisconnect = { tavilyAuth.disconnect(); accountsRevision++ },
