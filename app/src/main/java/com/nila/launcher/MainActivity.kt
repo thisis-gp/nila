@@ -396,13 +396,46 @@ private fun NilaApp(resumeVersion: Int) {
         return
     }
 
+    /**
+     * Reached when the router picks web_search — a model decision, not a keyword match (the old
+     * "search for"/"google"/"look up" literal trigger is gone; moreActionCall's webQuery() still
+     * catches those same phrases deterministically upstream, same capability either way).
+     */
+    fun performWebSearch(query: String) {
+        if (!tavilyAuth.isConnected) {
+            turns += Turn("Web search", NilaResponse.Text("Web search isn't connected yet. Say \"connect web search\" to set it up."))
+            return
+        }
+        scope.launch(Dispatchers.IO) {
+            val outcome = runCatching { TavilySearch.search(tavilyAuth.apiKey!!, query) }
+            withContext(Dispatchers.Main) {
+                outcome.fold(
+                    onSuccess = { answer ->
+                        answer.summary?.let { turns += Turn("Web search", NilaResponse.Text(it)) }
+                        if (answer.items.isEmpty()) {
+                            if (answer.summary == null) turns += Turn("Web search", NilaResponse.Text("No results for \"$query\"."))
+                        } else {
+                            val choices = answer.items.map { result ->
+                                AsyncChoice(result.title, result.snippet.take(140), "", "") {
+                                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result.url))) }
+                                }
+                            }
+                            turns += Turn("Web search", NilaResponse.AsyncChoices("Sources:", choices))
+                        }
+                    },
+                    onFailure = { turns += Turn("Web search", NilaResponse.Text("Web search error: ${it.message}")) },
+                )
+            }
+        }
+    }
+
     fun submit(prompt: String = input) {
         if (prompt.isBlank() || isThinking) return
         if (prompt.trim().startsWith("tvly-")) {
             // Never render the raw key: it would sit in the chat scrollback (and any screenshot) for
             // the rest of the session. Only the redacted turn and a generic status reach the UI.
             tavilyAuth.apiKey = prompt.trim()
-            turns += Turn("Web search key", NilaResponse.Text("Web search connected. Try \"search for <something>\"."))
+            turns += Turn("Web search key", NilaResponse.Text("Web search connected. Try asking anything, or \"search for <something>\"."))
             input = ""
             return
         }
@@ -414,36 +447,6 @@ private fun NilaApp(resumeVersion: Int) {
                 ),
             )
             input = ""
-            return
-        }
-        extractWebSearchQuery(prompt)?.let { query ->
-            input = ""
-            if (!tavilyAuth.isConnected) {
-                turns += Turn(prompt, NilaResponse.Text("Web search isn't connected yet. Say \"connect web search\" to set it up."))
-                return
-            }
-            turns += Turn(prompt, NilaResponse.Text("Searching the web for \"$query\"..."))
-            scope.launch(Dispatchers.IO) {
-                val outcome = runCatching { TavilySearch.search(tavilyAuth.apiKey!!, query) }
-                withContext(Dispatchers.Main) {
-                    outcome.fold(
-                        onSuccess = { answer ->
-                            answer.summary?.let { turns += Turn("Web search", NilaResponse.Text(it)) }
-                            if (answer.items.isEmpty()) {
-                                if (answer.summary == null) turns += Turn("Web search", NilaResponse.Text("No results for \"$query\"."))
-                            } else {
-                                val choices = answer.items.map { result ->
-                                    AsyncChoice(result.title, result.snippet.take(140), "", "") {
-                                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result.url))) }
-                                    }
-                                }
-                                turns += Turn("Web search", NilaResponse.AsyncChoices("Sources:", choices))
-                            }
-                        },
-                        onFailure = { turns += Turn("Web search", NilaResponse.Text("Web search error: ${it.message}")) },
-                    )
-                }
-            }
             return
         }
         if (prompt.lowercase().contains("connect zepto")) {
@@ -625,6 +628,10 @@ private fun NilaApp(resumeVersion: Int) {
                     is NilaResponse.GrocerySearch -> {
                         shopGroceries(routed.query)
                         NilaResponse.Text("Comparing Zepto and Swiggy Instamart for \"${routed.query}\"…")
+                    }
+                    is WebSearch -> {
+                        performWebSearch(routed.query)
+                        NilaResponse.Text("Searching the web for \"${routed.query}\"…")
                     }
                     else -> performNow(context, routed)
                 }
@@ -1437,7 +1444,7 @@ private fun performNow(context: Context, response: NilaResponse): NilaResponse =
     is TimerControl -> NilaResponse.Text(controlTimer(response.action))
     is Directions -> openUri(context, "google.navigation:q=" + Uri.encode(response.place), "Opening directions to ${response.place}.", "No maps app is available.")
     is MapSearch -> openUri(context, "geo:0,0?q=" + Uri.encode(response.query), "Showing ${response.query} nearby in Maps.", "No maps app is available.")
-    is WebSearch -> start(context, Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, response.query), "Searching the web for ${response.query}.", "No browser is available.")
+    // WebSearch is intercepted earlier (real Tavily results), never reaches here — see the dispatch in submit().
     is PlayMusic -> if (response.query == null) NilaResponse.Text(pressMediaKey(context, "play")) else start(
         context,
         Intent(android.provider.MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)

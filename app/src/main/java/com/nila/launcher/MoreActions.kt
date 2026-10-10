@@ -25,7 +25,16 @@ val moreCapabilities = listOf(
     ),
     CapabilityDescriptor("directions", "Get directions to a place in Maps.", listOf(Param("place", ParamType.STRING)), PermissionClass.READ, label = "Directions"),
     CapabilityDescriptor("map_search", "Find places nearby, for example \"petrol pumps near me\".", listOf(Param("query", ParamType.STRING)), PermissionClass.READ, label = "Nearby"),
-    CapabilityDescriptor("web_search", "Search the web.", listOf(Param("query", ParamType.STRING)), PermissionClass.READ, label = "Web search"),
+    CapabilityDescriptor(
+        "web_search",
+        "Search the live web for real, current information: who or what something/someone is, facts, " +
+            "people, current events, definitions, prices, scores, or anything outside NILA's own training " +
+            "data. Use this for a factual question about the world, not just when the user literally says " +
+            "\"search\" — for example \"who is Ronaldo\" or \"what's the capital of France\" should call this.",
+        listOf(Param("query", ParamType.STRING)),
+        PermissionClass.READ,
+        label = "Web search",
+    ),
     CapabilityDescriptor("play_music", "Play a song, artist or playlist.", listOf(Param("query", ParamType.STRING, required = false)), PermissionClass.READ, label = "Play music"),
     CapabilityDescriptor("media_control", "Pause, resume, skip to the next or go to the previous song.", listOf(Param("action", ParamType.STRING)), PermissionClass.READ, label = "Media"),
     CapabilityDescriptor("sound", "Change volume (up, down, mute) or the ring mode (silent, vibrate, ring).", listOf(Param("action", ParamType.STRING)), PermissionClass.PREPARE, label = "Sound"),

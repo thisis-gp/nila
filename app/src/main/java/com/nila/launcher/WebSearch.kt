@@ -57,12 +57,3 @@ object TavilySearch {
         return Answer(response.optString("answer").takeIf { it.isNotBlank() }, items)
     }
 }
-
-private val WEB_SEARCH_TRIGGERS = listOf("search for ", "search the web for ", "web search ", "look up ", "google ")
-
-/** Strips a leading web-search phrase and returns the query, or null if the prompt doesn't start with one. */
-fun extractWebSearchQuery(prompt: String): String? {
-    val lower = prompt.lowercase()
-    val trigger = WEB_SEARCH_TRIGGERS.firstOrNull { lower.startsWith(it) } ?: return null
-    return prompt.substring(trigger.length).trim().takeIf { it.isNotBlank() }
-}
