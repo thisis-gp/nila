@@ -483,25 +483,28 @@ private fun PickCard(restaurant: FoodRestaurant, reason: String, badge: String?,
     }
 }
 
-/** "What I understood": the request as chips. Removing one searches again without it. */
+/**
+ * "What I understood": the request's qualifiers as chips. Removing one searches again without it. The dish
+ * itself is already the step's serif title, so it gets no chip of its own.
+ */
 @Composable
 private fun IntentChips(intent: NilaResponse.FoodSearch, onChange: ((NilaResponse.FoodSearch) -> Unit)?) {
     val chips = buildList {
-        add(Triple(intent.query, null as NilaResponse.FoodSearch?, true))
-        intent.people?.let { add(Triple("For $it", intent.copy(people = null), false)) }
-        intent.budgetRupees?.let { add(Triple("Under ₹$it", intent.copy(budgetRupees = null), false)) }
-        intent.preference?.let { add(Triple(it.replaceFirstChar(Char::uppercase), intent.copy(preference = null), false)) }
+        intent.people?.let { add("For $it" to intent.copy(people = null)) }
+        intent.budgetRupees?.let { add("Under ₹$it" to intent.copy(budgetRupees = null)) }
+        intent.preference?.let { add(it.replaceFirstChar(Char::uppercase) to intent.copy(preference = null)) }
     }
+    if (chips.isEmpty()) return
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-        chips.forEach { (label, without, main) ->
+        chips.forEach { (label, without) ->
             Surface(
-                color = if (main) Paper else Panel,
+                color = Panel,
                 shape = RoundedCornerShape(50),
-                modifier = if (without != null && onChange != null) Modifier.clickable { onChange(without) } else Modifier,
+                modifier = if (onChange != null) Modifier.clickable { onChange(without) } else Modifier,
             ) {
                 Text(
-                    if (without != null && onChange != null) "$label  ✕" else label,
-                    color = if (main) Ink else Paper,
+                    if (onChange != null) "$label  ✕" else label,
+                    color = Paper,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,

@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -62,6 +63,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
@@ -80,7 +82,6 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.TextUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.unit.sp
@@ -642,7 +643,8 @@ private fun NilaApp(resumeVersion: Int) {
                     exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
                 ) {
                     // The empty pointerInput keeps touches on bare overlay areas from reaching Home's swipe-up below.
-                    Box(Modifier.fillMaxSize().background(Ink).pointerInput(Unit) {}.safeDrawingPadding()) {
+                    val backdrop = if (overlayScreen == NilaScreen.Nila) Modifier.drawBehind { drawAgentAtmosphere() } else Modifier
+                    Box(Modifier.fillMaxSize().background(Ink).then(backdrop).pointerInput(Unit) {}.safeDrawingPadding()) {
                         when (overlayScreen) {
                             NilaScreen.Apps -> AppsSpace(
                                 apps = installedApps,
@@ -688,6 +690,8 @@ private fun NilaApp(resumeVersion: Int) {
                                 onVoiceRequest = { speakReply = true; submit(it) },
                                 onListenStart = lakshmi::stop,
                                 onClose = ::closeOverlay,
+                                // Only a Zepto session that has searched or added something has a cart worth opening.
+                                onOpenCart = activeZeptoSession?.let { { submit("zepto cart") } },
                                 context = context,
                                 prepare = engine::prepare,
                                 confirm = { token ->
@@ -751,7 +755,9 @@ private val MascotTapSize = 40.dp
 private val HeaderMascotSize = 34.dp
 private val WorkingMascotSize = 28.dp
 private val EmptyMascotSize = 72.dp
-private val FoodRequestSize = 20.sp
+private val FoodRequestSize = 14.sp
+private val ScreenGutter = 20.dp
+private val PromptMinHeight = 48.dp
 private val ProductImageSize = 60.dp
 private val OptionImageSize = 52.dp
 private const val BUSY_CARD_ALPHA = 0.35f
@@ -773,6 +779,7 @@ private fun AgentSpace(
     onVoiceRequest: (String) -> Unit,
     onListenStart: () -> Unit,
     onClose: () -> Unit,
+    onOpenCart: (() -> Unit)?,
     context: Context,
     prepare: (Choice) -> NilaResponse.Confirmation,
     confirm: (String) -> Unit,
@@ -817,10 +824,10 @@ private fun AgentSpace(
         else -> MascotMood.Talking
     }
     val listState = rememberLazyListState()
-    // Bring the newest turn into view when it is added, when its reply lands and when listening starts below it.
+    // Bring the newest turn into view when it is added, when its reply lands and when listening hands back the screen.
     LaunchedEffect(turns.size, isThinking, voiceShown) {
-        val newest = if (voiceShown) turns.size else turns.lastIndex
-        if (newest >= 0) listState.animateScrollToItem(newest)
+        if (voiceShown || turns.isEmpty()) return@LaunchedEffect
+        listState.animateScrollToItem(turns.lastIndex)
     }
     LaunchedEffect(turns.size) {
         if (lastWasConfirmation) {
@@ -830,24 +837,20 @@ private fun AgentSpace(
         }
     }
 
+    // One mascot on screen: the body shows it while listening, working or empty, the header the rest of the time.
+    val bodyHasMascot = voiceShown || isThinking || turns.isEmpty()
     Column(
-        Modifier.fillMaxSize().background(Ink).padding(horizontal = 18.dp, vertical = 12.dp),
+        Modifier.fillMaxSize().padding(horizontal = ScreenGutter, vertical = 12.dp),
     ) {
-        // The small spaced state label, like the listening layer's "LISTENING".
-        val stateLabel = when {
-            isThinking -> "WORKING"
-            turns.isEmpty() -> "ASK NILA"
-            else -> "NILA"
-        }
-        TopAction(label = stateLabel, onBack = onClose) {
-            RoundButton(LucideR.drawable.lucide_ic_shopping_cart, "Zepto cart", { onSubmit("zepto cart") })
-            Box(
+        TopAction(onBack = onClose) {
+            onOpenCart?.let { RoundButton(LucideR.drawable.lucide_ic_shopping_cart, "Zepto cart", it) }
+            if (!bodyHasMascot) Box(
                 Modifier.size(MascotTapSize).clip(CircleShape)
                     .clickable(onClickLabel = if (showStatus) "Hide model status" else "Show model status") { showStatus = !showStatus },
                 contentAlignment = Alignment.Center,
             ) { NilaMascot(mood = mood, size = HeaderMascotSize) }
         }
-        AnimatedVisibility(visible = showStatus) {
+        AnimatedVisibility(visible = showStatus && !bodyHasMascot) {
             Text(
                 modelStatus,
                 color = Muted,
@@ -856,13 +859,18 @@ private fun AgentSpace(
                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
             )
         }
-        LazyColumn(
+        if (voiceShown) {
+            ListeningTurn(voice = voice, heard = heard, notice = notice, modifier = Modifier.weight(1f)) { request ->
+                heard = null
+                onVoiceRequest(request)
+            }
+        } else LazyColumn(
             modifier = Modifier.weight(1f),
             state = listState,
             contentPadding = PaddingValues(vertical = 22.dp),
             verticalArrangement = Arrangement.spacedBy(28.dp),
         ) {
-            if (turns.isEmpty() && !voiceShown) item { EmptyAgent(onSubmit) }
+            if (turns.isEmpty()) item { EmptyAgent(onSubmit) }
             itemsIndexed(turns) { index, turn ->
                 val busy = index == turns.lastIndex && isThinking
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -880,12 +888,6 @@ private fun AgentSpace(
                     }
                 }
             }
-            if (voiceShown) item {
-                ListeningTurn(voice = voice, heard = heard, notice = notice) { request ->
-                    heard = null
-                    onVoiceRequest(request)
-                }
-            }
         }
         Surface(
             Modifier.fillMaxWidth(),
@@ -894,11 +896,11 @@ private fun AgentSpace(
             border = BorderStroke(1.dp, Stroke),
         ) {
             Row(
-                Modifier.padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                Modifier.padding(start = 18.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.weight(1f)) {
-                    if (input.isEmpty()) Text("Ask NILA anything", color = Muted)
+                    if (input.isEmpty()) Text("Ask NILA anything", color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     BasicTextField(
                         value = input,
                         onValueChange = {
@@ -931,14 +933,14 @@ private fun AgentSpace(
 private fun TurnHeading(turn: Turn) {
     when {
         isFollowUpTurn(turn.user) -> SectionLabel(turn.user)
-        // The booking sheet brings its own serif step title, so the request stays a quieter line above it.
-        turn.response is NilaResponse.Food -> RequestHeadline(turn.user, FoodRequestSize)
-        else -> RequestHeadline(turn.user, HeadlineSize)
+        // The booking sheet brings its own serif title, so the request is only a quiet echo above it.
+        turn.response is NilaResponse.Food -> Text(turn.user, color = Muted, fontSize = FoodRequestSize, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        else -> RequestHeadline(turn.user)
     }
 }
 
 @Composable
-private fun RequestHeadline(request: String, size: TextUnit) {
+private fun RequestHeadline(request: String) {
     val key = requestKeyPhrase(request)
     val styled = buildAnnotatedString {
         if (key == null) append(request) else {
@@ -947,7 +949,7 @@ private fun RequestHeadline(request: String, size: TextUnit) {
             append(request.substring(key.last + 1))
         }
     }
-    Text(styled, color = Paper, fontFamily = FontFamily.Serif, fontSize = size, lineHeight = size * 1.12f)
+    Text(styled, color = Paper, fontFamily = FontFamily.Serif, fontSize = HeadlineSize, lineHeight = HeadlineSize * 1.12f)
 }
 
 @Composable
@@ -989,14 +991,13 @@ private fun DemoPrompts(onSubmit: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
         SectionLabel("Try asking")
         prompts.forEach { prompt ->
-            Text(
-                "“$prompt”",
-                color = Paper,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.clip(CircleShape).background(Panel).border(1.dp, Stroke, CircleShape)
-                    .clickable { onSubmit(prompt) }.padding(horizontal = 14.dp, vertical = 9.dp),
-            )
+            Box(
+                Modifier.heightIn(min = PromptMinHeight).clip(CircleShape).background(Panel).border(1.dp, Stroke, CircleShape)
+                    .clickable { onSubmit(prompt) }.padding(horizontal = 16.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Text("“$prompt”", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            }
         }
     }
 }

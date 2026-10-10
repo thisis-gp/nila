@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -13,6 +14,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -20,7 +23,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -30,6 +35,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -48,10 +55,17 @@ internal val RoundFill = Color(0xCC171914)
 
 private const val SPOKEN_LINE_HEIGHT = 1.05f
 private const val WAVE_PERIOD_MS = 800
-private const val WAVE_REST_SCALE = 0.3f
+private const val WAVE_REST_SCALE = 0.25f
 private const val WAVE_MIN_ALPHA = 0.45f
-private val WaveBarHeights = listOf(10.dp, 23.dp, 16.dp, 10.dp, 23.dp)
-private val WaveBarDelaysMs = listOf(0, 200, 450, 0, 200)
+private val WaveHeight = 44.dp
+private val WaveBarHeights = listOf(14.dp, 30.dp, 22.dp, 40.dp, 22.dp, 30.dp, 14.dp)
+private val WaveBarDelaysMs = listOf(0, 200, 450, 100, 350, 200, 0)
+private const val STOP_BORDER_ALPHA = 0.5f
+private val SpokenSize = 38.sp
+private val HeroMascotSize = 72.dp
+private val HeroBottomGap = 12.dp
+private val RoundTouchSize = 48.dp
+private val RoundFaceSize = 40.dp
 
 /** A request names its action first; the words after it, up to the first detail, are what it is about. */
 private val ActionVerbs = setOf(
@@ -89,46 +103,76 @@ internal fun listeningLabel(state: VoiceState, heard: String?): String = when (s
 }
 
 /**
- * The agent screen's listening state, shown where the next request goes: it shows what NILA heard in large
- * type and waits for "Use this request" before anything runs, so a misheard request never acts on its own.
+ * The agent screen's listening state and the hero of the screen while the mic is in use: what NILA heard sits
+ * low in large serif type and waits for "Use this request" before anything runs, so a misheard request never
+ * acts on its own. It carries the only mascot on screen while it shows.
  */
 @Composable
-internal fun ListeningTurn(voice: VoiceCapture, heard: String?, notice: String?, onUseRequest: (String) -> Unit) {
+internal fun ListeningTurn(
+    voice: VoiceCapture,
+    heard: String?,
+    notice: String?,
+    modifier: Modifier = Modifier,
+    onUseRequest: (String) -> Unit,
+) {
     val mood = when (voice.state) {
         VoiceState.LISTENING -> MascotMood.Listening
         VoiceState.UNDERSTANDING -> MascotMood.Thinking
         VoiceState.IDLE -> if (notice != null) MascotMood.Error else MascotMood.Idle
     }
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        StateLabel(listeningLabel(voice.state, heard))
+    val failed = heard == null && notice != null && voice.state == VoiceState.IDLE
+    Column(modifier.fillMaxSize().padding(bottom = HeroBottomGap), verticalArrangement = Arrangement.Bottom) {
+        SourceLabel(listeningLabel(voice.state, heard), color = if (failed) Muted else Lime)
         SpokenText(
             text = heard ?: notice ?: when (voice.state) {
                 VoiceState.UNDERSTANDING -> "One moment…"
                 else -> "I'm listening."
             },
             quoted = heard != null,
+            modifier = Modifier.padding(top = 14.dp),
         )
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Box(Modifier.clip(CircleShape).clickable(onClick = voice::toggle)) {
-                NilaMascot(mood = mood, size = 72.dp)
+        Row(
+            Modifier.padding(top = 28.dp, bottom = 24.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Box(
+                Modifier.clip(CircleShape).clickable(
+                    onClickLabel = if (voice.state == VoiceState.LISTENING) "Finish speaking" else "Speak",
+                    onClick = voice::toggle,
+                )
+            ) { NilaMascot(mood = mood, size = HeroMascotSize) }
+            VoiceWave(active = voice.state == VoiceState.LISTENING)
+        }
+        when {
+            voice.state == VoiceState.LISTENING -> StopAction(onClick = voice::toggle)
+            voice.state == VoiceState.UNDERSTANDING -> Spacer(Modifier.height(PrimaryActionHeight))
+            heard != null -> {
+                PrimaryAction("Use this request", onClick = { onUseRequest(heard) })
+                TextAction("Say it again", onClick = voice::toggle, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp))
             }
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                VoiceWave(active = voice.state == VoiceState.LISTENING)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (heard != null) Pill("Use this request") { onUseRequest(heard) }
-                    when (voice.state) {
-                        VoiceState.LISTENING -> Pill("Done", onClick = voice::toggle)
-                        VoiceState.IDLE -> Pill("Try again", onClick = voice::toggle)
-                        VoiceState.UNDERSTANDING -> Unit
-                    }
-                }
-            }
+            else -> PrimaryAction("Try again", onClick = voice::toggle)
         }
     }
 }
 
+/** Ends the recording and sends what was said: a full-width outline, easy to find mid-sentence. */
 @Composable
-private fun SpokenText(text: String, quoted: Boolean) {
+private fun StopAction(onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().height(PrimaryActionHeight).semantics { contentDescription = "Stop and use what I said" },
+        shape = RoundedCornerShape(ActionRadius),
+        border = BorderStroke(1.dp, Paper.copy(alpha = STOP_BORDER_ALPHA)),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = Paper),
+    ) {
+        Icon(painterResource(LucideR.drawable.lucide_ic_square), contentDescription = null, modifier = Modifier.size(16.dp))
+        Text("Stop", fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 10.dp))
+    }
+}
+
+@Composable
+private fun SpokenText(text: String, quoted: Boolean, modifier: Modifier = Modifier) {
     val key = if (quoted) requestKeyPhrase(text) else null
     val styled = buildAnnotatedString {
         if (quoted) append("“")
@@ -143,17 +187,18 @@ private fun SpokenText(text: String, quoted: Boolean) {
         styled,
         color = Paper,
         fontFamily = FontFamily.Serif,
-        fontSize = HeadlineSize,
-        lineHeight = HeadlineSize * SPOKEN_LINE_HEIGHT,
+        fontSize = SpokenSize,
+        lineHeight = SpokenSize * SPOKEN_LINE_HEIGHT,
         letterSpacing = (-0.04).em,
+        modifier = modifier,
     )
 }
 
-/** Five bars that pulse while the mic is open and rest otherwise; they show state, not the actual loudness. */
+/** Seven bars that pulse while the mic is open and rest otherwise; they show state, not the actual loudness. */
 @Composable
 private fun VoiceWave(active: Boolean) {
     val motion = rememberInfiniteTransition(label = "voice-wave")
-    Row(Modifier.height(28.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    Row(Modifier.height(WaveHeight), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         WaveBarHeights.zip(WaveBarDelaysMs).forEach { (barHeight, delayMs) ->
             val scale by motion.animateFloat(
                 initialValue = 1f,
@@ -172,30 +217,18 @@ private fun VoiceWave(active: Boolean) {
 @Composable
 private fun WaveBar(barHeight: Dp, scale: Float) {
     Box(
-        Modifier.width(3.dp).height(barHeight)
+        Modifier.width(4.dp).height(barHeight)
             .graphicsLayer { scaleY = scale; alpha = scale.coerceAtLeast(WAVE_MIN_ALPHA) }
             .background(Lime, RoundedCornerShape(4.dp))
     )
 }
 
+/** The prototype's top row: a round back button, an optional small spaced-out label centred, and contextual actions. */
 @Composable
-private fun Pill(text: String, onClick: () -> Unit) {
-    Text(
-        text,
-        color = Paper,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.Medium,
-        modifier = Modifier.clip(CircleShape).background(Panel).border(1.dp, Stroke, CircleShape)
-            .clickable(onClick = onClick).padding(horizontal = 13.dp, vertical = 9.dp),
-    )
-}
-
-/** The prototype's top row: a round back button and a small spaced-out state label, centred. */
-@Composable
-internal fun TopAction(label: String, onBack: () -> Unit, trailing: @Composable () -> Unit = {}) {
-    Box(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+internal fun TopAction(onBack: () -> Unit, label: String? = null, trailing: @Composable () -> Unit = {}) {
+    Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
         RoundButton(LucideR.drawable.lucide_ic_chevron_left, "Back", onBack, Modifier.align(Alignment.CenterStart))
-        StateLabel(label, Modifier.align(Alignment.Center))
+        label?.let { StateLabel(it, Modifier.align(Alignment.Center)) }
         Row(Modifier.align(Alignment.CenterEnd), horizontalArrangement = Arrangement.spacedBy(8.dp)) { trailing() }
     }
 }
@@ -214,10 +247,13 @@ private fun StateLabel(label: String, modifier: Modifier = Modifier) = Text(
 
 @Composable
 internal fun RoundButton(icon: Int, description: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Box(
-        modifier.size(40.dp).clip(CircleShape).background(RoundFill).border(1.dp, Stroke, CircleShape).clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(painterResource(icon), contentDescription = description, tint = Paper, modifier = Modifier.size(19.dp))
+    // A 48dp touch target around the prototype's 40dp circle.
+    Box(modifier.size(RoundTouchSize).clip(CircleShape).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.size(RoundFaceSize).clip(CircleShape).background(RoundFill).border(1.dp, Stroke, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(painterResource(icon), contentDescription = description, tint = Paper, modifier = Modifier.size(19.dp))
+        }
     }
 }
