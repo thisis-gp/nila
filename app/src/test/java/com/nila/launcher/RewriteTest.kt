@@ -49,6 +49,11 @@ class RewriteTest {
         // References to the last exchange still borrow.
         assertTrue(numbersSaid("set an alarm for 7 pm", groundingText("make it pm", alarmAt7)))
         assertTrue(numbersSaid("set an alarm for 7 am", groundingText("do that again", alarmAt7)))
+        // Hindi and Malayalam number words are new values too: an old 7 cannot satisfy them.
+        listOf("haan, saat baje", "haan, do baje", "हाँ, सात बजे", "ശരി, ഏഴ് മണി", "it ezhu mani", "हाँ ७ बजे").forEach {
+            assertFalse(it, numbersSaid("set an alarm for 7 am", groundingText(it, alarmAt7)))
+        }
+        assertTrue(numbersSaid("set an alarm for 7 am", groundingText("haan", alarmAt7)))
         // Huge numbers never throw on the FunctionGemma path either.
         assertFalse(numbersGrounded(mapOf("amount" to 5), "pay 123456789012345678901234567890"))
     }

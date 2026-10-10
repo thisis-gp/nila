@@ -136,18 +136,30 @@ private val confirmation = Regex("""^\s*(yes|yeah|yep|ya|ok|okay|sure|confirm|go
 private val reference = Regex("""\b(it|that|this|same|again)\b""")
 private val numberWord = Regex(
     """\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|""" +
-        """seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|hundred|thousand|half|quarter|noon|midnight)\b""",
+        """seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|hundred|thousand|half|quarter|noon|midnight|""" +
+        // Hindi and Malayalam typed in Latin letters. "do" (2) counts only next to a unit, so "do it" stays a follow-up.
+        """ek|teen|char|paanch|panch|chhe|chhah|saat|aath|nau|das|gyarah|barah|baje|bajkar|dedh|dhai|sava|saade|paune|""" +
+        """do (baje|minute|minutes|ghante|ghanta|second)|onnu|randu|moonu|naalu|anchu|aaru|ezhu|ettu|onpathu|pathu|""" +
+        """pathinonnu|panthrandu|mani|minuttu)\b""",
+)
+
+/** Number words and digits in Devanagari and Malayalam script. Matched anywhere: a false match only stops borrowing. */
+private val nativeNumber = Regex(
+    """[०-९൦-൯]|एक|दो|तीन|चार|पांच|पाँच|छह|छः|सात|आठ|नौ|दस|ग्यारह|बारह|बजे|डेढ़|ढाई|सवा|साढ़े|पौने|""" +
+        """ഒന്ന|രണ്ട|മൂന്ന|നാല|അഞ്ച|ആറ|ഏഴ|എട്ട|ഒമ്പത|ഒൻപത|പത്ത|മണി""",
 )
 
 /**
  * What a rewrite's numbers may come from: only the current message. A short follow-up that says no number
  * itself, a confirmation ("yes") or a reference ("make it pm"), may borrow from the last exchange it answers.
  * "set an alarm at six" is a fresh request, so an earlier 7 cannot approve a rewrite to 7.
- * ponytail: English number words only; a Hindi or Malayalam number word in a follow-up is not seen.
+ * Number words count in every language NILA hears: "haan, saat baje" says a new time, so it borrows nothing.
+ * ponytail: a fixed word list, so an unusual spelling of a number word is missed; extend the lists if seen.
  */
 fun groundingText(input: String, lastTurn: Pair<String, String>?): String {
     val lower = input.lowercase()
     val followUp = lastTurn != null && !Regex("""\d""").containsMatchIn(lower) && !numberWord.containsMatchIn(lower) &&
+        !nativeNumber.containsMatchIn(lower) &&
         lower.split(Regex("""\s+""")).count { it.isNotBlank() } <= 6 &&
         (confirmation.containsMatchIn(lower) || reference.containsMatchIn(lower))
     return if (followUp) "$input ${lastTurn!!.first} ${lastTurn.second}" else input
