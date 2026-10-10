@@ -1132,8 +1132,11 @@ internal data class ZomatoLookup(val loading: Boolean, val shop: ZomatoShop?)
 @Composable
 private fun rememberZomatoShops(address: FoodAddress, restaurants: List<FoodRestaurant>, actions: FoodActions): Map<String, ZomatoLookup> {
     val shops = remember(address.id) { mutableStateMapOf<String, ZomatoLookup>() }
-    val wanted = restaurants.distinctBy { it.id }.filter { it.id !in shops }
-    LaunchedEffect(address.id, wanted.map { it.id }) {
+    val ids = restaurants.map { it.id }.distinct()
+    // Keyed on every shop shown, not on the ones still missing: marking a shop as loading must not restart
+    // (and so cancel) the very lookup that is filling it in.
+    LaunchedEffect(address.id, ids) {
+        val wanted = restaurants.distinctBy { it.id }.filter { it.id !in shops }
         wanted.forEach { shops[it.id] = ZomatoLookup(loading = true, shop = null) }
         coroutineScope {
             wanted.forEach { restaurant ->
