@@ -62,6 +62,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -269,7 +270,15 @@ private fun NilaApp(resumeVersion: Int) {
         }
     }
 
-    BackHandler(enabled = navigation.canGoBack) { screen = navigation.back() }
+    // The listening layer sits on top of the NILA chat; while it is up, "Type instead" drops into that chat.
+    var listening by remember { mutableStateOf(false) }
+
+    fun closeOverlay() {
+        listening = false
+        screen = navigation.back()
+    }
+
+    BackHandler(enabled = navigation.canGoBack) { closeOverlay() }
 
     MaterialTheme(
         colorScheme = darkColorScheme(
@@ -285,7 +294,9 @@ private fun NilaApp(resumeVersion: Int) {
         )
     ) {
         Surface(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize().safeDrawingPadding()) {
+            // Home draws its wallpaper edge to edge and pads its own content; each overlay applies
+            // safeDrawingPadding() once below, which is also where the keyboard inset comes in.
+            Box(Modifier.fillMaxSize()) {
                 val lastResponse = turns.lastOrNull()?.response
                 val lastText = (lastResponse as? NilaResponse.Text)?.value.orEmpty()
                 val nilaMood = when {
@@ -295,15 +306,15 @@ private fun NilaApp(resumeVersion: Int) {
                     lastText.contains("could not", true) || lastText.contains("unavailable", true) || lastText.contains("No alarm", true) -> MascotMood.Error
                     else -> MascotMood.Idle
                 }
-                HomeSpace(
-                    apps = installedApps,
-                    pinnedPackages = pinnedPackages,
+                HomeScreen(
                     resumeVersion = resumeVersion,
                     nilaMood = nilaMood,
-                    onOpenNila = { open(NilaScreen.Nila) },
-                    onOpenApp = { app -> launchInstalledApp(context, app.packageName) },
+                    onInvokeNila = {
+                        listening = true
+                        open(NilaScreen.Nila)
+                    },
+                    onOpenApps = { open(NilaScreen.Apps) },
                     onChangeWallpaper = { changeWallpaper(context) },
-                    onOpenSettings = { open(NilaScreen.Settings) },
                 )
 
                 AnimatedVisibility(
@@ -311,17 +322,18 @@ private fun NilaApp(resumeVersion: Int) {
                     enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                     exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
                 ) {
-                    when (overlayScreen) {
-                        NilaScreen.Apps -> OverlayScaffold(onClose = { screen = navigation.back() }) {
-                            AppsSpace(
+                    // The empty pointerInput keeps touches on bare overlay areas from reaching Home's swipe-up below.
+                    Box(Modifier.fillMaxSize().background(Ink).pointerInput(Unit) {}.safeDrawingPadding()) {
+                        when (overlayScreen) {
+                            NilaScreen.Apps -> AppsSpace(
                                 apps = installedApps,
                                 pinnedPackages = pinnedPackages,
                                 onOpenApp = { app -> launchInstalledApp(context, app.packageName) },
                                 onTogglePin = { app ->
                                     val alreadyPinned = app.packageName in pinnedPackages
-                                    // shortcut: eight Home pins fit this grid; add pages before raising the limit.
+                                    // shortcut: eight favourites fill two drawer rows; add paging before raising the limit.
                                     if (!alreadyPinned && pinnedPackages.size >= 8) {
-                                        Toast.makeText(context, "Remove a Home shortcut before pinning another.", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Remove a favourite before adding another.", Toast.LENGTH_SHORT).show()
                                     } else {
                                         val updated = pinnedPackages.toMutableList().apply {
                                             if (alreadyPinned) remove(app.packageName) else add(app.packageName)
@@ -331,92 +343,100 @@ private fun NilaApp(resumeVersion: Int) {
                                         launcherPreferences.edit().putStringSet("home_pins", updated.toSet()).apply()
                                         Toast.makeText(
                                             context,
-                                            if (app.packageName in updated) "${app.label} pinned to Home" else "${app.label} removed from Home",
+                                            if (app.packageName in updated) "${app.label} added to favourites" else "${app.label} removed from favourites",
                                             Toast.LENGTH_SHORT,
                                         ).show()
                                     }
                                 },
+                                onAskNila = { request ->
+                                    open(NilaScreen.Nila)
+                                    submit(request)
+                                },
+                                onBack = ::closeOverlay,
+                                onOpenSettings = { open(NilaScreen.Settings) },
+                                onChangeWallpaper = { changeWallpaper(context) },
+                            )
+                            NilaScreen.Nila -> if (listening) {
+                                ListeningLayer(
+                                    transcribe = brain::transcribe,
+                                    onListenStart = lakshmi::stop,
+                                    onUseRequest = { request ->
+                                        listening = false
+                                        speakReply = true
+                                        submit(request)
+                                    },
+                                    onTypeInstead = { listening = false },
+                                    onClose = ::closeOverlay,
+                                )
+                            } else OverlayScaffold(onClose = ::closeOverlay) {
+                                AgentSpace(
+                                    turns = turns,
+                                    input = input,
+                                    isThinking = isThinking,
+                                    modelStatus = "Gemma 4 E2B ${brain.assistantState.label} · FunctionGemma ${brain.routerState.label}" +
+                                        (brain.loadError?.let { "\n$it" } ?: ""),
+                                    transcribe = brain::transcribe,
+                                    onInput = { input = it },
+                                    onSubmit = ::submit,
+                                    onVoiceRequest = { speakReply = true; submit(it) },
+                                    onListenStart = lakshmi::stop,
+                                    context = context,
+                                    prepare = engine::prepare,
+                                    confirm = { token ->
+                                        // Replace the card with its result so the Confirm button cannot be tapped again.
+                                        val index = turns.indexOfFirst { (it.response as? NilaResponse.NeedsConfirmation)?.token == token }
+                                        val result = engine.confirm(token).let { if (it is NilaResponse.DismissAlarm) dismissAlarm(context, it) else it }
+                                        if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
+                                    },
+                                    food = foodActions,
+                                ) { label, next -> turns += Turn(label, next) }
+                            }
+                            NilaScreen.Home -> Unit
+                            else -> NilaScreenCatalogue(
+                                screen = overlayScreen,
+                                onOpen = ::open,
+                                onBack = ::closeOverlay,
+                                rememberedFact = rememberedFact,
+                                onChooseDefaultHome = ::chooseDefaultHome,
+                                onForgetMemory = {
+                                    memory.edit().remove("fact").apply()
+                                    rememberedFact = null
+                                },
+                                accounts = listOf(
+                                    ServiceAccount(
+                                        name = "Swiggy",
+                                        detail = "Orders food · OAuth with PKCE · sign in again after 5 days",
+                                        connected = swiggySession != null,
+                                        onConnect = {
+                                            scope.launch {
+                                                swiggySession = SwiggyAuth.login(context)
+                                                if (swiggySession == null) Toast.makeText(context, "Swiggy sign-in didn't complete.", Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        onDisconnect = {
+                                            SwiggyAuth.logout(context)
+                                            swiggySession = null
+                                        },
+                                    ),
+                                    ServiceAccount(
+                                        name = "Zomato",
+                                        detail = "Compares your Swiggy cart with the same order on Zomato",
+                                        connected = zomatoSession != null,
+                                        onConnect = {
+                                            scope.launch {
+                                                zomatoSession = ZomatoAuth.login(context)
+                                                if (zomatoSession == null) Toast.makeText(context, "Zomato sign-in didn't complete.", Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        onDisconnect = {
+                                            ZomatoAuth.logout(context)
+                                            zomatoSession = null
+                                        },
+                                    ),
+                                ),
                             )
                         }
-                        NilaScreen.Nila -> OverlayScaffold(onClose = { screen = navigation.back() }) {
-                            AgentSpace(
-                                turns = turns,
-                                input = input,
-                                isThinking = isThinking,
-                                modelStatus = "Gemma 4 E2B ${brain.assistantState.label} · FunctionGemma ${brain.routerState.label}" +
-                                    (brain.loadError?.let { "\n$it" } ?: ""),
-                                transcribe = brain::transcribe,
-                                onInput = { input = it },
-                                onSubmit = ::submit,
-                                onVoiceRequest = { speakReply = true; submit(it) },
-                                onListenStart = lakshmi::stop,
-                                context = context,
-                                prepare = engine::prepare,
-                                confirm = { token ->
-                                    // Replace the card with its result so the Confirm button cannot be tapped again.
-                                    val index = turns.indexOfFirst { (it.response as? NilaResponse.NeedsConfirmation)?.token == token }
-                                    val result = engine.confirm(token).let { if (it is NilaResponse.DismissAlarm) dismissAlarm(context, it) else it }
-                                    if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
-                                },
-                                food = foodActions,
-                            ) { label, next -> turns += Turn(label, next) }
-                        }
-                        NilaScreen.Home -> Unit
-                        else -> NilaScreenCatalogue(
-                            screen = overlayScreen,
-                            onOpen = ::open,
-                            onBack = { screen = navigation.back() },
-                            rememberedFact = rememberedFact,
-                            onChooseDefaultHome = ::chooseDefaultHome,
-                            onForgetMemory = {
-                                memory.edit().remove("fact").apply()
-                                rememberedFact = null
-                            },
-                            accounts = listOf(
-                                ServiceAccount(
-                                    name = "Swiggy",
-                                    detail = "Orders food · OAuth with PKCE · sign in again after 5 days",
-                                    connected = swiggySession != null,
-                                    onConnect = {
-                                        scope.launch {
-                                            swiggySession = SwiggyAuth.login(context)
-                                            if (swiggySession == null) Toast.makeText(context, "Swiggy sign-in didn't complete.", Toast.LENGTH_SHORT).show()
-                                        }
-                                    },
-                                    onDisconnect = {
-                                        SwiggyAuth.logout(context)
-                                        swiggySession = null
-                                    },
-                                ),
-                                ServiceAccount(
-                                    name = "Zomato",
-                                    detail = "Compares your Swiggy cart with the same order on Zomato",
-                                    connected = zomatoSession != null,
-                                    onConnect = {
-                                        scope.launch {
-                                            zomatoSession = ZomatoAuth.login(context)
-                                            if (zomatoSession == null) Toast.makeText(context, "Zomato sign-in didn't complete.", Toast.LENGTH_SHORT).show()
-                                        }
-                                    },
-                                    onDisconnect = {
-                                        ZomatoAuth.logout(context)
-                                        zomatoSession = null
-                                    },
-                                ),
-                            ),
-                        )
                     }
-                }
-
-                if (screen == NilaScreen.Home) {
-                    NilaDock(
-                        // Real Phone/Messages apps, not a custom in-launcher screen —
-                        // matches what every existing launcher does, so it needs no explaining.
-                        onOpenPhone = { openDialer(context, "") },
-                        onOpenMessages = { openMessaging(context) },
-                        onOpenApps = { open(NilaScreen.Apps) },
-                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 22.dp),
-                    )
                 }
             }
         }
@@ -425,7 +445,7 @@ private fun NilaApp(resumeVersion: Int) {
 
 @Composable
 private fun OverlayScaffold(onClose: () -> Unit, content: @Composable () -> Unit) {
-    // No separate imePadding() here: the root Box already applies safeDrawingPadding(),
+    // No separate imePadding() here: the overlay Box already applies safeDrawingPadding(),
     // which includes the IME inset. Adding it again double-counted the keyboard height.
     Column(Modifier.fillMaxSize().background(Ink)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {

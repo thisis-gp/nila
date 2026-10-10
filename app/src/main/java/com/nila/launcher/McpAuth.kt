@@ -70,7 +70,7 @@ internal class McpAuth(private val provider: McpProvider) {
      * Runs the full login flow: register a client if needed, open the Swiggy
      * consent screen in a Custom Tab, catch the redirect on a local loopback
      * server, and exchange the code for a token. Returns null on failure or
-     * a 90s timeout (user never completed the browser consent step).
+     * a 5-minute timeout (user never completed the browser consent step).
      */
     suspend fun login(context: Context): Session? {
         // The loopback port is random per login, so the registered redirect_uri
@@ -108,7 +108,9 @@ internal class McpAuth(private val provider: McpProvider) {
 
         CustomTabsIntent.Builder().build().launchUrl(context, authorizeUri)
 
-        val code = withTimeoutOrNull(90_000) { awaitCallback(server, state) }
+        // Phone number + OTP sign-in takes minutes: Zomato's login finished after the old 90s wait had
+        // already closed the loopback socket, and the tab hung on "Redirecting you back to the application".
+        val code = withTimeoutOrNull(LOGIN_WAIT_MS) { awaitCallback(server, state) }
         if (code == null) {
             runCatching { server.close() }
             return null
@@ -195,6 +197,10 @@ internal class McpAuth(private val provider: McpProvider) {
                 JSONObject(resp.body?.string().orEmpty())
             }
         }.getOrNull()
+    }
+
+    private companion object {
+        const val LOGIN_WAIT_MS = 5 * 60_000L
     }
 
     private fun randomUrlSafe(bytes: Int): String {
