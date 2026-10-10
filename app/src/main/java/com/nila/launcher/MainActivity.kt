@@ -946,6 +946,7 @@ private fun ResponseView(
             detail = "Upload the report's photo or PDF: NILA reads it on this phone and files it. It stays encrypted here.",
             action = "Upload the report",
         ) { MyNilaRequests.pending = response }
+        is PhotoSearch -> PhotoSearchCard(response)
         is NilaResponse.Remember -> NilaCard {
             SectionLabel("Saved to My NILA", color = Lime)
             Text(
