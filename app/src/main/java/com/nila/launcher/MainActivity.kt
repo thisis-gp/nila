@@ -307,6 +307,16 @@ private fun NilaApp(resumeVersion: Int) {
                     return
                 }
                 val item = orderItem
+                if (!zeptoAuth.isConnected) {
+                    turns += Turn(
+                        prompt,
+                        NilaResponse.GroupedChoices(
+                            "Options for \"$item\":",
+                            listOf(zeptoNotConnectedGroup(zeptoAuth, context, scope) { t -> turns += t }, swiggyPendingGroup(category)),
+                        ),
+                    )
+                    return
+                }
                 turns += Turn(prompt, NilaResponse.Text("Checking your Zepto delivery address..."))
                 scope.launch(Dispatchers.IO) {
                 val client = ZeptoMcpClient(zeptoAuth)

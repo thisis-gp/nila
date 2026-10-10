@@ -1,5 +1,11 @@
 package com.nila.launcher
 
+import android.content.Context
+import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+
 enum class ShoppingCategory { FOOD, GROCERY }
 
 private val FOOD_KEYWORDS = listOf(
@@ -66,3 +72,33 @@ fun swiggyPendingGroup(category: ShoppingCategory): ProviderGroup {
         note = "Not connected yet — waiting on Swiggy's developer access confirmation.",
     )
 }
+
+/**
+ * Shown instead of attempting a Zepto call when there's no stored token yet. Unlike Swiggy, Zepto
+ * genuinely can be connected right now (self-serve OAuth, see ZeptoAuth) — so this offers a real
+ * one-tap connect action rather than just an explanatory note.
+ */
+fun zeptoNotConnectedGroup(
+    zeptoAuth: ZeptoAuth,
+    context: Context,
+    coroutineScope: CoroutineScope,
+    appendTurn: (Turn) -> Unit,
+): ProviderGroup = ProviderGroup(
+    providerName = "Zepto",
+    summary = "not connected",
+    items = listOf(
+        AsyncChoice(
+            title = "Connect Zepto",
+            detail = "Sign in to search and order groceries",
+            price = "",
+            eta = "",
+        ) {
+            appendTurn(Turn("Zepto", NilaResponse.Text("Opening Zepto login in your browser. Sign in, then ask again.")))
+            coroutineScope.launch(Dispatchers.IO) {
+                zeptoAuth.connect(context)
+                    .onSuccess { Log.i("ZeptoAuth", "Zepto authorization completed.") }
+                    .onFailure { Log.w("ZeptoAuth", "Zepto authorization failed: ${it.message}") }
+            }
+        },
+    ),
+)
