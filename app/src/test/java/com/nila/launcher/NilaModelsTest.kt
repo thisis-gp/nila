@@ -94,6 +94,16 @@ class NilaModelsTest {
     }
 
     @Test
+    fun invalidMinutesAreRejectedNotCrashed() {
+        // Without am/pm the next-occurrence check used to build LocalTime.of(5, 99) and throw.
+        val invalid = NilaResponse.Text("That alarm time is not valid.")
+        val engine = NilaEngine(now = { LocalTime.of(5, 51) })
+        assertEquals(invalid, engine.respond("set an alarm for 5:99"))
+        assertEquals(invalid, engine.execute(NilaIntent.Call(ToolCall("create_alarm", mapOf("hour" to 5, "minute" to 99)))))
+        assertEquals(invalid, engine.execute(NilaIntent.Call(ToolCall("create_alarm", mapOf("hour" to 13, "minute" to 75)))))
+    }
+
+    @Test
     fun keywordRulesCatchAlarmOnAndAt() {
         assertTrue(engine.route("put an alarm on 1:30") is NilaIntent.Call)
         assertTrue(engine.route("set alarm at 7") is NilaIntent.Call)
