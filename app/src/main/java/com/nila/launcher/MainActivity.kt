@@ -45,6 +45,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -96,6 +97,8 @@ private fun NilaApp(resumeVersion: Int) {
     // Gemma 4 E2B and FunctionGemma load in the background; until then NILA answers with its rules.
     val brain = remember { NilaBrain(context.applicationContext, engine) }
     LaunchedEffect(brain) { brain.load() }
+    // Free both native models when this screen goes away, so recreating it never leaves old engines open.
+    DisposableEffect(brain) { onDispose { brain.close() } }
     val turns = remember { mutableStateListOf<Turn>() }
     var input by remember { mutableStateOf("") }
     val installedApps = remember(context, resumeVersion) { loadInstalledApps(context) }
