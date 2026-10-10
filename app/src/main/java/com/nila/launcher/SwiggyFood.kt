@@ -6,6 +6,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.time.LocalDateTime
 
 data class FoodAddress(val id: String, val label: String, val line: String)
 
@@ -43,8 +44,11 @@ data class FoodItem(
 
 data class FoodSize(val groupId: String, val id: String, val name: String, val price: String, val isDefault: Boolean)
 
-/** A dish from a search across restaurants, with the place it comes from and why NILA ranked it there. */
-data class FoodDish(val item: FoodItem, val restaurant: FoodRestaurant, val reason: String)
+/**
+ * A dish from a search across restaurants, with the place it comes from and why NILA ranked it there.
+ * [caution] names an allergen from the user's memory ("check: peanuts"); such a dish is never the top pick.
+ */
+data class FoodDish(val item: FoodItem, val restaurant: FoodRestaurant, val reason: String, val caution: String? = null)
 
 data class FoodCartLine(val itemId: String, val name: String, val quantity: Int, val price: String)
 
@@ -116,12 +120,14 @@ sealed interface FoodCard {
         val applied: FoodCoupon? = null,
         val zomato: ZomatoComparison? = null,
     ) : FoodCard
+    /** [dishes] are the names in the order, so a placed card can offer to remember one. */
     data class Order(
         val title: String,
         val detail: String,
         val orderId: String?,
         val pending: PendingPayment?,
         val placed: Boolean,
+        val dishes: List<String> = emptyList(),
     ) : FoodCard
     data class Problem(val message: String) : FoodCard
 }
@@ -144,6 +150,9 @@ internal class FoodFlow(private val context: Context) {
     /** What the user asked for, as the router and NilaEngine read it. Chips on the cards edit it. */
     private var intent = NilaResponse.FoodSearch("")
     private val memory = context.getSharedPreferences("nila_food", Context.MODE_PRIVATE)
+    private val facts = NilaMemory(context)
+    /** What the last order held, kept until its UPI payment is confirmed. */
+    private var orderedDishes: List<String> = emptyList()
 
     /** The cards a Back link returns to, shown again without asking Swiggy. */
     var lastResults: FoodCard.Restaurants? = null
@@ -245,8 +254,9 @@ internal class FoodFlow(private val context: Context) {
                 ?.let(::parseRestaurants).orEmpty()
         }
         if (list.isEmpty()) return card(FoodCard.Problem("No restaurants found for \"$query\" near ${address.label}."))
-        val results = FoodCard.Restaurants(address, query, list, intent, bestFits(list, intent)).also { lastResults = it }
-        val dishes = dishResult?.let { rankDishes(parseDishes(it, list), intent) }.orEmpty()
+        val remembered = foodMemory(facts.facts(), LocalDateTime.now())
+        val results = FoodCard.Restaurants(address, query, list, intent, bestFits(list, intent, remembered)).also { lastResults = it }
+        val dishes = dishResult?.let { rankDishes(parseDishes(it, list), intent, remembered) }.orEmpty()
         if (dishes.isEmpty()) return card(results)
         return card(FoodCard.Dishes(address, query, intent, dishes).also { lastMenu = it })
     }
@@ -343,6 +353,7 @@ internal class FoodFlow(private val context: Context) {
         option.intentApp?.let { args.put("intentApp", it) }
         val result = call("place_food_order", args) ?: return problem("Placing the order")
         cartItems.clear()
+        orderedDishes = cart.lines.map { it.name }
         val status = findString(result, "status").orEmpty()
         val pending = PendingPayment(
             paasId = findString(result, "paasId"),
@@ -371,6 +382,7 @@ internal class FoodFlow(private val context: Context) {
                     orderId = pending.orderId,
                     pending = null,
                     placed = true,
+                    dishes = orderedDishes,
                 ),
             )
         }
@@ -392,7 +404,7 @@ internal class FoodFlow(private val context: Context) {
                 p.lat?.let { confirm.put("lat", it) }
                 p.lng?.let { confirm.put("lng", it) }
                 call("confirm_order", confirm) ?: return problem("Confirming the order")
-                card(FoodCard.Order("Swiggy order placed", "Payment received. Your food is on the way.", p.orderId, null, placed = true))
+                card(FoodCard.Order("Swiggy order placed", "Payment received. Your food is on the way.", p.orderId, null, placed = true, dishes = orderedDishes))
             }
             status.contains("REFUND") ->
                 card(FoodCard.Order("Refund started", "The payment didn't complete, so Swiggy started a refund.", p.orderId, null, placed = false))
@@ -501,19 +513,26 @@ private const val LAST_PAYMENT = "last_payment"
  * The few places that fit what the user said: open first, then inside their budget (cost for two scaled to
  * their party size), then rating, then speed. Each pick carries the reason in words, shown on the card.
  */
-internal fun bestFits(list: List<FoodRestaurant>, intent: NilaResponse.FoodSearch): List<Pair<FoodRestaurant, String>> {
+internal fun bestFits(
+    list: List<FoodRestaurant>,
+    intent: NilaResponse.FoodSearch,
+    memory: FoodMemory = FoodMemory.None,
+): List<Pair<FoodRestaurant, String>> {
     val people = intent.people ?: 1
+    fun liked(r: FoodRestaurant) = memoryBoost(r.name, memory.facts)
     fun estimate(r: FoodRestaurant) = digitsOf(r.costForTwo)?.let { it * people / 2 }
     fun minutes(r: FoodRestaurant) = digitsOf(r.eta) ?: Int.MAX_VALUE
     fun fits(r: FoodRestaurant) = intent.budgetRupees?.let { budget -> estimate(r)?.let { it <= budget } } ?: true
     val ranked = list.filter { it.open }.sortedWith(
         compareByDescending<FoodRestaurant> { fits(it) }
+            .thenByDescending { liked(it) != null }
             .thenByDescending { it.rating.toDoubleOrNull() ?: 0.0 }
             .thenBy { minutes(it) },
     )
     val fastest = ranked.minByOrNull { minutes(it) }
     return ranked.take(BEST_FIT_COUNT).map { r ->
         val reasons = buildList {
+            liked(r)?.let(::add)
             val cost = estimate(r)
             when {
                 intent.budgetRupees != null && cost != null && fits(r) -> add("About ₹$cost for ${partyWords(people)}, inside ₹${intent.budgetRupees}")
@@ -539,9 +558,19 @@ private fun parseDishes(result: JSONObject, restaurants: List<FoodRestaurant>): 
         FoodDish(item, place, "")
     }
 
-/** Best fit first: inside the budget for the party, then rating, then speed, then price. */
-internal fun rankDishes(dishes: List<FoodDish>, intent: NilaResponse.FoodSearch): List<FoodDish> {
+/**
+ * Best fit first: no allergen from memory, then the dish asked for, then veg when a Diet fact asks for it today,
+ * then a dish the user said they like, then inside the budget for the party, then rating, then speed, then price.
+ */
+internal fun rankDishes(
+    dishes: List<FoodDish>,
+    intent: NilaResponse.FoodSearch,
+    memory: FoodMemory = FoodMemory.None,
+): List<FoodDish> {
     val people = intent.people ?: 1
+    fun liked(d: FoodDish) = memoryBoost(d.item.name, memory.facts) ?: memoryBoost(d.restaurant.name, memory.facts)
+    fun caution(d: FoodDish) = allergyCheck("${d.item.name} ${d.item.description}", memory.facts)
+    fun vegWanted(d: FoodDish) = memory.vegPreferred && d.item.veg == true
     fun cost(d: FoodDish) = digitsOf(d.item.chosenSize?.price ?: d.item.price)?.let { it * people }
     fun fits(d: FoodDish) = intent.budgetRupees?.let { budget -> cost(d)?.let { it <= budget } } ?: true
     fun minutes(d: FoodDish) = digitsOf(d.restaurant.eta) ?: Int.MAX_VALUE
@@ -549,13 +578,17 @@ internal fun rankDishes(dishes: List<FoodDish>, intent: NilaResponse.FoodSearch)
     val best = dishes.maxOfOrNull { match(it) } ?: 0.0
     val cheapest = dishes.filter { match(it) == best }.mapNotNull { cost(it) }.minOrNull()
     return dishes.sortedWith(
-        compareByDescending<FoodDish> { match(it) }
+        compareBy<FoodDish> { caution(it) != null }
+            .thenByDescending { match(it) }
+            .thenByDescending { vegWanted(it) }
+            .thenByDescending { liked(it) != null }
             .thenByDescending { fits(it) }
             .thenByDescending { it.restaurant.rating.toDoubleOrNull() ?: 0.0 }
             .thenBy { minutes(it) }
             .thenBy { cost(it) ?: Int.MAX_VALUE },
     ).map { dish ->
         val reason = buildList {
+            liked(dish)?.let(::add)
             if (best > 0 && match(dish) == best) add("Closest match")
             if (cost(dish) != null && cost(dish) == cheapest) add("Lowest price")
             add(dish.restaurant.name)
@@ -564,8 +597,9 @@ internal fun rankDishes(dishes: List<FoodDish>, intent: NilaResponse.FoodSearch)
             val total = cost(dish)
             if (intent.people != null && total != null) add("₹$total for ${partyWords(people)}")
             if (intent.budgetRupees != null && !fits(dish)) add("over budget")
+            caution(dish)?.let(::add)
         }.joinToString(" · ")
-        dish.copy(reason = reason)
+        dish.copy(reason = reason, caution = caution(dish))
     }
 }
 

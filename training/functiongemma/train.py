@@ -109,9 +109,8 @@ trainer = SFTTrainer(
         per_device_train_batch_size=4,
         gradient_accumulation_steps=8,
         # 12 tool schemas make ~1800-token prompts: the full 262k-vocab logits ran out of T4 memory even at
-        # batch 1. Liger's fused loss never builds them; fp16 autocast makes a step ~3x faster (fp32 masters).
+        # batch 1. Liger's fused loss never builds them. No fp16: Gemma overflowed in it and scored 0% after training.
         use_liger_kernel=True,
-        fp16=True,
         learning_rate=LEARNING_RATE,
         lr_scheduler_type="cosine",
         warmup_ratio=0.05,

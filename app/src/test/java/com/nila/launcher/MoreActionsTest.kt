@@ -20,8 +20,16 @@ class MoreActionsTest {
     }
 
     @Test
+    fun phrasebookShoppingCommandsRouteDeterministically() {
+        assertEquals(NilaResponse.GrocerySearch("bananas"), respond("shop groceries bananas"))
+        assertEquals(NilaResponse.FoodSearch("dinner"), respond("order food dinner"))
+        // A person's own "buy dinner" is not routed by its verb; Gemma's rewrite decides the category.
+        assertTrue(respond("buy dinner") !is NilaResponse.GrocerySearch)
+    }
+
+    @Test
     fun mapsAndSearch() {
-        assertEquals(Directions("Indiranagar"), respond("take me to Indiranagar"))
+        assertEquals(NilaResponse.Navigate("Indiranagar"), respond("take me to Indiranagar"))
         assertEquals(MapSearch("petrol pumps"), respond("petrol pumps near me"))
         assertEquals(WebSearch("IPL score"), respond("search for IPL score"))
     }

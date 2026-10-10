@@ -23,7 +23,9 @@ internal object NilaIntegrations {
             val origin = here?.let { MapsClient.Place(it.title, it.title, it.lat, it.lng) }
                 ?: MapsClient.searchPlace("Bengaluru, India")
                 ?: return@withContext null
-            val destination = MapsClient.searchPlace(destinationQuery, near = origin) ?: return@withContext null
+            // "the airport" matched only a hotel named "…Airport District"; "airport" finds Kempegowda.
+            val place = destinationQuery.trim().replace(Regex("""^(the|a|an)\s+""", RegexOption.IGNORE_CASE), "")
+            val destination = MapsClient.searchPlace(place, near = origin) ?: return@withContext null
             val route = MapsClient.route(origin, destination) ?: return@withContext null
             NilaResponse.RouteCard(
                 destination = destination.name,

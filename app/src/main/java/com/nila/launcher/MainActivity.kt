@@ -59,6 +59,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import java.time.LocalTime
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
@@ -157,13 +158,29 @@ private fun zeptoProductTurn(
     return Turn("Zepto", NilaResponse.ProductGroupChoices(cheapestLine(item, groups), groups))
 }
 
-/** "Cheapest on Swiggy Instamart · ₹34" across the providers that returned prices. */
-private fun cheapestLine(item: String, groups: List<ProductProviderGroup>): String {
-    val best = groups.flatMap { g -> g.items.map { g.providerName to it } }
-        .minByOrNull { (_, p) -> p.price.filter { it.isDigit() || it == '.' }.toDoubleOrNull() ?: Double.MAX_VALUE }
-        ?: return "Options for \"$item\" — tap + to add:"
-    return "Cheapest for \"$item\": ${best.first} · ${best.second.price} (${best.second.detail.substringBefore(" · ")})"
+/**
+ * The best value across providers, by price per litre or kilo when packs differ: "₹17 for 200 ml" is not
+ * cheaper than "₹68 for 1 L". Falls back to the lowest price when a pack size can't be read.
+ */
+internal fun cheapestLine(item: String, groups: List<ProductProviderGroup>): String {
+    val offers = groups.flatMap { g -> g.items.map { g.providerName to it } }
+    fun rupees(p: PickableProduct) = p.price.filter { it.isDigit() || it == '.' }.toDoubleOrNull()
+    val perUnit = offers.mapNotNull { (provider, p) ->
+        val price = rupees(p) ?: return@mapNotNull null
+        val (unit, amount) = normalizedSize(p.detail) ?: return@mapNotNull null
+        Triple(provider, p, price / amount * UNIT_BASE to unit)
+    }
+    perUnit.minByOrNull { it.third.first }?.let { (provider, p, value) ->
+        val label = if (value.second == "ml") "litre" else "kg"
+        val perLabel = "%.0f".format(value.first)
+        return "Best value for \"$item\": $provider · ₹$perLabel per $label (${p.detail.substringBefore(" · ")} at ${p.price})"
+    }
+    val cheapest = offers.minByOrNull { (_, p) -> rupees(p) ?: Double.MAX_VALUE } ?: return "Options for \"$item\" — tap + to add:"
+    return "Cheapest for \"$item\": ${cheapest.first} · ${cheapest.second.price}"
 }
+
+/** Per-unit prices are compared per litre (1000 ml) or per kilo (1000 g). */
+private const val UNIT_BASE = 1000.0
 
 /**
  * Real Cash-on-Delivery placement: shows Zepto's own preview first, places the order only after an
@@ -216,7 +233,10 @@ private fun NilaApp(resumeVersion: Int) {
     val context = LocalContext.current
     val engine = remember { NilaEngine() }
     // Gemma 4 E2B and FunctionGemma load in the background; until then NILA answers with its rules.
-    val brain = remember { NilaBrain(context.applicationContext, engine) }
+    // What the user asked NILA to remember; read by chat, food, groceries and the morning suggestion.
+    val memory = remember { NilaMemory(context.applicationContext) }
+    var facts by remember { mutableStateOf(memory.facts()) }
+    val brain = remember { NilaBrain(context.applicationContext, engine) { memory.facts() } }
     // Lakshmi speaks replies to spoken requests; typed requests stay silent.
     val lakshmi = remember { Lakshmi(context) }
     DisposableEffect(lakshmi) { onDispose { lakshmi.close() } }
@@ -243,8 +263,6 @@ private fun NilaApp(resumeVersion: Int) {
     LaunchedEffect(installedApps) {
         launcherPreferences.edit().putStringSet("home_pins", pinnedPackages.toSet()).apply()
     }
-    val memory = remember { context.getSharedPreferences("nila_memory", Context.MODE_PRIVATE) }
-    var rememberedFact by remember { mutableStateOf(memory.getString("fact", null)) }
     val navigation = remember { NilaNavigation(NilaScreen.Home) }
     var screen by remember { mutableStateOf(navigation.current) }
     var overlayScreen by remember { mutableStateOf(screen) }
@@ -329,6 +347,9 @@ private fun NilaApp(resumeVersion: Int) {
                 runFood("Check payment") { foodFlow.checkPayment(pending) }
             override fun track(orderId: String?) =
                 runFood("Track order") { foodFlow.track(orderId) }
+            override fun rememberDish(dish: String) {
+                facts = memory.save("I like $dish", MemoryKind.Preference)
+            }
         }
     }
 
@@ -398,6 +419,20 @@ private fun NilaApp(resumeVersion: Int) {
         return
     }
 
+    /**
+     * Web search the router picked (web_search): Tavily when the user added a key, else DuckDuckGo's free
+     * instant answer. Always ends with "open in browser" so a thin answer is never a dead end.
+     */
+    fun searchWeb(query: String) {
+        scope.launch(Dispatchers.IO) {
+            val found = runCatching { tavilyAuth.apiKey?.takeIf(String::isNotBlank)?.let { TavilySearch.search(it, query) } ?: InstantAnswer.search(query) }.getOrNull()
+            val sources = found?.items.orEmpty()
+            // The service's own answer when it has one, else Gemma reads the top results: always an answer, not a page list.
+            val answer = found?.summary ?: brain.answerFromWeb(query, sources) ?: "I couldn't find a clear answer to that."
+            withContext(Dispatchers.Main) { turns += Turn("Web search", WebAnswer(query, answer, sources)) }
+        }
+    }
+
     fun submit(prompt: String = input) {
         if (prompt.isBlank() || isThinking) return
         if (prompt.trim().startsWith("tvly-")) {
@@ -409,36 +444,6 @@ private fun NilaApp(resumeVersion: Int) {
         if (prompt.lowercase().contains("connect web search")) {
             input = ""
             open(NilaScreen.Settings)
-            return
-        }
-        extractWebSearchQuery(prompt)?.let { query ->
-            input = ""
-            if (!tavilyAuth.isConnected) {
-                turns += Turn(prompt, NilaResponse.Text("Web search isn't connected yet. Add your key in Settings → Accounts → Web search."))
-                return
-            }
-            turns += Turn(prompt, NilaResponse.Text("Searching the web for \"$query\"..."))
-            scope.launch(Dispatchers.IO) {
-                val outcome = runCatching { TavilySearch.search(tavilyAuth.apiKey!!, query) }
-                withContext(Dispatchers.Main) {
-                    outcome.fold(
-                        onSuccess = { answer ->
-                            answer.summary?.let { turns += Turn("Web search", NilaResponse.Text(it)) }
-                            if (answer.items.isEmpty()) {
-                                if (answer.summary == null) turns += Turn("Web search", NilaResponse.Text("No results for \"$query\"."))
-                            } else {
-                                val choices = answer.items.map { result ->
-                                    AsyncChoice(result.title, result.snippet.take(140), "", "") {
-                                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result.url))) }
-                                    }
-                                }
-                                turns += Turn("Web search", NilaResponse.AsyncChoices("Sources:", choices))
-                            }
-                        },
-                        onFailure = { turns += Turn("Web search", NilaResponse.Text("Web search error: ${it.message}")) },
-                    )
-                }
-            }
             return
         }
         if (prompt.lowercase().contains("connect zepto")) {
@@ -604,7 +609,7 @@ private fun NilaApp(resumeVersion: Int) {
             delay(550) // a visible thinking beat, so a reply doesn't feel like a canned instant lookup
             val normalized = prompt.lowercase()
             val response = if (normalized.contains("what do you remember")) {
-                NilaResponse.Text(memory.getString("fact", null)?.let { "You asked me to remember: $it" } ?: "You have not asked me to remember anything yet.")
+                NilaResponse.Text(memorySummary(facts))
             } else if (Regex("""\b(show|read|list|open|what are)\b.*\bnotes?\b""").containsMatchIn(prompt.lowercase())) {
                 NilaResponse.Text(notesSummary(context))
             } else {
@@ -617,6 +622,10 @@ private fun NilaApp(resumeVersion: Int) {
                         engine.mockFood().let { it.copy(intro = "${it.intro}\nConnect Swiggy in Settings to order for real.") }
                     }
                     is NilaResponse.Navigate -> NilaIntegrations.liveRouteCard(context, routed.destination) ?: routed
+                    is WebSearch -> {
+                        searchWeb(routed.query)
+                        NilaResponse.Text("Searching the web for \"${routed.query}\"…")
+                    }
                     is NilaResponse.GrocerySearch -> {
                         shopGroceries(routed.query)
                         NilaResponse.Text("Comparing Zepto and Swiggy Instamart for \"${routed.query}\"…")
@@ -624,10 +633,7 @@ private fun NilaApp(resumeVersion: Int) {
                     else -> performNow(context, routed)
                 }
             }
-            if (response is NilaResponse.Remember) {
-                memory.edit().putString("fact", response.fact).apply()
-                rememberedFact = response.fact
-            }
+            if (response is NilaResponse.Remember) facts = memory.save(response.fact, response.kind)
             turns[pendingIndex] = Turn(prompt, response)
             if (speakReply) spokenText(response)?.let(lakshmi::speak)
             speakReply = false
@@ -685,6 +691,11 @@ private fun NilaApp(resumeVersion: Int) {
                     onInvokeNila = { openAgent(AgentEntry.Voice) },
                     onOpenApps = { open(NilaScreen.Apps) },
                     onChangeWallpaper = { changeWallpaper(context) },
+                    facts = facts,
+                    onSuggestion = { request ->
+                        openAgent(AgentEntry.Text)
+                        submit(request)
+                    },
                 )
 
                 AnimatedVisibility(
@@ -751,18 +762,17 @@ private fun NilaApp(resumeVersion: Int) {
                                     if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
                                 },
                                 food = foodActions,
+                                suggestion = morningSuggestion(facts, LocalTime.now()),
                             ) { label, next -> turns += Turn(label, next) }
                             NilaScreen.Home -> Unit
                             else -> NilaScreenCatalogue(
                                 screen = overlayScreen,
                                 onOpen = ::open,
                                 onBack = ::closeOverlay,
-                                rememberedFact = rememberedFact,
+                                facts = facts,
                                 onChooseDefaultHome = ::chooseDefaultHome,
-                                onForgetMemory = {
-                                    memory.edit().remove("fact").apply()
-                                    rememberedFact = null
-                                },
+                                onForgetFact = { id -> facts = memory.delete(id) },
+                                onForgetAll = { facts = memory.clear() },
                                 accounts = accountsRevision.let { listOf(
                                     ServiceAccount(
                                         name = "Swiggy",
@@ -860,6 +870,7 @@ private fun AgentSpace(
     prepare: (Choice) -> NilaResponse.Confirmation,
     confirm: (String) -> Unit,
     food: FoodActions,
+    suggestion: MemorySuggestion?,
     addTurn: (String, NilaResponse) -> Unit,
 ) {
     val lastWasConfirmation = turns.lastOrNull()?.response is NilaResponse.Confirmation
@@ -941,7 +952,7 @@ private fun AgentSpace(
             contentPadding = PaddingValues(vertical = 22.dp),
             verticalArrangement = Arrangement.spacedBy(28.dp),
         ) {
-            if (turns.isEmpty()) item { EmptyAgent(onSubmit) }
+            if (turns.isEmpty()) item { EmptyAgent(suggestion, onSubmit) }
             itemsIndexed(turns) { index, turn ->
                 val busy = index == turns.lastIndex && isThinking
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1032,7 +1043,7 @@ private fun WorkingOnIt() {
 }
 
 @Composable
-private fun EmptyAgent(onSubmit: (String) -> Unit) {
+private fun EmptyAgent(suggestion: MemorySuggestion?, onSubmit: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(top = 24.dp)) {
         NilaMascot(mood = MascotMood.Idle, size = EmptyMascotSize)
         Text("Say it naturally, or type it", color = Muted, fontSize = 12.sp)
@@ -1047,27 +1058,31 @@ private fun EmptyAgent(onSubmit: (String) -> Unit) {
             fontSize = 36.sp,
             lineHeight = 39.sp,
         )
-        DemoPrompts(onSubmit)
+        DemoPrompts(suggestion, onSubmit)
     }
 }
 
+/** The fixed examples, led by one suggestion from memory when there is one; it sends its own request when tapped. */
 @Composable
-private fun DemoPrompts(onSubmit: (String) -> Unit) {
-    val prompts = listOf(
+private fun DemoPrompts(suggestion: MemorySuggestion?, onSubmit: (String) -> Unit) {
+    val examples = listOf(
         "Find dinner under ₹800",
         "What is 18% of 4250?",
         "Set an alarm for 6:30 am",
         "Open YouTube",
-    )
+    ).map { MemorySuggestion("“$it”", it) }
+    val prompts = listOfNotNull(suggestion) + examples
     Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
         SectionLabel("Try asking")
         prompts.forEach { prompt ->
+            val fromMemory = prompt == suggestion
             Box(
-                Modifier.heightIn(min = PromptMinHeight).clip(CircleShape).background(Panel).border(1.dp, Stroke, CircleShape)
-                    .clickable { onSubmit(prompt) }.padding(horizontal = 16.dp),
+                Modifier.heightIn(min = PromptMinHeight).clip(CircleShape).background(Panel)
+                    .border(1.dp, if (fromMemory) Lime else Stroke, CircleShape)
+                    .clickable { onSubmit(prompt.request) }.padding(horizontal = 16.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
-                Text("“$prompt”", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text(prompt.label, color = if (fromMemory) Lime else Paper, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -1098,18 +1113,20 @@ private fun ResponseView(
         // Resolved into the live flow in submit(); shown only if that ever fails to happen.
         is NilaResponse.FoodSearch -> AnswerCard("Looking for ${response.query}…")
         is NilaResponse.GrocerySearch -> AnswerCard("Comparing Zepto and Swiggy Instamart for ${response.query}…")
+        is WebAnswer -> WebAnswerView(response, context)
         // Confirmation is this card only: the iQOO 15 loan devices have fingerprint locked for the hackathon.
         is NilaResponse.NeedsConfirmation -> CommitCard(response) { confirm(response.token) }
         is NilaResponse.Text -> AnswerCard(response.value)
         is NilaResponse.Remember -> NilaCard {
             SectionLabel("Remembered", color = Lime)
             Text("I'll remember: ${response.fact}", color = Paper, fontSize = 15.sp, lineHeight = 22.sp)
+            Text(response.kind.label, color = Muted, fontSize = 12.sp)
         }
         // Only reached if a dismissal was not confirmed through the card; it is never sent without confirmation.
         is NilaResponse.DismissAlarm -> AnswerCard("This alarm was not turned off.")
         // Torch, Camera and Note are done in performNow before they reach the chat.
-        is Torch, is Camera, is Note, is TimerControl, is Directions, is MapSearch, is WebSearch, is PlayMusic, is MediaKey, is SoundChange,
-        is SettingsPage, is LaunchApp, ShowAlarms, BatteryLevel, ShowNotes -> Text("Done.")
+        is Torch, is Camera, is Note, is TimerControl, is MapSearch, is WebSearch, is PlayMusic, is MediaKey, is SoundChange,
+        is SettingsPage, is LaunchApp, ShowAlarms, BatteryLevel, ShowNotes -> AnswerCard("Done.")
         is Message -> MessageCard(response, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is Timer -> TimerCard()
         is NoteSaved -> ActionCard(
@@ -1173,9 +1190,10 @@ private fun ResponseView(
         is NilaResponse.RouteCard -> NilaCard {
             SourceLabel(response.source)
             SerifTitle(response.destination)
-            Text("%.1f km · about %.0f min by road".format(response.distanceKm, response.durationMin), color = Paper, fontSize = 14.sp)
-            Text("© OpenStreetMap contributors", color = Muted, fontSize = 10.sp)
-            PrimaryAction("Open Maps for navigation", { openGoogleMaps(context, response.destination, addTurn) }, Modifier.padding(top = 4.dp))
+            // OSRM has no live traffic: Bengaluru drives took far longer in Google Maps, so say so plainly.
+            Text("%.1f km · about %.0f min without traffic".format(response.distanceKm, response.durationMin), color = Paper, fontSize = 14.sp)
+            Text("Live traffic time is in Maps · © OpenStreetMap contributors", color = Muted, fontSize = 10.sp)
+            PrimaryAction("Open Maps for live traffic", { openGoogleMaps(context, response.destination, addTurn) }, Modifier.padding(top = 4.dp))
         }
         is NilaResponse.Choices -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             SourceLabel(response.source, color = if (response.source.startsWith("LIVE")) Lime else Orange)
@@ -1441,6 +1459,27 @@ private fun dismissAlarm(context: Context, alarm: NilaResponse.DismissAlarm): Ni
     }
 }
 
+/** The answer first; the pages it came from fold into one line, opened only if wanted. */
+@Composable
+private fun WebAnswerView(response: WebAnswer, context: Context) {
+    var showSources by remember { mutableStateOf(false) }
+    NilaCard {
+        SectionLabel("WEB")
+        Text(response.answer, color = Paper, fontSize = 15.sp, lineHeight = 22.sp)
+        if (response.sources.isNotEmpty()) {
+            TextAction(if (showSources) "Hide sources" else "Sources (${response.sources.size})", onClick = { showSources = !showSources })
+        }
+        if (showSources) {
+            response.sources.forEach { source ->
+                TextAction(source.title, onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(source.url))) } })
+            }
+            TextAction("Open in browser", onClick = {
+                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://duckduckgo.com/?q=" + Uri.encode(response.question)))) }
+            })
+        }
+    }
+}
+
 /** Does harmless, reversible actions straight away and reports what happened; everything else is returned as is. */
 private fun performNow(context: Context, response: NilaResponse): NilaResponse = when (response) {
     is Torch -> NilaResponse.Text(setTorch(context, response.on))
@@ -1451,17 +1490,16 @@ private fun performNow(context: Context, response: NilaResponse): NilaResponse =
     is Note -> { saveNote(context, response.text); NoteSaved(response.text) }
     is Timer -> response.also { NilaTimer.start(context, it.seconds) }
     is TimerControl -> NilaResponse.Text(controlTimer(response.action))
-    is Directions -> openUri(context, "google.navigation:q=" + Uri.encode(response.place), "Opening directions to ${response.place}.", "No maps app is available.")
     is MapSearch -> openUri(context, "geo:0,0?q=" + Uri.encode(response.query), "Showing ${response.query} nearby in Maps.", "No maps app is available.")
-    is WebSearch -> start(context, Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, response.query), "Searching the web for ${response.query}.", "No browser is available.")
-    is PlayMusic -> if (response.query == null) NilaResponse.Text(pressMediaKey(context, "play")) else start(
+    is PlayMusic -> if (response.query == null) NilaResponse.Text(resumeOrStartMusic(context)) else rememberMusic(context, response.query).let { start(
         context,
         Intent(android.provider.MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
             .putExtra(android.app.SearchManager.QUERY, response.query)
+            .apply { musicApp(context)?.let(::setPackage) }
             .putExtra(android.provider.MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*"),
         "Playing ${response.query}.",
         "No music app can play that.",
-    )
+    ) }
     is MediaKey -> NilaResponse.Text(pressMediaKey(context, response.action))
     is SoundChange -> NilaResponse.Text(changeSound(context, response.action))
     is SettingsPage -> start(context, Intent(settingsAction(response.page)), "Opening ${if (response.page == "main") "" else response.page + " "}settings.", "That settings page isn't available.")
@@ -1476,6 +1514,51 @@ private fun start(context: Context, intent: Intent, done: String, failed: String
     NilaResponse.Text(runCatching { context.startActivity(intent) }.fold({ done }, { failed }))
 
 private fun openUri(context: Context, uri: String, done: String, failed: String) = start(context, Intent(Intent.ACTION_VIEW, Uri.parse(uri)), done, failed)
+
+/**
+ * "Play some music": resume what was playing, and if nothing starts (no paused session to resume, the case on
+ * the iQOO where NILA said "Playing." and stayed silent), ask the music app to play something on its own.
+ */
+private fun resumeOrStartMusic(context: Context): String {
+    pressMediaKey(context, "play")
+    val audio = context.getSystemService(android.media.AudioManager::class.java)
+    val last = lastMusic(context)
+    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+        if (audio.isMusicActive) return@postDelayed
+        runCatching {
+            context.startActivity(
+                Intent(android.provider.MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
+                    .putExtra(android.app.SearchManager.QUERY, last.orEmpty())
+                    .apply { musicApp(context)?.let(::setPackage) }
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }, MUSIC_START_CHECK_MS)
+    return last?.let { "Playing $it again." } ?: "Starting your music."
+}
+
+/**
+ * A music app that actually starts playback from a search. Without a target, YouTube took the intent and only
+ * opened its home screen. The first installed one wins; null leaves the choice to Android.
+ */
+private val MusicApps = listOf("com.spotify.music", "com.google.android.apps.youtube.music", "com.jio.media.jiobeats", "com.gaana", "com.bsbportal.music")
+
+private fun musicApp(context: Context): String? = MusicApps.firstOrNull { pkg ->
+    runCatching { context.packageManager.getPackageInfo(pkg, 0) }.isSuccess
+}
+
+private const val MUSIC_PREFS = "nila_music"
+private const val LAST_MUSIC = "last_query"
+
+/** What the user last asked to play, so "play some music" picks up where they were. Stays on the phone. */
+private fun rememberMusic(context: Context, query: String) =
+    context.getSharedPreferences(MUSIC_PREFS, Context.MODE_PRIVATE).edit().putString(LAST_MUSIC, query).apply()
+
+private fun lastMusic(context: Context): String? =
+    context.getSharedPreferences(MUSIC_PREFS, Context.MODE_PRIVATE).getString(LAST_MUSIC, null)
+
+/** How long to wait for a resumed session to become audible before asking the music app to play. */
+private const val MUSIC_START_CHECK_MS = 900L
 
 private fun pressMediaKey(context: Context, action: String): String {
     val code = when (action) {
