@@ -23,6 +23,7 @@ fun spokenText(response: NilaResponse): String? = when (response) {
     is Timer -> "Your timer is ready. Tap Start timer."
     is CalendarEvent -> "${response.title} is ready. Tap Add to calendar to save it."
     is Call -> "Tap Call to open the dialer for ${response.who}."
+    is Message -> "Tap Write to open Messages to ${response.who}."
     else -> null
 }
 
