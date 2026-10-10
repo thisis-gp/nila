@@ -48,7 +48,7 @@ The expense tracker is the first generated skill. It demonstrates that NILA can 
 3. Search Swiggy Food and render comparable cards.
 4. Choose an item and prepare the cart.
 5. Show the exact provider, address, items and price.
-6. Stop for biometric confirmation.
+6. Stop for explicit confirmation on a confirmation card.
 7. Show the action in local history.
 8. Search one Instamart item and one Dineout slot through the same capability system.
 9. Ask NILA to build an expense tracker.
@@ -60,7 +60,7 @@ The expense tracker is the first generated skill. It demonstrates that NILA can 
 
 - Own the runtime architecture and integration branch.
 - Implement Read, Prepare and Commit enforcement.
-- Implement confirmation and biometric flow.
+- Implement the confirmation flow.
 - Coordinate Office Kit evidence and device checks.
 - Review pull requests and run the final demonstration.
 

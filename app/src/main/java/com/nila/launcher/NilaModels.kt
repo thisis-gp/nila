@@ -123,9 +123,15 @@ fun claimsAction(reply: String): Boolean = Regex(
 ).containsMatchIn(reply)
 
 /** Asks Gemma for a transcript only, in the language's own script, never an answer to the request. */
-fun transcriptionPrompt(languageName: String) =
+fun transcriptionPrompt(languageName: String?) = if (languageName == null) {
+    // Auto: the speaker may use any of NILA's languages, or mix them in one sentence.
+    "Transcribe this speech exactly as spoken. The speaker uses English, Hindi or Malayalam, and may mix them. " +
+        "Write each language in its own script: Malayalam in Malayalam script, Hindi in Devanagari, English in Latin letters. " +
+        "Output only the transcript, with no answer, translation or notes."
+} else {
     "Transcribe this speech exactly as spoken. The speaker most likely uses $languageName. " +
         "Write it in that language's own script. Output only the transcript, with no answer, translation or notes."
+}
 
 /** Exposes a capability's schema to LiteRT-LM. Execution stays in NilaEngine, never inside the model runtime. */
 private class CapabilityTool(private val capability: CapabilityDescriptor) : OpenApiTool {
@@ -246,7 +252,14 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
     private fun act(name: String, arguments: Map<String, Any?>, input: String): NilaResponse? {
         val capability = engine.capabilities[name] ?: return null
         // The model picks the action; exact values come from the user's own words where NILA can read them.
-        val args = (if (capability.id == "create_alarm") engine.alarmArgs(input) else null) ?: coerceArgs(arguments, capability)
+        val args = when (capability.id) {
+            "create_alarm" -> engine.alarmArgs(input)
+            // "Cancel my alarm" with no time means the next alarm; never trust a time the user did not say.
+            "remove_alarm" -> engine.alarmArgs(input).orEmpty()
+            "set_timer" -> engine.timerArgs(input)
+            "create_event" -> engine.eventArgs(input)
+            else -> null
+        } ?: coerceArgs(arguments, capability)
         val call = ToolCall(capability.id, args)
         if (!numbersGrounded(call.args, input)) return null.also { Log.i(TAG, "rejected ungrounded numbers for ${call.capabilityId}") }
         val check = checkCall(call, engine.capabilities)
@@ -270,7 +283,7 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
      * Turns a spoken WAV clip into text with Gemma 4 E2B on the phone. The text then takes the same path
      * as typing, so voice never skips the rules, checks or confirmations.
      */
-    suspend fun transcribe(wav: ByteArray, languageName: String): String? = withContext(llm) {
+    suspend fun transcribe(wav: ByteArray, languageName: String?): String? = withContext(llm) {
         val model = assistant ?: return@withContext null
         val start = SystemClock.elapsedRealtime()
         runCatching {
@@ -339,10 +352,11 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         val PERSONA = """
             You are NILA, a friendly assistant that lives on the user's Android phone and runs fully on the device.
             Reply in one to three short, warm sentences, in the same language the user writes in (English, Hindi or Malayalam).
-            Call a tool only when the user asks NILA to do something now: set an alarm, open YouTube, Netflix, Instagram or BGMI,
-            order food on Swiggy, show the route to a place, or remember one fact.
+            Call a tool only when the user asks NILA to do something now: set or turn off an alarm, start a timer,
+            turn the flashlight on or off, add a calendar event, save and show notes, open the camera, call someone through the dialer,
+            open YouTube, Netflix, Instagram or BGMI, order food on Swiggy, show the route to a place, or remember one fact.
             Questions are not requests: "is biryani healthy" or "what is Koramangala famous for" get a spoken answer, not a tool.
-            For anything else, such as the flashlight, calls, messages, payments, settings or other apps, say plainly that NILA cannot do that yet and name something it can do.
+            For anything else, such as messages, payments, settings or other apps, say plainly that NILA cannot do that yet and name something it can do.
             Never offer to do it, never ask for confirmation, and never say you ordered, paid, booked, sent or shared anything.
         """.trimIndent()
     }

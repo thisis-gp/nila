@@ -10,6 +10,7 @@
 - **Voice:** Lakshmi is the voice identity. Use Android on-device speech recognition and offline TTS voices for the reliable build.
 - **Generated-skill demo:** the user asks NILA to build an expense tracker. The resulting skill requests SMS permission, stores derived transactions locally, renders trusted UI and can be disabled or deleted.
 - **Safety:** Read and Prepare may run automatically. Commit always stops for explicit confirmation. Vector retrieval cannot authorize actions.
+- **No fingerprint:** the iQOO 15 loan devices have fingerprint locked for the hackathon, so Commit actions use the confirmation card only: it shows the exact details and the action runs when the user taps Confirm. The submission answers below mention a fingerprint; that was written before this decision.
 - **Pitch:** parked until the primary phone demo passes.
 - **Compliance:** disclose the pre-event scaffold to an organiser and preserve repository history.
 
