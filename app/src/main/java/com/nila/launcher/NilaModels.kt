@@ -426,8 +426,7 @@ class NilaBrain(
      */
     suspend fun answerFromWeb(question: String, results: List<WebResult>): String? = withContext(llm) {
         val model = assistant ?: return@withContext null
-        val context = results.take(WEB_RESULTS_READ).mapIndexed { i, r -> "${i + 1}. ${r.title}: ${r.snippet.take(WEB_SNIPPET_CHARS)}" }.joinToString("
-")
+        val context = results.take(WEB_RESULTS_READ).mapIndexed { i, r -> "${i + 1}. ${r.title}: ${r.snippet.take(WEB_SNIPPET_CHARS)}" }.joinToString("\n")
         if (context.isBlank()) return@withContext null
         runCatching {
             model.createConversation(
@@ -435,10 +434,7 @@ class NilaBrain(
                     systemInstruction = Contents.of(WEB_ANSWER),
                     samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0),
                 ),
-            ).use { it.sendMessage("Question: $question
-
-Search results:
-$context").contents.contents.filterIsInstance<Content.Text>().joinToString("") { t -> t.text }.trim() }
+            ).use { it.sendMessage("Question: $question\n\nSearch results:\n$context").contents.contents.filterIsInstance<Content.Text>().joinToString("") { t -> t.text }.trim() }
         }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 
