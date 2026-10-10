@@ -238,9 +238,58 @@ private fun NilaApp(resumeVersion: Int) {
     // silently picks a saved address for that (no address UI shown — only "go to cart" -> proceed
     // asks). The resolved client+store is then reused for every later "buy" in this session.
     var activeZeptoSession by remember { mutableStateOf<ActiveZeptoSession?>(null) }
+    val tavilyAuth = remember { TavilyAuth(context) }
 
     fun submit(prompt: String = input) {
         if (prompt.isBlank() || isThinking) return
+        if (prompt.trim().startsWith("tvly-")) {
+            // Never render the raw key: it would sit in the chat scrollback (and any screenshot) for
+            // the rest of the session. Only the redacted turn and a generic status reach the UI.
+            tavilyAuth.apiKey = prompt.trim()
+            turns += Turn("Web search key", NilaResponse.Text("Web search connected. Try \"search for <something>\"."))
+            input = ""
+            return
+        }
+        if (prompt.lowercase().contains("connect web search")) {
+            turns += Turn(
+                prompt,
+                NilaResponse.Text(
+                    "Get a free key at tavily.com (sign up, no card needed), copy the key starting with \"tvly-\", and paste it here as your next message.",
+                ),
+            )
+            input = ""
+            return
+        }
+        extractWebSearchQuery(prompt)?.let { query ->
+            input = ""
+            if (!tavilyAuth.isConnected) {
+                turns += Turn(prompt, NilaResponse.Text("Web search isn't connected yet. Say \"connect web search\" to set it up."))
+                return
+            }
+            turns += Turn(prompt, NilaResponse.Text("Searching the web for \"$query\"..."))
+            scope.launch(Dispatchers.IO) {
+                val outcome = runCatching { TavilySearch.search(tavilyAuth.apiKey!!, query) }
+                withContext(Dispatchers.Main) {
+                    outcome.fold(
+                        onSuccess = { answer ->
+                            answer.summary?.let { turns += Turn("Web search", NilaResponse.Text(it)) }
+                            if (answer.items.isEmpty()) {
+                                if (answer.summary == null) turns += Turn("Web search", NilaResponse.Text("No results for \"$query\"."))
+                            } else {
+                                val choices = answer.items.map { result ->
+                                    AsyncChoice(result.title, result.snippet.take(140), "", "") {
+                                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result.url))) }
+                                    }
+                                }
+                                turns += Turn("Web search", NilaResponse.AsyncChoices("Sources:", choices))
+                            }
+                        },
+                        onFailure = { turns += Turn("Web search", NilaResponse.Text("Web search error: ${it.message}")) },
+                    )
+                }
+            }
+            return
+        }
         if (prompt.lowercase().contains("connect zepto")) {
             turns += Turn(prompt, NilaResponse.Text("Opening Zepto login in your browser. Sign in and come back to NILA."))
             input = ""

@@ -117,12 +117,16 @@ class NilaModelsTest {
             "Alarm set for 1:30.",
             "I have ordered the biryani.",
             "Your reminder has been scheduled.",
+            "Okay, I'm turning off the torch.",
+            "I've turned off the flashlight for you.",
+            "The flashlight is now off.",
         ).forEach { assertTrue(it, claimsAction(it)) }
         listOf(
             "I can set an alarm for you if you tell me the time.",
             "NILA cannot turn on the flashlight right now, but I can set an alarm for you.",
             "Hello! I'm NILA, your friendly assistant.",
             "What time should I set it for?",
+            "Say \"turn on the flashlight\" and I'll do it.",
         ).forEach { assertFalse(it, claimsAction(it)) }
     }
 
