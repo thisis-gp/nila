@@ -10,10 +10,12 @@ import org.junit.Test
 class VoiceInputTest {
     @Test
     fun chipCyclesThroughEveryLanguageAndWraps() {
+        // Auto is first and the default; the fixed languages are overrides.
+        assertEquals("en-IN", nextVoiceLanguage("auto"))
         assertEquals("hi-IN", nextVoiceLanguage("en-IN"))
         assertEquals("ml-IN", nextVoiceLanguage("hi-IN"))
-        assertEquals("en-IN", nextVoiceLanguage("ml-IN"))
-        assertEquals(listOf("EN", "हि", "മ"), voiceLanguages.map { voiceChipLabel(it.tag) })
+        assertEquals("auto", nextVoiceLanguage("ml-IN"))
+        assertEquals(listOf("Auto", "EN", "हि", "മ"), chipLanguages.map { voiceChipLabel(it.tag) })
     }
 
     @Test
@@ -58,6 +60,13 @@ class VoiceInputTest {
         repeat(4) { assertFalse(end.update(50.0, 100)) }
         assertTrue(end.update(50.0, 100))
         assertFalse(end.heardSpeech)
+    }
+
+    @Test
+    fun autoPromptLetsGemmaDetectAndKeepEachLanguagesScript() {
+        val prompt = transcriptionPrompt(null)
+        assertTrue("English, Hindi or Malayalam" in prompt && "may mix" in prompt)
+        assertTrue("Malayalam script" in prompt && "Devanagari" in prompt && "Output only the transcript" in prompt)
     }
 
     @Test

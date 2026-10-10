@@ -2,6 +2,7 @@ package com.nila.launcher
 
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.time.LocalDate
 import java.time.LocalTime
 import java.util.UUID
 
@@ -79,6 +80,7 @@ sealed interface NilaResponse {
 class NilaEngine(
     extraCapabilities: List<CapabilityDescriptor> = emptyList(),
     private val now: () -> LocalTime = { LocalTime.now() },
+    private val today: () -> LocalDate = { LocalDate.now() },
 ) {
     private val percentage = Regex("""(\d+(?:\.\d+)?)\s*%\s*(?:of)?\s*(\d+(?:\.\d+)?)""")
     private val alarm = Regex("""alarm\s+(?:(?:for|at|on)\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?""")
@@ -141,7 +143,73 @@ class NilaEngine(
             params = listOf(Param("query", ParamType.STRING)),
             permission = PermissionClass.READ,
         ),
+        CapabilityDescriptor(
+            id = "set_timer",
+            description = "Start a countdown timer, for example \"timer for 10 minutes\".",
+            params = listOf(
+                Param("hours", ParamType.INT, required = false),
+                Param("minutes", ParamType.INT, required = false),
+                Param("seconds", ParamType.INT, required = false),
+            ),
+            permission = PermissionClass.PREPARE,
+            androidPermissions = setOf("com.android.alarm.permission.SET_ALARM"),
+            label = "Start a timer",
+        ),
+        CapabilityDescriptor(
+            id = "flashlight",
+            description = "Turn the phone's flashlight (torch) on or off.",
+            params = listOf(Param("on", ParamType.BOOLEAN)),
+            permission = PermissionClass.PREPARE,
+            label = "Flashlight",
+        ),
+        CapabilityDescriptor(
+            id = "create_event",
+            description = "Add an event, meeting or appointment to the calendar. Give the title, the day (today, tomorrow or a weekday) and the time if said.",
+            params = listOf(
+                Param("title", ParamType.STRING),
+                Param("day", ParamType.STRING, required = false),
+                Param("hour", ParamType.INT, required = false),
+                Param("minute", ParamType.INT, required = false),
+                Param("meridiem", ParamType.STRING, required = false),
+            ),
+            permission = PermissionClass.PREPARE,
+            label = "Add to calendar",
+        ),
+        CapabilityDescriptor(
+            id = "add_note",
+            description = "Save a note the user dictates, for example \"take a note that the gate code is 4521\".",
+            params = listOf(Param("text", ParamType.STRING)),
+            permission = PermissionClass.PREPARE,
+            label = "Save a note",
+        ),
+        CapabilityDescriptor(
+            id = "open_camera",
+            description = "Open the camera to take a photo or record a video.",
+            params = listOf(Param("video", ParamType.BOOLEAN, required = false)),
+            permission = PermissionClass.READ,
+            label = "Camera",
+        ),
+        CapabilityDescriptor(
+            id = "call_contact",
+            description = "Call a person by name or a phone number. NILA opens the dialer; the user presses call.",
+            params = listOf(Param("who", ParamType.STRING)),
+            permission = PermissionClass.PREPARE,
+            label = "Call",
+        ),
     ).plus(extraCapabilities).associateBy { it.id }
+
+    /** Timer length read from the user's words, so the model never decides the duration. */
+    fun timerArgs(input: String): Map<String, Any>? = timerSeconds(input)?.let { mapOf("seconds" to it) }
+
+    /** Event title, day and time read from the user's words. */
+    fun eventArgs(input: String): Map<String, Any> {
+        val args = mutableMapOf<String, Any>("title" to eventTitle(input))
+        val lower = input.lowercase()
+        Regex("""\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b""").find(lower)?.let { args["day"] = it.value }
+        // Only a time introduced by "at"/"from" or written with am/pm or a colon counts; "with 2 people" is not a time.
+        if (Regex("""\b(?:at|from)\s+\d|\d\s*(?:am|pm)\b|\d[:.]\d{2}""").containsMatchIn(normalize(input))) alarmArgs(input)?.let(args::putAll)
+        return args
+    }
 
     // Speech recognizers write "6:30 p.m."; fold a.m./p.m. into am/pm so the time is not misread.
     private fun normalize(input: String) = input.trim().lowercase().replace(Regex("""(?<=[\d\s])([ap])\.\s?m\.?"""), "$1m")
@@ -182,6 +250,18 @@ class NilaEngine(
         if (removeAlarm.containsMatchIn(normalized)) {
             return NilaIntent.Call(ToolCall("remove_alarm", alarmArgs(input).orEmpty()))
         }
+
+        // Everyday phone actions. Each reads its values from the user's words.
+        if (Regex("""\btimer\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("set_timer", timerArgs(input).orEmpty()))
+        if (Regex("""\b(flash ?light|torch)\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("flashlight", mapOf("on" to torchOn(input))))
+        if (Regex("""\b(camera|selfie)\b|\btake an? (photo|picture|pic)\b|\brecord an? video\b""").containsMatchIn(normalized)) {
+            return NilaIntent.Call(ToolCall("open_camera", mapOf("video" to wantsVideo(input))))
+        }
+        if (Regex("""^\s*(please\s+)?((take|make|add|write|save|create)\s+(a\s+)?note|note\s+down)\b""").containsMatchIn(normalized)) {
+            return NilaIntent.Call(ToolCall("add_note", noteText(input)?.let { mapOf("text" to it) }.orEmpty()))
+        }
+        callTarget(input)?.let { return NilaIntent.Call(ToolCall("call_contact", mapOf("who" to it))) }
+        if (Regex("""\b(event|meeting|appointment|calendar)\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("create_event", eventArgs(input)))
 
         // The router only extracts what was said; run() converts and validates the time.
         alarm.find(normalized)?.let { match ->
@@ -250,6 +330,26 @@ class NilaEngine(
                     Choice("Mani's Dum Biryani", "Chicken dum biryani · 4.4★", "₹219", "29 min"),
                 ),
             )
+            "set_timer" -> {
+                val hours = args["hours"] as Int? ?: 0
+                val minutes = args["minutes"] as Int? ?: 0
+                val seconds = args["seconds"] as Int? ?: 0
+                val duration = hours.toLong() * 3600 + minutes.toLong() * 60 + seconds
+                duration.takeIf { hours >= 0 && minutes >= 0 && seconds >= 0 && it in 1..86_400 }
+                    ?.let { Timer(it.toInt()) }
+                    ?: NilaResponse.Text("How long should the timer run? Try \"timer for 10 minutes\".")
+            }
+            "flashlight" -> Torch(args["on"] as Boolean)
+            "open_camera" -> Camera(args["video"] as Boolean? ?: false)
+            "add_note" -> Note(args["text"] as String)
+            "call_contact" -> Call(args["who"] as String)
+            "create_event" -> {
+                val hour = args["hour"] as Int?
+                val minute = args["minute"] as Int? ?: 0
+                val time = hour?.let { h -> eventHour(h, args["meridiem"] as String?)?.takeIf { minute in 0..59 }?.let { LocalTime.of(it, minute) } }
+                if (hour != null && time == null) NilaResponse.Text("That event time is not valid.")
+                else CalendarEvent(args["title"] as String, eventDate(args["day"] as String? ?: "", today()), time)
+            }
             else -> NilaResponse.Text("I can't do that yet. Nothing was done.")
         }
     }

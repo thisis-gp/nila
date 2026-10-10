@@ -44,17 +44,27 @@ const val VOICE_SAMPLE_RATE = 16_000
 private const val MAX_CLIP_MS = 30_000
 private const val CHUNK_MS = 100
 
+/** The default: Gemma works out whether the speaker used English, Hindi or Malayalam. */
+val AUTO_LANGUAGE = VoiceLanguage("auto", "Auto: English, हिंदी or മലയാളം")
+
+// New key so a language chosen before Auto existed does not override the Auto default.
+private const val LANGUAGE_KEY = "language_v2"
+
+/** What the chip cycles through: Auto first, then a fixed language for when Auto guesses wrong. */
+val chipLanguages = listOf(AUTO_LANGUAGE) + voiceLanguages
+
 /** Short label on the language chip. */
 fun voiceChipLabel(tag: String) = when (tag) {
     "hi-IN" -> "हि"
     "ml-IN" -> "മ"
-    else -> "EN"
+    "en-IN" -> "EN"
+    else -> "Auto"
 }
 
 /** Next language when the chip is tapped. */
 fun nextVoiceLanguage(tag: String): String {
-    val index = voiceLanguages.indexOfFirst { it.tag == tag }
-    return voiceLanguages[(index + 1) % voiceLanguages.size].tag
+    val index = chipLanguages.indexOfFirst { it.tag == tag }
+    return chipLanguages[(index + 1) % chipLanguages.size].tag
 }
 
 /** Wraps 16-bit mono PCM in a WAV header: the format LiteRT-LM's Content.AudioBytes reads (as in Google's AI Edge Gallery). */
@@ -136,7 +146,8 @@ enum class VoiceState { IDLE, LISTENING, UNDERSTANDING }
  */
 @Composable
 fun VoiceMic(
-    transcribe: suspend (wav: ByteArray, languageName: String) -> String?,
+    /** [languageName] is null for Auto, so Gemma detects the language itself. */
+    transcribe: suspend (wav: ByteArray, languageName: String?) -> String?,
     onFinal: (String) -> Unit,
     onMessage: (String) -> Unit,
     /** Called as recording starts, so NILA stops talking and the mic does not record Lakshmi. */
@@ -145,10 +156,10 @@ fun VoiceMic(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("nila_voice", Context.MODE_PRIVATE) }
-    var tag by remember { mutableStateOf(prefs.getString("language", null) ?: voiceLanguages.first().tag) }
+    var tag by remember { mutableStateOf(prefs.getString(LANGUAGE_KEY, null) ?: AUTO_LANGUAGE.tag) }
     var state by remember { mutableStateOf(VoiceState.IDLE) }
     var stopRequested by remember { mutableStateOf(false) }
-    val languageName = voiceLanguages.first { it.tag == tag }.name
+    val languageName = (chipLanguages.firstOrNull { it.tag == tag } ?: AUTO_LANGUAGE).name
     val latestFinal by rememberUpdatedState(onFinal)
     val latestMessage by rememberUpdatedState(onMessage)
 
@@ -163,7 +174,7 @@ fun VoiceMic(
                 return@launch latestMessage("I didn't hear anything. Tap the mic and try again, or type instead.")
             }
             state = VoiceState.UNDERSTANDING
-            val text = runCatching { transcribe(clip, languageName) }.getOrNull()?.trim()
+            val text = runCatching { transcribe(clip, languageName.takeUnless { tag == AUTO_LANGUAGE.tag }) }.getOrNull()?.trim()
             state = VoiceState.IDLE
             if (text.isNullOrBlank()) latestMessage("I couldn't understand that. Try again, or type instead.") else latestFinal(text)
         }
@@ -176,7 +187,7 @@ fun VoiceMic(
         TextButton(
             onClick = {
                 tag = nextVoiceLanguage(tag)
-                prefs.edit().putString("language", tag).apply()
+                prefs.edit().putString(LANGUAGE_KEY, tag).apply()
             },
             enabled = state == VoiceState.IDLE,
             modifier = Modifier.semantics { contentDescription = "Voice language: $languageName. Tap to change." },
