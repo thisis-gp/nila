@@ -96,39 +96,37 @@ internal fun requestKeyPhrase(request: String): IntRange? {
 }
 
 /** The spaced label above the inline listening state: what NILA is doing with the person's voice right now. */
-internal fun listeningLabel(state: VoiceState, heard: String?): String = when (state) {
+internal fun listeningLabel(state: VoiceState): String = when (state) {
     VoiceState.LISTENING -> "LISTENING"
     VoiceState.UNDERSTANDING -> "UNDERSTANDING"
-    VoiceState.IDLE -> if (heard != null) "HEARD YOU" else "READY"
+    VoiceState.IDLE -> "READY"
 }
 
 /**
- * The agent screen's listening state and the hero of the screen while the mic is in use: what NILA heard sits
- * low in large serif type and waits for "Use this request" before anything runs, so a misheard request never
- * acts on its own. It carries the only mascot on screen while it shows.
+ * The agent screen's listening state and the hero of the screen while the mic is in use. What NILA heard is
+ * sent at once; a misheard commit action still stops at its confirmation card. It carries the only mascot on
+ * screen while it shows.
  */
 @Composable
 internal fun ListeningTurn(
     voice: VoiceCapture,
-    heard: String?,
     notice: String?,
     modifier: Modifier = Modifier,
-    onUseRequest: (String) -> Unit,
 ) {
     val mood = when (voice.state) {
         VoiceState.LISTENING -> MascotMood.Listening
         VoiceState.UNDERSTANDING -> MascotMood.Thinking
         VoiceState.IDLE -> if (notice != null) MascotMood.Error else MascotMood.Idle
     }
-    val failed = heard == null && notice != null && voice.state == VoiceState.IDLE
+    val failed = notice != null && voice.state == VoiceState.IDLE
     Column(modifier.fillMaxSize().padding(bottom = HeroBottomGap), verticalArrangement = Arrangement.Bottom) {
-        SourceLabel(listeningLabel(voice.state, heard), color = if (failed) Muted else Lime)
+        SourceLabel(listeningLabel(voice.state), color = if (failed) Muted else Lime)
         SpokenText(
-            text = heard ?: notice ?: when (voice.state) {
+            text = notice ?: when (voice.state) {
                 VoiceState.UNDERSTANDING -> "One moment…"
                 else -> "I'm listening."
             },
-            quoted = heard != null,
+            quoted = false,
             modifier = Modifier.padding(top = 14.dp),
         )
         Row(
@@ -147,10 +145,6 @@ internal fun ListeningTurn(
         when {
             voice.state == VoiceState.LISTENING -> StopAction(onClick = voice::toggle)
             voice.state == VoiceState.UNDERSTANDING -> Spacer(Modifier.height(PrimaryActionHeight))
-            heard != null -> {
-                PrimaryAction("Use this request", onClick = { onUseRequest(heard) })
-                TextAction("Say it again", onClick = voice::toggle, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp))
-            }
             else -> PrimaryAction("Try again", onClick = voice::toggle)
         }
     }
