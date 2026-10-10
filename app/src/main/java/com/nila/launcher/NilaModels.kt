@@ -32,7 +32,14 @@ object ModelFiles {
      */
     fun dir(context: Context): File? = context.getExternalFilesDir("models")?.apply { mkdirs() }
 
-    fun find(context: Context, name: String): File? = dir(context)?.let { File(it, name) }?.takeIf { it.isFile && it.length() > 0 }
+    /**
+     * Internal storage first: on vivo's ROM, files written by `adb shell` into the external dir stay
+     * owned by `shell` and open() fails with PERMISSION_DENIED. `run-as` copies into filesDir are app-owned.
+     */
+    fun find(context: Context, name: String): File? =
+        listOfNotNull(File(context.filesDir, "models"), dir(context))
+            .map { File(it, name) }
+            .firstOrNull { it.isFile && it.length() > 0 }
 }
 
 enum class ModelState(val label: String) { MISSING("not installed"), LOADING("loading…"), READY("ready"), FAILED("failed to load") }
@@ -136,6 +143,9 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         private set
     var routerState by mutableStateOf(ModelState.MISSING)
         private set
+    /** Last model load failure, shown in the chat status; this vivo ROM drops app logcat output. */
+    var loadError by mutableStateOf<String?>(null)
+        private set
 
     // LiteRT-LM engines are used from one thread only.
     private val llm = Executors.newSingleThreadExecutor { Thread(it, "nila-llm") }.asCoroutineDispatcher()
@@ -179,7 +189,11 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
                 setState(ModelState.READY)
                 return created
             } catch (e: Exception) {
-                created.close()
+                // close() throws on an engine that never initialized; unguarded, that escaped and
+                // crashed NILA on launch before the CPU fallback could run.
+                runCatching { created.close() }
+                loadError = "$name on ${backend::class.simpleName}: ${e.message}"
+                runCatching { java.io.File(context.filesDir, "model_load.txt").appendText("$loadError\n") }
             }
         }
         setState(ModelState.FAILED)

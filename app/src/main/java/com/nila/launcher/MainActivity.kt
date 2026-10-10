@@ -302,7 +302,8 @@ private fun NilaApp(resumeVersion: Int) {
                                 turns = turns,
                                 input = input,
                                 isThinking = isThinking,
-                                modelStatus = "Gemma 4 E2B ${brain.assistantState.label} · FunctionGemma ${brain.routerState.label}",
+                                modelStatus = "Gemma 4 E2B ${brain.assistantState.label} · FunctionGemma ${brain.routerState.label}" +
+                                    (brain.loadError?.let { "\n$it" } ?: ""),
                                 transcribe = brain::transcribe,
                                 onInput = { input = it },
                                 onSubmit = ::submit,
