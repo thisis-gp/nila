@@ -11,7 +11,7 @@ import android.os.Build
 import android.os.IBinder
 
 /**
- * A short foreground service for the length of one sign-in. While a browser tab covers NILA, Android's
+ * A foreground service for the length of one sign-in. While a browser tab covers NILA, Android's
  * cached-app freezer suspends the process (isFrozen=true on the iQOO 15), so the loopback thread that waits
  * for the OAuth redirect never runs. A foreground service keeps the process out of the freezer.
  */
@@ -27,16 +27,11 @@ class SignInKeepAlive : Service() {
             .setOngoing(true)
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE)
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
         return START_NOT_STICKY
-    }
-
-    /** shortService allows about 3 minutes; past that the sign-in has its own timeout, so just stop. */
-    override fun onTimeout(startId: Int) {
-        stopSelf()
     }
 
     companion object {

@@ -64,10 +64,10 @@ class NilaModelsTest {
 
     @Test
     fun greetingsAndQuestionsAboutNilaSkipTools() {
-        listOf("hi", "Hello there", "who are you", "What can you do?", "what's your name", "thanks!").forEach {
+        listOf("hi", "Hello there", "who are you", "What can you do?", "what's your name", "thanks!", "hi nila", "how are you doing today").forEach {
             assertTrue(it, engine.isSmallTalk(it))
         }
-        listOf("i'm hungry", "wake me up at 6", "high protein dinner", "open youtube").forEach {
+        listOf("i'm hungry", "wake me up at 6", "high protein dinner", "open youtube", "hey, wake me up at 7", "help me set a timer for 5 minutes", "hi can you put milk in my notes").forEach {
             assertFalse(it, engine.isSmallTalk(it))
         }
     }
