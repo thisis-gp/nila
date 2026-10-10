@@ -189,6 +189,13 @@ class NilaEngine(
             label = "Start a timer",
         ),
         CapabilityDescriptor(
+            id = "timer_control",
+            description = "Pause, resume or stop the running timer, or tell how much time is left (status).",
+            params = listOf(Param("action", ParamType.STRING)),
+            permission = PermissionClass.PREPARE,
+            label = "Timer",
+        ),
+        CapabilityDescriptor(
             id = "flashlight",
             description = "Turn the phone's flashlight (torch) on or off.",
             params = listOf(Param("on", ParamType.BOOLEAN)),
@@ -218,7 +225,7 @@ class NilaEngine(
         CapabilityDescriptor(
             id = "open_camera",
             description = "Open the camera to take a photo or record a video.",
-            params = listOf(Param("video", ParamType.BOOLEAN, required = false)),
+            params = listOf(Param("video", ParamType.BOOLEAN, required = false), Param("front", ParamType.BOOLEAN, required = false)),
             permission = PermissionClass.READ,
             label = "Camera",
         ),
@@ -258,7 +265,15 @@ class NilaEngine(
     fun respond(input: String): NilaResponse = calculate(input) ?: execute(route(input))
 
     /** Greetings and questions about NILA itself. These go straight to conversation, never to a tool. */
-    fun isSmallTalk(input: String) = smallTalk.containsMatchIn(input.lowercase())
+    /**
+     * Only a greeting or a question about NILA, with at most two more words ("hello there", "how are you
+     * doing today"). "hey, wake me up at 7" starts like small talk but is a request, so it still reaches the
+     * rewrite and FunctionGemma instead of chat only.
+     */
+    fun isSmallTalk(input: String): Boolean {
+        val match = smallTalk.find(input.lowercase()) ?: return false
+        return input.substring(match.range.last + 1).split(Regex("""[^\p{L}\p{N}']+""")).count { it.isNotBlank() } <= 2
+    }
 
     /**
      * Reads the alarm time exactly as the user said it. When a model picks create_alarm, these values
@@ -313,10 +328,12 @@ class NilaEngine(
         }
 
         // Everyday phone actions. Each reads its values from the user's words.
+        // Checked before "timer": "stop the timer" controls the running one, it does not start a new one.
+        timerControl(input)?.let { return NilaIntent.Call(ToolCall("timer_control", mapOf("action" to it))) }
         if (Regex("""\btimer\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("set_timer", timerArgs(input).orEmpty()))
         if (Regex("""\b(flash ?light|torch)\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("flashlight", mapOf("on" to torchOn(input))))
         if (Regex("""\b(camera|selfie)\b|\btake an? (photo|picture|pic)\b|\brecord an? video\b""").containsMatchIn(normalized)) {
-            return NilaIntent.Call(ToolCall("open_camera", mapOf("video" to wantsVideo(input))))
+            return NilaIntent.Call(ToolCall("open_camera", mapOf("video" to wantsVideo(input), "front" to wantsFront(input))))
         }
         if (Regex("""^\s*(please\s+)?((take|make|add|write|save|create)\s+(a\s+)?note|note\s+down)\b""").containsMatchIn(normalized)) {
             return NilaIntent.Call(ToolCall("add_note", noteText(input)?.let { mapOf("text" to it) }.orEmpty()))
@@ -401,7 +418,9 @@ class NilaEngine(
                     ?: NilaResponse.Text("How long should the timer run? Try \"timer for 10 minutes\".")
             }
             "flashlight" -> Torch(args["on"] as Boolean)
-            "open_camera" -> Camera(args["video"] as Boolean? ?: false)
+            "open_camera" -> Camera(args["video"] as Boolean? ?: false, args["front"] as Boolean? ?: false)
+            "timer_control" -> (args["action"] as String).takeIf { it in setOf("pause", "resume", "stop", "status") }?.let { TimerControl(it) }
+                ?: NilaResponse.Text("I can pause, resume or stop the timer, or tell you how much time is left.")
             "add_note" -> Note(args["text"] as String)
             "call_contact" -> Call(args["who"] as String)
             "create_event" -> {

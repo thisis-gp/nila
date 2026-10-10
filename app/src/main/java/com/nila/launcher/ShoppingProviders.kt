@@ -6,6 +6,30 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
+enum class ShoppingCategory { FOOD, GROCERY }
+
+private val FOOD_KEYWORDS = listOf(
+    "biryani", "pizza", "burger", "dosa", "meal", "dinner", "lunch", "breakfast",
+    "noodles", "curry", "thali", "sandwich", "roll", "momos", "shawarma", "cake",
+)
+
+/** Deterministic stand-in for FunctionGemma, NILA's intended real tool router (ARCHITECTURE.md). Swap when that's integrated. */
+fun classifyShoppingIntent(item: String): ShoppingCategory {
+    val lower = item.lowercase()
+    return if (FOOD_KEYWORDS.any(lower::contains)) ShoppingCategory.FOOD else ShoppingCategory.GROCERY
+}
+
+private val ORDER_TRIGGERS = listOf("buy ", "order ", "get me ", "i need ", "purchase ")
+
+/** Strips a leading ordering phrase and returns the item, or null if the prompt doesn't start with one. Still pattern matching, not real language understanding — see classifyShoppingIntent. */
+fun extractOrderItem(prompt: String): String? {
+    val lower = prompt.lowercase()
+    // "i need 2 apples put in the notes" is a note, not a Zepto order (seen on the iQOO 15).
+    if (Regex("""\b(notes?|alarms?|timer|remind|reminder|calendar|meeting)\b""").containsMatchIn(lower)) return null
+    val trigger = ORDER_TRIGGERS.firstOrNull { lower.startsWith(it) } ?: return null
+    return prompt.substring(trigger.length).trim().takeIf { it.isNotBlank() }
+}
+
 private val SIZE_PATTERN = Regex(
     """(\d+(?:\.\d+)?)\s*(ml|millilitre|millilitres|l|litre|litres|liter|liters|kg|kilogram|kilograms|g|gram|grams|gm)\b""",
     RegexOption.IGNORE_CASE,

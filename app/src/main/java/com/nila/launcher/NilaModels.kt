@@ -99,9 +99,10 @@ fun coerceArgs(raw: Map<String, Any?>, capability: CapabilityDescriptor?): Map<S
  * FunctionGemma turned "remind me at 9 pm" into hour = 10 on the iQOO 15.
  */
 fun numbersGrounded(args: Map<String, Any>, input: String): Boolean {
-    val said = Regex("""\d+""").findAll(input).map { it.value.toLong() }.toSet()
+    // Compared as digit strings: toLong() on a huge number the user typed would throw.
+    val said = Regex("""\d+""").findAll(input).map { it.value.trimStart('0').ifEmpty { "0" } }.toSet()
     // Zero is a default ("at 9" means minute 0), not an invented value.
-    return args.values.filterIsInstance<Number>().all { (it.toDouble() % 1.0 == 0.0) && (it.toLong() == 0L || it.toLong() in said) }
+    return args.values.filterIsInstance<Number>().all { (it.toDouble() % 1.0 == 0.0) && (it.toLong() == 0L || it.toLong().toString() in said) }
 }
 
 private fun wholeNumber(value: Any): Long? = when (value) {
@@ -122,6 +123,54 @@ fun claimsAction(reply: String): Boolean = Regex(
         """|(?i)\b(alarm|order|message|booking|reminder|flashlight|torch)\b[^.!?]*\b(is|has been) (now )?(set|placed|sent|confirmed|scheduled|on|off)\b""" +
         """|(?i)^\s*(alarm|reminder) (set|scheduled)\b""",
 ).containsMatchIn(reply)
+
+/** Cleans Gemma's rewrite: first line, no quotes, labels or final full stop. Null for CHAT or nothing. */
+fun cleanCommand(raw: String): String? {
+    val line = raw.lineSequence().map { it.trim() }.firstOrNull { it.isNotBlank() } ?: return null
+    val command = line.removePrefix("Command:").removePrefix("command:").trim().trim('"', '\'', '`', '*').trim().trimEnd('.')
+    return command.takeUnless { it.isBlank() || it.equals("chat", ignoreCase = true) }
+}
+
+/** True when every number in [command] appears in what was said, so a rewrite never invents a time or amount. */
+fun numbersSaid(command: String, said: String): Boolean {
+    // Digit strings without leading zeros ("07" is 7): toLong() threw on a 30-digit amount and aborted the request.
+    fun numbers(text: String) = Regex("""\d+""").findAll(text).map { it.value.trimStart('0').ifEmpty { "0" } }
+    val heard = numbers(said).toSet()
+    return numbers(command).all { it in heard }
+}
+
+private val confirmation = Regex("""^\s*(yes|yeah|yep|ya|ok|okay|sure|confirm|go ahead|do it|please do|haan|ha|ji)\b""")
+private val reference = Regex("""\b(it|that|this|same|again)\b""")
+private val numberWord = Regex(
+    """\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|""" +
+        """seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|hundred|thousand|half|quarter|noon|midnight|""" +
+        // Hindi and Malayalam typed in Latin letters. "do" (2) counts only next to a unit, so "do it" stays a follow-up.
+        """ek|teen|char|paanch|panch|chhe|chhah|saat|aath|nau|das|gyarah|barah|baje|bajkar|dedh|dhai|sava|saade|paune|""" +
+        """do (baje|minute|minutes|ghante|ghanta|second)|onnu|randu|moonu|naalu|anchu|aaru|ezhu|ettu|onpathu|pathu|""" +
+        """pathinonnu|panthrandu|mani|minuttu)\b""",
+)
+
+/** Number words and digits in Devanagari and Malayalam script. Matched anywhere: a false match only stops borrowing. */
+private val nativeNumber = Regex(
+    """[०-९൦-൯]|एक|दो|तीन|चार|पांच|पाँच|छह|छः|सात|आठ|नौ|दस|ग्यारह|बारह|बजे|डेढ़|ढाई|सवा|साढ़े|पौने|""" +
+        """ഒന്ന|രണ്ട|മൂന്ന|നാല|അഞ്ച|ആറ|ഏഴ|എട്ട|ഒമ്പത|ഒൻപത|പത്ത|മണി""",
+)
+
+/**
+ * What a rewrite's numbers may come from: only the current message. A short follow-up that says no number
+ * itself, a confirmation ("yes") or a reference ("make it pm"), may borrow from the last exchange it answers.
+ * "set an alarm at six" is a fresh request, so an earlier 7 cannot approve a rewrite to 7.
+ * Number words count in every language NILA hears: "haan, saat baje" says a new time, so it borrows nothing.
+ * ponytail: a fixed word list, so an unusual spelling of a number word is missed; extend the lists if seen.
+ */
+fun groundingText(input: String, lastTurn: Pair<String, String>?): String {
+    val lower = input.lowercase()
+    val followUp = lastTurn != null && !Regex("""\d""").containsMatchIn(lower) && !numberWord.containsMatchIn(lower) &&
+        !nativeNumber.containsMatchIn(lower) &&
+        lower.split(Regex("""\s+""")).count { it.isNotBlank() } <= 6 &&
+        (confirmation.containsMatchIn(lower) || reference.containsMatchIn(lower))
+    return if (followUp) "$input ${lastTurn!!.first} ${lastTurn.second}" else input
+}
 
 /** Asks Gemma for a transcript only, in the language's own script, never an answer to the request. */
 fun transcriptionPrompt(languageName: String?) = if (languageName == null) {
@@ -212,13 +261,48 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         fun done(path: String, response: NilaResponse) = response.also {
             Log.i(TAG, "path=$path ms=${SystemClock.elapsedRealtime() - start} response=${it::class.simpleName}")
         }
-        engine.calculate(input)?.let { return@withContext done("calculator", it) }
+        fun answer(path: String, response: NilaResponse) = done(path, response).also { remember(input, it) }
+        engine.calculate(input)?.let { return@withContext answer("calculator", it) }
         val keyword = engine.route(input)
-        if (keyword is NilaIntent.Call) return@withContext done("rules:${keyword.call.capabilityId}", engine.execute(keyword))
-        // Stock FunctionGemma scored 31% on NILA's tools (training/functiongemma eval) and its wrong picks
-        // pre-empt Gemma, so it routes only when Gemma 4 E2B is not loaded, until the fine-tuned router ships.
-        if (assistant == null && !engine.isSmallTalk(input)) modelRoute(input)?.let { return@withContext done("functiongemma", it) }
-        chat(input)?.let { done("gemma", it) } ?: done("fallback", engine.execute(NilaIntent.Converse(input)))
+        if (keyword is NilaIntent.Call) return@withContext answer("rules:${keyword.call.capabilityId}", engine.execute(keyword))
+        if (!engine.isSmallTalk(input)) {
+            // Any wording, follow-up or language: Gemma restates it as one plain command the rules understand.
+            rewrite(input)?.let { command ->
+                engine.calculate(command)?.let { return@withContext answer("rewrite:calculator", it) }
+                val routed = engine.route(command)
+                if (routed is NilaIntent.Call) return@withContext answer("rewrite:${routed.call.capabilityId}", engine.execute(routed))
+            }
+            modelRoute(input)?.let { return@withContext answer("functiongemma", it) }
+        }
+        chat(input)?.let { answer("gemma", it) } ?: answer("fallback", engine.execute(NilaIntent.Converse(input)))
+    }
+
+    private fun remember(input: String, response: NilaResponse) {
+        history.addLast(input to (spokenText(response) ?: response::class.simpleName.orEmpty()))
+        while (history.size > HISTORY_TURNS) history.removeFirst()
+    }
+
+    /**
+     * Restates the user's message as one command from NILA's own phrasebook, using the last few turns, or
+     * null for conversation. A command whose numbers nobody said is dropped: the model may not invent a time.
+     */
+    private fun rewrite(input: String): String? {
+        val model = assistant ?: return null
+        val transcript = history.joinToString("\n") { (user, nila) -> "User: $user\nNILA: $nila" }
+        val raw = runCatching {
+            model.createConversation(
+                ConversationConfig(
+                    systemInstruction = Contents.of(REWRITE),
+                    samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0),
+                ),
+            ).use { conversation ->
+                conversation.sendMessage("Conversation so far:\n${transcript.ifBlank { "(none)" }}\n\nNew message: $input")
+                    .contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
+            }
+        }.getOrNull() ?: return null
+        val command = cleanCommand(raw) ?: return null
+        return command.takeIf { numbersSaid(it, groundingText(input, history.lastOrNull())) }
+            .also { Log.i(TAG, if (it == null) "rewrite dropped: unsaid numbers" else "rewrite -> command (${it.length} chars)") }
     }
 
     /**
@@ -324,8 +408,6 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         val reply = response.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim()
             .takeIf { it.isNotBlank() }?.let { if (claimsAction(it)) NO_ACTION_TAKEN.also { Log.i(TAG, "replaced a reply that claimed an action") } else it }
             ?: return null
-        history.addLast(input to reply)
-        while (history.size > HISTORY_TURNS) history.removeFirst()
         return NilaResponse.Text(reply)
     }
 
@@ -350,6 +432,27 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             params = listOf(Param("message", ParamType.STRING)),
             permission = PermissionClass.READ,
         )
+        /** NILA's phrasebook: every command the keyword rules understand. Gemma maps any wording onto one. */
+        val REWRITE = """
+            You turn the user's new message into ONE command for NILA, a phone assistant, using the conversation for context.
+            Pick from these commands and fill the <parts> with the user's own words, names and numbers, in English:
+            set an alarm for <time> | cancel the alarm for <time> | turn off my alarm | show my alarms
+            set a timer for <n> minutes | pause the timer | resume the timer | stop the timer | how much time is left
+            turn on the flashlight | turn off the flashlight
+            open the camera | take a selfie | record a video
+            schedule <title> <day> at <time> | take a note that <text> | show my notes
+            call <name or number> | tell <name> <message>
+            take me to <place> | <things> near me | search for <query>
+            play <song or artist> | pause the music | next song | previous song
+            volume up | volume down | mute | vibrate mode | silent mode | ring mode
+            open <wifi, bluetooth, battery, display, sound, location> settings | open <app name>
+            how much battery is left | what is <n>% of <n> | remember that <fact>
+            A short reply such as "yes", "do it" or "turn it off" means the action just discussed; restate it in full.
+            Translate Hindi or Malayalam into the English command. Never invent a time, number, name or place.
+            If the message is not a request for one of these commands, reply exactly: CHAT
+            Reply with the command only, on one line.
+        """.trimIndent()
+
         val PERSONA = """
             You are NILA, a friendly assistant that lives on the user's Android phone and runs fully on the device.
             Reply in one to three short, warm sentences, in the same language the user writes in (English, Hindi or Malayalam).
@@ -362,7 +465,8 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             Questions are not requests: "is biryani healthy" or "what is Koramangala famous for" get a spoken answer, not a tool.
             Jokes, facts, advice and small talk are welcome: answer them yourself, briefly and warmly.
             For actions NILA has no tool for, such as payments outside a food or grocery order, say plainly that NILA cannot do that yet and name something it can do.
-            Never offer to do it, never ask for confirmation, and never say you ordered, paid, booked, sent or shared anything.
+            Never offer to do it, never ask "do you want me to…", never ask for confirmation, and never say you ordered, paid, booked, sent or shared anything.
+            If the user seems to want one of NILA's actions, tell them the words to say, for example "say: turn off the flashlight".
         """.trimIndent()
     }
 }
