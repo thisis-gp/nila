@@ -76,6 +76,10 @@ jobs:
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.CREDITCLAIM_API_KEY }}
           ANTHROPIC_API_KEY: ""
           ANTHROPIC_MODEL: deepseek/deepseek-v4-pro
+          ANTHROPIC_DEFAULT_OPUS_MODEL: deepseek/deepseek-v4-pro
+          ANTHROPIC_DEFAULT_SONNET_MODEL: deepseek/deepseek-v4-pro
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: deepseek/deepseek-v4-flash
+          CLAUDE_CODE_SUBAGENT_MODEL: deepseek/deepseek-v4-pro
         run: |
           if [ -z "$ANTHROPIC_AUTH_TOKEN" ]; then
             echo "::error::Add a rotated Creditclaim token as the repository Actions secret CREDITCLAIM_API_KEY."
@@ -85,7 +89,7 @@ jobs:
           claude --bare \
             --tools "Read,Glob,Grep" \
             --allowedTools "Read,Glob,Grep" \
-            --model "$ANTHROPIC_MODEL" \
+            --model sonnet \
             --max-turns 8 \
             --output-format json \
             --json-schema "$(cat .nila-review-schema.json)" \
@@ -149,9 +153,38 @@ jobs:
               throw new Error('PR head changed or PR closed; refusing to publish a stale review.');
             }
             const marker = '<!-- nila-codex-review -->';
-            const body = review.findings.length
-              ? `${marker}\n## NILA review — findings\n\n${review.findings.map(f => `- **${f.severity}** \`${f.file}:${f.line}\` — ${f.finding} Fix: ${f.fix}`).join('\n')}`
-              : `${marker}\n## NILA review — clean\n\nNo actionable findings. ${review.summary}`;
+            let body;
+            if (review.findings.length) {
+              body = `${marker}\n## NILA review — findings\n\n${review.findings.map(f => `- **${f.severity}** \`${f.file}:${f.line}\` — ${f.finding} Fix: ${f.fix}`).join('\n')}`;
+            } else {
+              const checks = await github.paginate(github.rest.checks.listForRef, { owner, repo, ref: pr.head.sha, per_page: 100 });
+              const relevant = checks.filter(check => !['review', 'publish'].includes(check.name));
+              const androidTest = relevant.find(check => check.name === 'test');
+              const blocked = relevant.filter(check => check.status !== 'completed' || !['success', 'skipped'].includes(check.conclusion));
+              if (!androidTest || androidTest.conclusion !== 'success' || blocked.length) {
+                const state = blocked.length
+                  ? `Checks are not all green yet: ${blocked.map(check => `${check.name} (${check.status}${check.conclusion ? `/${check.conclusion}` : ''})`).join(', ')}.`
+                  : 'The Android test check has not passed yet.';
+                body = `${marker}\n## NILA review — clean, not merged\n\nNo actionable findings. ${state} Request review again after checks finish.`;
+              } else {
+                try {
+                  await github.rest.pulls.createReview({
+                    owner, repo, pull_number: issue_number, commit_id: pr.head.sha,
+                    event: 'APPROVE', body: 'NILA review found no actionable issues; Android tests and other checks passed.'
+                  });
+                  const { data: current } = await github.rest.pulls.get({ owner, repo, pull_number: issue_number });
+                  if (current.head.sha !== pr.head.sha || current.state !== 'open') {
+                    throw new Error('PR head changed or PR closed after approval; refusing to merge a stale review.');
+                  }
+                  const { data: merged } = await github.rest.pulls.merge({
+                    owner, repo, pull_number: issue_number, sha: pr.head.sha, merge_method: 'squash'
+                  });
+                  body = `${marker}\n## NILA review — clean and merged\n\nNo actionable findings. Android tests and other checks passed. Squash merge: \`${merged.sha}\`.`;
+                } catch {
+                  body = `${marker}\n## NILA review — clean, not merged\n\nNo actionable findings and checks passed, but GitHub refused automatic approval or squash merge. Confirm Actions is allowed to approve pull requests and that branch protection permits this merge.`;
+                }
+              }
+            }
             const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
             const prior = comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
             if (prior) {
