@@ -116,7 +116,7 @@ Lakshmi is the voice identity. Android's on-device SpeechRecognizer provides inp
 - Prepare: automatic drafts, plans, carts, skill creation and generated UI.
 - Commit: explicit confirmation before pay, order, book, send, publish, delete or share.
 
-Biometrics confirm the user, but the confirmation screen supplies informed consent. It must show provider, account, destination, data shared and final price before a consequential tool runs.
+The confirmation screen supplies informed consent: it must show provider, account, destination, data shared and final price before a consequential tool runs, and the action runs only when the user taps Confirm. There is no fingerprint step; the iQOO 15 loan devices have fingerprint locked for the hackathon.
 
 ## Evolution
 
