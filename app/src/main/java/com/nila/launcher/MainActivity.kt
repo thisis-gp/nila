@@ -1481,6 +1481,7 @@ private fun performNow(context: Context, response: NilaResponse): NilaResponse =
         context,
         Intent(android.provider.MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
             .putExtra(android.app.SearchManager.QUERY, response.query)
+            .apply { musicApp(context)?.let(::setPackage) }
             .putExtra(android.provider.MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*"),
         "Playing ${response.query}.",
         "No music app can play that.",
@@ -1514,11 +1515,22 @@ private fun resumeOrStartMusic(context: Context): String {
             context.startActivity(
                 Intent(android.provider.MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
                     .putExtra(android.app.SearchManager.QUERY, last.orEmpty())
+                    .apply { musicApp(context)?.let(::setPackage) }
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
         }
     }, MUSIC_START_CHECK_MS)
     return last?.let { "Playing $it again." } ?: "Starting your music."
+}
+
+/**
+ * A music app that actually starts playback from a search. Without a target, YouTube took the intent and only
+ * opened its home screen. The first installed one wins; null leaves the choice to Android.
+ */
+private val MusicApps = listOf("com.spotify.music", "com.google.android.apps.youtube.music", "com.jio.media.jiobeats", "com.gaana", "com.bsbportal.music")
+
+private fun musicApp(context: Context): String? = MusicApps.firstOrNull { pkg ->
+    runCatching { context.packageManager.getPackageInfo(pkg, 0) }.isSuccess
 }
 
 private const val MUSIC_PREFS = "nila_music"

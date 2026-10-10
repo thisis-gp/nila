@@ -477,7 +477,10 @@ class NilaBrain(
             schedule <title> <day> at <time> | take a note that <text> | show my notes
             call <name or number> | tell <name> <message>
             take me to <place> | <things> near me | search for <query>
-            order food <dish or meal, like biryani or dinner> | shop groceries <grocery or household item, like bananas or detergent>
+            order food <cooked dish or meal from a restaurant> | shop groceries <item to buy from a store>
+            Cooked dishes and meals are food: biryani, pizza, dosa, a paneer roll, dinner, lunch.
+            Things you cook with or keep at home are groceries: milk, eggs, bread, fruit, bananas, vegetables, rice, atta, oil, sugar, snacks, soap, detergent.
+            "buy milk" -> shop groceries milk. "we are out of eggs" -> shop groceries eggs. "buy dinner" -> order food dinner.
             play <song or artist> | pause the music | next song | previous song
             volume up | volume down | mute | vibrate mode | silent mode | ring mode
             open <wifi, bluetooth, battery, display, sound, location> settings | open <app name>
