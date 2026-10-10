@@ -37,12 +37,10 @@ internal data class McpProvider(
     val prefs: String,
     /** Used when the token response has no expires_in. */
     val defaultLifetimeSeconds: Long,
-    /** An app-link redirect when the server accepts one; null means a loopback socket (Swiggy allows only http). */
-    val appRedirect: String? = null,
 )
 
 internal val SWIGGY = McpProvider("Swiggy", "https://mcp.swiggy.com", "/auth/register", "/auth/authorize", "/auth/token", "nila_swiggy", 432_000L)
-internal val ZOMATO = McpProvider("Zomato", "https://mcp-server.zomato.com", "/register", "/authorize", "/token", "nila_zomato", 86_400L, appRedirect = "com.nila.launcher:/oauth")
+internal val ZOMATO = McpProvider("Zomato", "https://mcp-server.zomato.com", "/register", "/authorize", "/token", "nila_zomato", 86_400L)
 
 internal val SwiggyAuth = McpAuth(SWIGGY)
 internal val ZomatoAuth = McpAuth(ZOMATO)
@@ -106,17 +104,20 @@ internal class McpAuth(private val provider: McpProvider) {
      * a 5-minute timeout (user never completed the browser consent step).
      */
     suspend fun login(context: Context): Session? {
-        provider.appRedirect?.let { return loginWithAppLink(context, it) }
         // The loopback port is random per login, so the registered redirect_uri
         // must match this run's exact callback URI — register after opening the
         // socket, not once-and-cache, and always with the real redirectUri.
         val server = runCatching { ServerSocket(0) }.getOrNull() ?: return null
         trace(context, "start port=${server.localPort}")
         // Closed on every exit, cancellation included: a cancelled sign-in left this socket queueing redirects.
+        // A foreground service while the tab is open: Android's cached-app freezer froze NILA behind the
+        // browser, so Zomato's redirect queued on a socket whose thread could not run.
+        SignInKeepAlive.start(context, provider.name)
         try {
             return loginWith(context, server)
         } finally {
             runCatching { server.close() }
+            SignInKeepAlive.stop(context)
         }
     }
 
@@ -174,40 +175,6 @@ internal class McpAuth(private val provider: McpProvider) {
             .putString("access_token", accessToken)
             .putLong("expires_at", expiresAt)
             .apply()
-        return Session(accessToken, expiresAt)
-    }
-
-    /** Same flow, but the browser hands the code back as an intent, which reaches NILA even while frozen. */
-    private suspend fun loginWithAppLink(context: Context, redirectUri: String): Session? {
-        val clientId = withContext(Dispatchers.IO) { registerClient(redirectUri) }
-        trace(context, "registered=${clientId != null} via app link")
-        clientId ?: return null
-        val verifier = randomUrlSafe(64)
-        val state = randomUrlSafe(16)
-        val redirect = PendingRedirects.expect(state)
-        val authorizeUri = Uri.parse(provider.base + provider.authorizePath).buildUpon()
-            .appendQueryParameter("response_type", "code")
-            .appendQueryParameter("client_id", clientId)
-            .appendQueryParameter("redirect_uri", redirectUri)
-            .appendQueryParameter("code_challenge", base64UrlSha256(verifier))
-            .appendQueryParameter("code_challenge_method", "S256")
-            .appendQueryParameter("state", state)
-            .appendQueryParameter("scope", "mcp:tools")
-            .build()
-        CustomTabsIntent.Builder().build().launchUrl(context, authorizeUri)
-        trace(context, "tab opened")
-        val code = try {
-            withTimeoutOrNull(LOGIN_WAIT_MS) { redirect.await() }
-        } finally {
-            PendingRedirects.forget(state)
-        }
-        trace(context, "callback code=${code != null}")
-        code ?: return null
-        val tokenJson = withContext(Dispatchers.IO) { exchangeCode(clientId, code, verifier, redirectUri) }
-        trace(context, "token=${tokenJson?.has("access_token")}")
-        val accessToken = tokenJson?.optString("access_token")?.ifBlank { null } ?: return null
-        val expiresAt = System.currentTimeMillis() + tokenJson.optLong("expires_in", provider.defaultLifetimeSeconds) * 1000
-        prefs(context).edit().putString("access_token", accessToken).putLong("expires_at", expiresAt).apply()
         return Session(accessToken, expiresAt)
     }
 

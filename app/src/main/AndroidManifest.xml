@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- Voice input. Requested only when the user taps the mic. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
@@ -44,20 +45,11 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
-            <!-- OAuth app-link redirect (Zomato): delivered as an intent even while NILA is frozen in the background. -->
-        <activity
-            android:name=".OAuthRedirectActivity"
-            android:exported="true"
-            android:excludeFromRecents="true"
-            android:noHistory="true"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="com.nila.launcher" android:path="/oauth" />
-            </intent-filter>
-        </activity>
+            <!-- Keeps NILA running while a sign-in tab is open: the cached-app freezer otherwise froze the loopback. -->
+        <service
+            android:name=".SignInKeepAlive"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
     </application>
 </manifest>
 
