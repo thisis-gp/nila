@@ -132,13 +132,26 @@ fun numbersSaid(command: String, said: String): Boolean {
     return numbers(command).all { it in heard }
 }
 
+private val confirmation = Regex("""^\s*(yes|yeah|yep|ya|ok|okay|sure|confirm|go ahead|do it|please do|haan|ha|ji)\b""")
+private val reference = Regex("""\b(it|that|this|same|again)\b""")
+private val numberWord = Regex(
+    """\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|""" +
+        """seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|hundred|thousand|half|quarter|noon|midnight)\b""",
+)
+
 /**
- * What a rewrite's numbers may come from. A message with numbers of its own grounds them alone: an old "7"
- * must not approve a rewrite of "5 minutes" to 7. Only a reply with no numbers ("yes", "make it pm") may
- * borrow them, and only from the last exchange, the one it answers.
+ * What a rewrite's numbers may come from: only the current message. A short follow-up that says no number
+ * itself, a confirmation ("yes") or a reference ("make it pm"), may borrow from the last exchange it answers.
+ * "set an alarm at six" is a fresh request, so an earlier 7 cannot approve a rewrite to 7.
+ * ponytail: English number words only; a Hindi or Malayalam number word in a follow-up is not seen.
  */
-fun groundingText(input: String, lastTurn: Pair<String, String>?): String =
-    if (Regex("""\d""").containsMatchIn(input) || lastTurn == null) input else "$input ${lastTurn.first} ${lastTurn.second}"
+fun groundingText(input: String, lastTurn: Pair<String, String>?): String {
+    val lower = input.lowercase()
+    val followUp = lastTurn != null && !Regex("""\d""").containsMatchIn(lower) && !numberWord.containsMatchIn(lower) &&
+        lower.split(Regex("""\s+""")).count { it.isNotBlank() } <= 6 &&
+        (confirmation.containsMatchIn(lower) || reference.containsMatchIn(lower))
+    return if (followUp) "$input ${lastTurn!!.first} ${lastTurn.second}" else input
+}
 
 /** Asks Gemma for a transcript only, in the language's own script, never an answer to the request. */
 fun transcriptionPrompt(languageName: String?) = if (languageName == null) {
