@@ -19,6 +19,21 @@ data class InstamartItem(
     val skuId: String?,
 )
 
+/** The live Instamart cart from get_cart: Swiggy's own bill, never a total NILA adds up itself. */
+data class InstamartCart(
+    val lines: List<Pair<InstamartItem, Int>>,
+    val bill: List<Pair<String, String>>,
+    val toPay: String?,
+    val addressId: String?,
+    val addressLabel: String?,
+    /** Swiggy's warning (address not serviceable, under the minimum order, cart expired), shown as is. */
+    val warning: String?,
+    val paymentMethods: List<String>,
+) {
+    /** Cash on delivery when Swiggy offers it: online payment would hand off to a UPI app, which this card does not do. */
+    val cashMethod: String? get() = paymentMethods.firstOrNull { Regex("""(?i)\b(cash|cod)\b""").containsMatchIn(it) }
+}
+
 /**
  * Swiggy Instamart through Swiggy's own MCP server (`/im`), signed in with the same Swiggy session as food.
  * Delivers to the address the user last chose in NILA, so groceries and food go to the same place.
@@ -75,6 +90,60 @@ internal class InstamartShop(private val context: Context) {
         }
         val summary = items.minOfOrNull { it.pricePaise }?.let { "from ${rupeesText(it)}" } ?: "no results"
         return ProductProviderGroup("Swiggy Instamart", summary, products, if (products.isEmpty()) "No Instamart results for \"$query\"." else null)
+    }
+
+    /** Reads the real cart, and syncs the steppers' copy with it, so a change made in the Swiggy app is not undone. */
+    suspend fun cart(): InstamartCart? {
+        if (!connected) return null
+        val result = call("get_cart") ?: return null
+        val data = allObjects(result).firstOrNull { it.has("billBreakdown") || it.has("cartTotalAmount") || it.has("cartAbsent") }
+            ?: return InstamartCart(emptyList(), emptyList(), null, null, null, null, emptyList())
+        val items = data.optJSONArray("items")
+        val lines = (0 until (items?.length() ?: 0)).mapNotNull { i ->
+            val o = items!!.optJSONObject(i) ?: return@mapNotNull null
+            val price = o.optDouble("discountedFinalPrice", o.optDouble("mrp", 0.0))
+            InstamartItem(
+                name = o.optString("itemName", "Item"),
+                pack = o.optString("itemVariant"),
+                pricePaise = (price * PAISE_PER_RUPEE).toLong(),
+                mrpPaise = (o.optDouble("mrp", price) * PAISE_PER_RUPEE).toLong(),
+                imageUrl = instamartImage(o),
+                spinId = o.optString("spinId").ifBlank { return@mapNotNull null },
+                skuId = o.optString("skuId").ifBlank { null },
+            ) to o.optInt("quantity", 1)
+        }
+        cart.clear()
+        lines.forEach { (item, quantity) -> cart[item.spinId] = item to quantity }
+        val breakdown = data.optJSONObject("billBreakdown")
+        val billItems = breakdown?.optJSONArray("lineItems")
+        val address = data.optJSONObject("selectedAddressDetails")
+        val methods = data.optJSONArray("availablePaymentMethods")
+        return InstamartCart(
+            lines = lines,
+            bill = (0 until (billItems?.length() ?: 0)).mapNotNull { i ->
+                billItems!!.optJSONObject(i)?.let { line -> line.optString("label") to line.optString("value") }
+            },
+            toPay = breakdown?.optJSONObject("toPay")?.pick("value") ?: data.pick("cartTotalAmount"),
+            addressId = address?.pick("id") ?: addressId(),
+            addressLabel = address?.let { it.pick("annotation", "name") ?: it.pick("address") } ?: data.pick("selectedAddress"),
+            warning = data.pick("addressWarning") ?: data.optJSONObject("cartWarning")?.pick("message") ?: data.pick("cartAbsentReason"),
+            paymentMethods = (0 until (methods?.length() ?: 0)).map { methods!!.optString(it) },
+        )
+    }
+
+    suspend fun setLine(item: InstamartItem, quantity: Int): Boolean = setQuantity(item, quantity)
+
+    /** Places a real Instamart order. Only call after the user confirmed the cart, address and payment method. */
+    suspend fun checkout(addressId: String, paymentMethod: String): String {
+        val result = call("checkout", JSONObject().put("addressId", addressId).put("paymentMethod", paymentMethod))
+            ?: error(client?.lastError ?: "Instamart did not answer")
+        val order = allObjects(result).firstOrNull { it.has("orderId") || it.has("orders") } ?: result
+        return listOfNotNull(
+            order.pick("orderId")?.let { "Order $it" },
+            order.pick("status"),
+            order.pick("paymentMethod")?.let { "Pay by $it" },
+            order.pick("orderCount")?.let { "$it orders" },
+        ).joinToString(" · ").ifBlank { "Instamart accepted the order." }
     }
 
     /** Instamart's update_cart replaces the whole cart, so the full list is sent each time; 0 removes the item. */
