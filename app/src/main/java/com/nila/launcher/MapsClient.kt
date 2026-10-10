@@ -25,11 +25,21 @@ internal object MapsClient {
     data class Place(val name: String, val address: String, val lat: Double, val lon: Double)
     data class Route(val summary: String, val distanceKm: Double, val durationMin: Double)
 
-    /** Returns null on failure — caller falls back to the Maps redirect only. */
-    fun searchPlace(query: String): Place? = runCatching {
+    /** How far around [near] a place search looks first, in degrees (about 55 km). */
+    private const val NEARBY_DEGREES = 0.5
+
+    /**
+     * Returns null on failure — caller falls back to the Maps redirect only. With [near], places within about
+     * 55 km are searched first, so "the airport" means the local one; the open search is the fallback.
+     */
+    fun searchPlace(query: String, near: Place? = null): Place? =
+        near?.let { search(query, "&viewbox=${it.lon - NEARBY_DEGREES},${it.lat + NEARBY_DEGREES},${it.lon + NEARBY_DEGREES},${it.lat - NEARBY_DEGREES}&bounded=1") }
+            ?: search(query, "")
+
+    private fun search(query: String, area: String): Place? = runCatching {
         val url = "https://nominatim.openstreetmap.org/search" +
             "?q=${java.net.URLEncoder.encode(query, "UTF-8")}" +
-            "&format=json&limit=1"
+            "&format=json&limit=1$area"
         val request = Request.Builder().url(url).header("User-Agent", USER_AGENT).build()
         http.newCall(request).execute().use { resp ->
             if (!resp.isSuccessful) return null

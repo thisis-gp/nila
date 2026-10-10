@@ -136,7 +136,10 @@ if tuned["accuracy"] <= base["accuracy"]:
 del model, trainer
 torch.cuda.empty_cache()
 subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "-q", "tensorflow"], check=False)
-subprocess.run([sys.executable, "-m", "pip", "install", "-q", "ai-edge-torch-nightly", "ai-edge-litert-nightly"], check=True)
+# As in Google's notebook: force-reinstall pulls the torch build the converter expects; Kaggle's torchao
+# was too old (No module named 'torchao.quantization.pt2e').
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--force-reinstall", "ai-edge-torch-nightly"], check=True)
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "torchao", "ai-edge-litert-nightly"], check=True)
 
 CONVERT = r'''
 import os, sys

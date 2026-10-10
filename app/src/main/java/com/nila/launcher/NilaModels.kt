@@ -356,7 +356,8 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             turn the flashlight on or off, add a calendar event, save and show notes, open the camera, call someone through the dialer,
             open YouTube, Netflix, Instagram or BGMI, order food on Swiggy, show the route to a place, or remember one fact.
             Questions are not requests: "is biryani healthy" or "what is Koramangala famous for" get a spoken answer, not a tool.
-            For anything else, such as messages, payments, settings or other apps, say plainly that NILA cannot do that yet and name something it can do.
+            Jokes, facts, advice and small talk are welcome: answer them yourself, briefly and warmly.
+            For actions NILA has no tool for, such as messages, payments, settings or other apps, say plainly that NILA cannot do that yet and name something it can do.
             Never offer to do it, never ask for confirmation, and never say you ordered, paid, booked, sent or shared anything.
         """.trimIndent()
     }

@@ -246,7 +246,7 @@ private fun NilaApp(resumeVersion: Int) {
                     } else {
                         engine.mockFood().let { it.copy(intro = "${it.intro}\nConnect Swiggy in Settings to order for real.") }
                     }
-                    is NilaResponse.Navigate -> NilaIntegrations.liveRouteCard(routed.destination) ?: routed
+                    is NilaResponse.Navigate -> NilaIntegrations.liveRouteCard(context, routed.destination) ?: routed
                     else -> performNow(context, routed)
                 }
             }

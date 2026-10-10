@@ -11,6 +11,8 @@ KAGGLE="python -m kaggle"
 DATASET=gurupriyanda/nila-router-data
 KERNEL=gurupriyanda/nila-functiongemma-router
 POLL_SECONDS=60
+# Outputs go to the D: drive by default; C: is nearly full on the dev PC.
+OUT="${OUT:-D:/nila-kaggle/functiongemma}"
 
 python make_dataset.py
 
@@ -30,11 +32,12 @@ while true; do
   echo "$(date +%T) $status"
   case "$status" in
     *COMPLETE*|*complete*) break ;;
-    *ERROR*|*error*|*CANCEL*|*cancel*) $KAGGLE kernels output "$KERNEL" -p out -o >/dev/null 2>&1 || true; echo "failed; log in out/"; exit 1 ;;
+    *ERROR*|*error*|*CANCEL*|*cancel*) mkdir -p "$OUT"; $KAGGLE kernels logs "$KERNEL" > "$OUT/log.txt" 2>&1 || true; echo "failed; log in $OUT/log.txt"; exit 1 ;;
   esac
   sleep "$POLL_SECONDS"
 done
 
-mkdir -p out
-$KAGGLE kernels output "$KERNEL" -p out -o
-ls -l out
+mkdir -p "$OUT"
+$KAGGLE kernels output "$KERNEL" -p "$OUT" -o --file-pattern '(\.litertlm|eval\.json)$'
+$KAGGLE kernels logs "$KERNEL" > "$OUT/log.txt" 2>&1 || true
+ls -l "$OUT"

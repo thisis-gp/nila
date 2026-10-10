@@ -40,6 +40,12 @@ TOOLS = [
         ["hour"],
     ),
     tool(
+        "remove_alarm",
+        "Turn off, cancel, delete or remove an alarm. Give the time if the user said one; with no time it means their next alarm.",
+        [("hour", "integer", "hour"), ("minute", "integer", "minute"), ("meridiem", "string", "meridiem")],
+        [],
+    ),
+    tool(
         "open_app",
         "Open one of these apps by name: " + ", ".join(APPS),
         [("app", "string", "app")],
@@ -54,7 +60,8 @@ TOOLS = [
     tool(
         "search_food",
         "Order food or find restaurants and dishes to eat, for example biryani, pizza or dinner.",
-        [("query", "string", "Dish or restaurant name only, like biryani")],
+        [("query", "string", "Dish or restaurant name only, like biryani"),
+         ("preference", "string", "Taste or diet words the user said, like light, spicy or veg")],
         ["query"],
     ),
     tool(
@@ -63,6 +70,23 @@ TOOLS = [
         [("destination", "string", "Place name only, like Indiranagar")],
         ["destination"],
     ),
+    tool(
+        "set_timer",
+        'Start a countdown timer, for example "timer for 10 minutes".',
+        [("hours", "integer", "hours"), ("minutes", "integer", "minutes"), ("seconds", "integer", "seconds")],
+        [],
+    ),
+    tool("flashlight", "Turn the phone's flashlight (torch) on or off.", [("on", "boolean", "on")], ["on"]),
+    tool(
+        "create_event",
+        "Add an event, meeting or appointment to the calendar. Give the title, the day (today, tomorrow or a weekday) and the time if said.",
+        [("title", "string", "title"), ("day", "string", "day"), ("hour", "integer", "hour"),
+         ("minute", "integer", "minute"), ("meridiem", "string", "meridiem")],
+        ["title"],
+    ),
+    tool("add_note", 'Save a note the user dictates, for example "take a note that the gate code is 4521".', [("text", "string", "text")], ["text"]),
+    tool("open_camera", "Open the camera to take a photo or record a video.", [("video", "boolean", "video")], []),
+    tool("call_contact", "Call a person by name or a phone number. NILA opens the dialer; the user presses call.", [("who", "string", "who")], ["who"]),
     tool(
         "chat",
         "Talk with the user: greetings, questions about NILA or anything else, small talk, opinions, "
@@ -154,6 +178,16 @@ CHAT = [
 ]
 
 
+NAMES = ["Deva", "Habis", "Amma", "Appa", "Priya", "Rahul", "the office", "Nidula", "Arjun", "Meera"]
+EVENTS = [("team meeting", "tomorrow", 4, "pm"), ("dentist", "friday", 11, "am"), ("lunch with Priya", "today", 1, "pm"),
+          ("demo review", "monday", 10, "am"), ("gym", "tomorrow", 6, "am"), ("call with Habis", "today", 5, "pm"),
+          ("hackathon finale", "saturday", 9, "am"), ("movie", "sunday", 7, "pm")]
+NOTES = ["the gate code is 4521", "buy milk and eggs", "the car is on level B2", "send the deck to Deva",
+         "pay the electricity bill", "the wifi password is on the fridge", "call the plumber on Monday"]
+TASTES = [("light", "dinner"), ("spicy", "biryani"), ("veg", "pizza"), ("healthy", "lunch"), ("cheesy", "pasta")]
+PARTY = ["for 2", "for three", "for 4 people", "under 500", "under ₹800", "for two under 600"]
+
+
 def alarm_text(hour, minute, meridiem):
     text = f"{hour}" if minute == 0 else f"{hour}:{minute:02d}"
     return f"{text} {meridiem}" if meridiem else text
@@ -186,6 +220,38 @@ def rows(rng):
     for x in FACTS:
         for t in FACT_TEMPLATES:
             out.append((t.format(x=x), call("remember_fact", {"fact": x})))
+    for hour, minute, meridiem in rng.sample(ALARMS, 30):
+        args = {"hour": hour, "minute": minute}
+        if meridiem:
+            args["meridiem"] = meridiem
+        t = rng.choice(["turn off my {t} alarm", "cancel the {t} alarm", "delete alarm {t}", "remove my alarm at {t}"])
+        out.append((t.format(t=alarm_text(hour, minute, meridiem)), call("remove_alarm", args)))
+    for t in ["turn off my alarm", "cancel my next alarm", "stop my alarm", "delete the alarm"]:
+        out.append((t, call("remove_alarm", {})))
+    for amount, unit in [(5, "minutes"), (10, "minutes"), (25, "minutes"), (1, "hours"), (2, "hours"), (30, "seconds"), (90, "seconds"), (45, "minutes")]:
+        for t in rng.sample(["set a timer for {n} {u}", "timer {n} {u}", "start a {n} {u} timer", "{n} {u} timer please", "count down {n} {u}"], 3):
+            out.append((t.format(n=amount, u=unit), call("set_timer", {unit: amount})))
+    for on, phrases in [(True, ["turn on the flashlight", "torch on", "switch on the torch", "flashlight please", "it's dark, turn on the light"]),
+                        (False, ["turn off the flashlight", "torch off", "switch off the torch", "flashlight off"])]:
+        for t in phrases:
+            out.append((t, call("flashlight", {"on": on})))
+    for title, day, hour, meridiem in EVENTS:
+        for t in rng.sample(["add {x} {d} at {h} {m}", "schedule {x} {d} at {h}{m}", "put {x} on my calendar for {d} {h} {m}", "remind me of {x} {d} at {h} {m} in the calendar"], 2):
+            out.append((t.format(x=title, d=day, h=hour, m=meridiem),
+                        call("create_event", {"title": title, "day": day, "hour": hour, "minute": 0, "meridiem": meridiem})))
+    for x in NOTES:
+        for t in rng.sample(["take a note that {x}", "note: {x}", "write down {x}", "add a note {x}", "save a note saying {x}"], 3):
+            out.append((t.format(x=x), call("add_note", {"text": x})))
+    for video, phrases in [(False, ["open the camera", "take a photo", "click a selfie", "camera kholo", "I want to take a picture"]),
+                           (True, ["record a video", "start a video", "open the video camera"])]:
+        for t in phrases:
+            out.append((t, call("open_camera", {"video": video} if video else {})))
+    for who in NAMES:
+        for t in rng.sample(["call {x}", "phone {x}", "dial {x}", "give {x} a call", "{x} ko call karo"], 2):
+            out.append((t.format(x=who), call("call_contact", {"who": who})))
+    for taste, dish in TASTES:
+        for extra in rng.sample(PARTY, 3):
+            out.append((f"find a {taste} {dish} {extra}", call("search_food", {"query": dish, "preference": taste})))
     for text in CHAT:
         for variant in {text, text.capitalize(), text + "?" if not text.endswith("?") else text}:
             out.append((variant, call("chat", {"message": variant})))
