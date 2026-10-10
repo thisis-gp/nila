@@ -113,9 +113,10 @@ fun asksBattery(text: String) = Regex("""\bbattery\b""").containsMatchIn(text.lo
 /** The keyword route for these actions, in priority order; null when none matches. */
 fun moreActionCall(input: String): ToolCall? {
     if (Regex("""\b(show|read|list|open|what are|what's in)\b.*\bnotes?\b""").containsMatchIn(input.lowercase())) return ToolCall("show_notes", emptyMap())
-    // The rewrite phrasebook's shopping commands: Gemma restates "we're out of milk" as "buy milk".
-    Regex("""^\s*buy\s+(.+)$""", RegexOption.IGNORE_CASE).after(input, 1)?.let { return ToolCall("search_groceries", mapOf("query" to it)) }
-    Regex("""^\s*order\s+(.+)$""", RegexOption.IGNORE_CASE).after(input, 1)?.let { return ToolCall("search_food", mapOf("query" to it)) }
+    // Only the rewrite's canonical commands: Gemma decides food vs groceries ("buy dinner" -> "order food dinner",
+    // "order bananas" -> "shop groceries bananas"); the verb a person uses doesn't tell which.
+    Regex("""^\s*order food\s+(.+)$""", RegexOption.IGNORE_CASE).after(input, 1)?.let { return ToolCall("search_food", mapOf("query" to it)) }
+    Regex("""^\s*shop groceries\s+(.+)$""", RegexOption.IGNORE_CASE).after(input, 1)?.let { return ToolCall("search_groceries", mapOf("query" to it)) }
     settingsPage(input)?.let { return ToolCall("open_settings", mapOf("page" to it)) }
     if (wantsAlarmList(input)) return ToolCall("show_alarms", emptyMap())
     if (asksBattery(input)) return ToolCall("battery", emptyMap())

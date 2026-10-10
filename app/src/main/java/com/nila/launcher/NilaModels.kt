@@ -477,7 +477,7 @@ class NilaBrain(
             schedule <title> <day> at <time> | take a note that <text> | show my notes
             call <name or number> | tell <name> <message>
             take me to <place> | <things> near me | search for <query>
-            order <dish> | buy <grocery or household item>
+            order food <dish or meal, like biryani or dinner> | shop groceries <grocery or household item, like bananas or detergent>
             play <song or artist> | pause the music | next song | previous song
             volume up | volume down | mute | vibrate mode | silent mode | ring mode
             open <wifi, bluetooth, battery, display, sound, location> settings | open <app name>
