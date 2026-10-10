@@ -49,6 +49,8 @@ class ZeptoAuth(context: Context) {
     val accessToken: String? get() = prefs.getString("access_token", null)
     val isConnected: Boolean get() = accessToken != null
 
+    fun signOut() = prefs.edit().clear().apply()
+
     /**
      * Blocking: registers a fresh client, opens the browser for the user's own Zepto login,
      * waits on a local loopback socket for the redirect, then exchanges the code for a token.

@@ -339,6 +339,8 @@ private fun NilaApp(resumeVersion: Int) {
     // asks). The resolved client+store is then reused for every later "buy" in this session.
     var activeZeptoSession by remember { mutableStateOf<ActiveZeptoSession?>(null) }
     val tavilyAuth = remember { TavilyAuth(context) }
+    // Bumped when Settings connects or disconnects an account, so its cards re-read who is signed in.
+    var accountsRevision by remember { mutableIntStateOf(0) }
 
     /**
      * Groceries: Zepto and Swiggy Instamart side by side. Reached when the router picks search_groceries;
@@ -399,27 +401,20 @@ private fun NilaApp(resumeVersion: Int) {
     fun submit(prompt: String = input) {
         if (prompt.isBlank() || isThinking) return
         if (prompt.trim().startsWith("tvly-")) {
-            // Never render the raw key: it would sit in the chat scrollback (and any screenshot) for
-            // the rest of the session. Only the redacted turn and a generic status reach the UI.
-            tavilyAuth.apiKey = prompt.trim()
-            turns += Turn("Web search key", NilaResponse.Text("Web search connected. Try \"search for <something>\"."))
+            // A key pasted into the chat is never shown or kept: keys belong in Settings, behind a hidden field.
+            turns += Turn("Web search key", NilaResponse.Text("Keys are not kept in the chat. Add it in Settings → Accounts → Web search."))
             input = ""
             return
         }
         if (prompt.lowercase().contains("connect web search")) {
-            turns += Turn(
-                prompt,
-                NilaResponse.Text(
-                    "Get a free key at tavily.com (sign up, no card needed), copy the key starting with \"tvly-\", and paste it here as your next message.",
-                ),
-            )
             input = ""
+            open(NilaScreen.Settings)
             return
         }
         extractWebSearchQuery(prompt)?.let { query ->
             input = ""
             if (!tavilyAuth.isConnected) {
-                turns += Turn(prompt, NilaResponse.Text("Web search isn't connected yet. Say \"connect web search\" to set it up."))
+                turns += Turn(prompt, NilaResponse.Text("Web search isn't connected yet. Add your key in Settings → Accounts → Web search."))
                 return
             }
             turns += Turn(prompt, NilaResponse.Text("Searching the web for \"$query\"..."))
@@ -768,10 +763,10 @@ private fun NilaApp(resumeVersion: Int) {
                                     memory.edit().remove("fact").apply()
                                     rememberedFact = null
                                 },
-                                accounts = listOf(
+                                accounts = accountsRevision.let { listOf(
                                     ServiceAccount(
                                         name = "Swiggy",
-                                        detail = "Orders food · OAuth with PKCE · sign in again after 5 days",
+                                        detail = "Orders food for you. Sign in again every 5 days.",
                                         connected = swiggySession != null,
                                         onConnect = {
                                             SignIns.start(SwiggyAuth, context) {
@@ -782,7 +777,7 @@ private fun NilaApp(resumeVersion: Int) {
                                     ),
                                     ServiceAccount(
                                         name = "Zomato",
-                                        detail = "Compares your Swiggy cart with the same order on Zomato",
+                                        detail = "Compares your Swiggy cart with the same order on Zomato.",
                                         connected = zomatoSession != null,
                                         onConnect = {
                                             SignIns.start(ZomatoAuth, context) {
@@ -791,7 +786,33 @@ private fun NilaApp(resumeVersion: Int) {
                                         },
                                         onDisconnect = { SignIns.signOut(ZomatoAuth, context) },
                                     ),
-                                ),
+                                    ServiceAccount(
+                                        name = "Zepto",
+                                        detail = "Groceries in minutes, next to Swiggy Instamart.",
+                                        connected = zeptoAuth.isConnected,
+                                        onConnect = {
+                                            scope.launch(Dispatchers.IO) {
+                                                val result = zeptoAuth.connect(context)
+                                                withContext(Dispatchers.Main) {
+                                                    if (result.isFailure) Toast.makeText(context.applicationContext, "Zepto sign-in didn't complete.", Toast.LENGTH_SHORT).show()
+                                                    accountsRevision++
+                                                }
+                                            }
+                                        },
+                                        onDisconnect = { zeptoAuth.signOut(); accountsRevision++ },
+                                    ),
+                                    ServiceAccount(
+                                        name = "Web search",
+                                        detail = "Answers from the web through Tavily. Free key at tavily.com, no card needed.",
+                                        connected = tavilyAuth.isConnected,
+                                        onConnect = {},
+                                        onDisconnect = { tavilyAuth.disconnect(); accountsRevision++ },
+                                        keyUrl = "https://app.tavily.com",
+                                        saveKey = { pasted ->
+                                            tavilyKey(pasted)?.let { tavilyAuth.apiKey = it; accountsRevision++ } != null
+                                        },
+                                    ),
+                                ) },
                             )
                         }
                     }
