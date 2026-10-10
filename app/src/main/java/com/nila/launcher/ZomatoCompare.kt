@@ -2,9 +2,12 @@ package com.nila.launcher
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 
 /** What the payment card says about Zomato: a priced quote, or why there is none. */
 sealed interface ZomatoComparison
@@ -31,12 +34,22 @@ data class ZomatoQuote(
 /** Why there is no comparison, said plainly on the card instead of guessing a match. */
 data class ZomatoGap(val reason: String) : ZomatoComparison
 
+/** One dish on a Zomato menu, its price in rupees. */
+data class ZomatoDish(val name: String, val price: Int)
+
+/** The same shop on Zomato: its dishes for what the user asked, cheapest first, or why there are none ([gap]). */
+data class ZomatoShop(val name: String, val dishes: List<ZomatoDish>, val gap: String? = null)
+
 /**
  * Prices the user's Swiggy cart on Zomato through Zomato's MCP server. Every step is read-only except
  * [total], which creates a Zomato cart (never checks out) and runs only from the user's tap.
  */
 internal class ZomatoCompare(private val context: Context) {
     private var client: McpClient? = null
+    // Per address and per shop, so scrolling back to a card never asks Zomato again.
+    private val addressIds = ConcurrentHashMap<String, String>()
+    private val shops = ConcurrentHashMap<String, ZomatoShop>()
+    private val addressLock = Mutex()
 
     val connected: Boolean get() = ZomatoAuth.currentSession(context) != null
 
@@ -88,6 +101,47 @@ internal class ZomatoCompare(private val context: Context) {
         )
     }
 
+    private suspend fun addressIdFor(address: FoodAddress): String? = addressLock.withLock {
+        addressIds[address.id]?.let { return it }
+        val saved = call("get_saved_addresses_for_user")?.optJSONArray("addresses") ?: return null
+        closestAddress(address, saved)?.pick("address_id")?.also { addressIds[address.id] = it }
+    }
+
+    /**
+     * The shop the user is looking at on Swiggy, found on Zomato, with every dish on its menu that matches
+     * [query] ("biryani" finds Chicken, Mutton and Egg Biryani) and its Zomato price. Read-only.
+     */
+    suspend fun shop(address: FoodAddress, restaurantName: String, query: String): ZomatoShop {
+        val key = "${address.id}|$restaurantName|$query"
+        shops[key]?.let { return it }
+        fun gap(reason: String) = ZomatoShop(restaurantName, emptyList(), reason)
+        val addressId = addressIdFor(address) ?: return gap("No Zomato address near ${address.label}")
+        val found = call("get_restaurants_for_keyword", JSONObject().put("address_id", addressId).put("keyword", restaurantName).put("page_size", SEARCH_SIZE))
+            ?.let { allObjects(it) }.orEmpty()
+            .firstOrNull { it.has("res_id") && sameRestaurant(restaurantName, it.pick("name").orEmpty()) }
+            ?: return gap("Not on Zomato near ${address.label}")
+        val resId = found.pick("res_id")?.toLongOrNull() ?: return gap("Not on Zomato near ${address.label}")
+        val listing = call("get_menu_items_listing", JSONObject().put("res_id", resId).put("address_id", addressId))
+            ?.let { allObjects(it) }.orEmpty().filter { it.has("item_name") && it.has("variant_id") }
+            .filter { mentionsDish(it.pick("item_name").orEmpty(), query) }
+        val categories = listing.mapNotNull { it.optJSONArray("categories")?.optString(0) }.distinct()
+        if (categories.isEmpty()) return gap("No $query on its Zomato menu")
+        val wanted = listing.mapNotNull { it.pick("variant_id") }.toSet()
+        val dishes = call(
+            "get_restaurant_menu_by_categories",
+            JSONObject().put("res_id", resId).put("address_id", addressId).put("categories", JSONArray(categories)),
+        )?.let { allObjects(it) }.orEmpty()
+            .filter { it.pick("variant_id") in wanted }
+            .mapNotNull { item ->
+                val price = item.pick("discounted_price", "price")?.toDoubleOrNull()?.toInt() ?: return@mapNotNull null
+                ZomatoDish(item.pick("name", "item_name").orEmpty(), price)
+            }
+            .distinctBy { it.name.lowercase() }
+            .sortedBy { it.price }
+        if (dishes.isEmpty()) return gap("Zomato didn't price its $query")
+        return ZomatoShop(found.pick("name").orEmpty().ifBlank { restaurantName }, dishes).also { shops[key] = it }
+    }
+
     /** Creates a Zomato cart for the same items to read its real total. Never checks out. */
     suspend fun total(quote: ZomatoQuote, paymentMethod: String): ZomatoQuote? {
         val items = JSONArray()
@@ -132,3 +186,29 @@ internal fun sameDish(swiggyLine: String, zomato: String): Boolean {
 
 private const val AREA_MIN = 3
 private val GENERIC_PLACES = setOf("india", "karnataka", "kerala", "bengaluru", "bangalore", "thiruvananthapuram", "ernakulam")
+
+/**
+ * A dish word reduced to its consonants (no vowels, y or h), so "biriyani", "biryani" and "briyani" agree,
+ * as do "mutton" and "muttan". Only words of four letters or more count.
+ */
+private fun dishSkeleton(word: String) = word.lowercase().filter { it.isLetter() && it !in "aeiouyh" }.replace(Regex("""(.)\1+"""), "$1")
+
+private val notDishWords = setOf("order", "want", "need", "some", "from", "with", "please", "near", "best", "cheap", "food")
+
+/** True when [name] is one of the dishes [query] asks for: "Hyderabadi Chicken Biryani" for "biriyani". */
+internal fun mentionsDish(name: String, query: String): Boolean {
+    val wanted = query.lowercase().split(Regex("""[^\p{L}]+""")).filter { it.length >= 4 && it !in notDishWords }.map(::dishSkeleton)
+    if (wanted.isEmpty()) return false
+    val words = name.lowercase().split(Regex("""[^\p{L}]+""")).filter { it.length >= 4 }.map(::dishSkeleton)
+    return wanted.any { w -> words.any { it == w } }
+}
+
+/** "₹20 cheaper on Zomato", "₹15 cheaper on Swiggy" or "Same price on Zomato". */
+internal fun priceGap(swiggy: Int, zomato: Int): String = when {
+    zomato < swiggy -> "₹${swiggy - zomato} cheaper on Zomato"
+    zomato > swiggy -> "₹${zomato - swiggy} cheaper on Swiggy"
+    else -> "Same price on Zomato"
+}
+
+/** The Zomato dish that is this Swiggy dish at the same shop, if Zomato lists it. */
+internal fun ZomatoShop.sameAs(swiggyName: String): ZomatoDish? = dishes.firstOrNull { sameDish(swiggyName, it.name) }

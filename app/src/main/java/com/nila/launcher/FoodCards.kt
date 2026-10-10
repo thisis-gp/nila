@@ -54,6 +54,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
+import androidx.compose.runtime.mutableStateMapOf
 
 /** What the food cards can ask NILA to do next. Implemented in MainActivity. */
 internal interface FoodActions {
@@ -61,6 +65,8 @@ internal interface FoodActions {
     fun zomatoTotal(payment: FoodCard.Payment, method: String)
     fun applyCoupon(payment: FoodCard.Payment, coupon: FoodCoupon)
     fun back(card: FoodCard)
+    /** The same shop on Zomato with its prices for this request; null when Zomato isn't connected. */
+    suspend fun zomatoShop(address: FoodAddress, restaurant: FoodRestaurant): ZomatoShop?
     fun lastResults(): FoodCard.Restaurants?
     fun lastMenu(): FoodCard?
     fun lastCart(): FoodCard.Cart?
@@ -622,8 +628,9 @@ private fun DishesCard(card: FoodCard.Dishes, actions: FoodActions) {
             )
         }
         val shown = if (showAll) card.dishes else card.dishes.take(DISH_PREVIEW)
+        val zomato = rememberZomatoShops(card.address, shown.map { it.restaurant }, actions)
         shown.forEachIndexed { index, dish ->
-            DishRow(dish, badge = pickLabel(card.intent).takeIf { index == 0 && dish.caution == null }) { item -> actions.changeItem(card.address, dish.restaurant, item, +1) }
+            DishRow(dish, badge = pickLabel(card.intent).takeIf { index == 0 && dish.caution == null }, zomato = zomato[dish.restaurant.id]) { item -> actions.changeItem(card.address, dish.restaurant, item, +1) }
         }
         if (!showAll && card.dishes.size > DISH_PREVIEW) {
             Text(
@@ -639,7 +646,7 @@ private fun DishesCard(card: FoodCard.Dishes, actions: FoodActions) {
 }
 
 @Composable
-private fun DishRow(dish: FoodDish, badge: String?, onAdd: (FoodItem) -> Unit) {
+private fun DishRow(dish: FoodDish, badge: String?, zomato: ZomatoLookup?, onAdd: (FoodItem) -> Unit) {
     val best = badge != null
     var size by remember(dish.item.id) { mutableStateOf(dish.item.chosenSize) }
     val item = dish.item.copy(chosenSize = size)
@@ -685,6 +692,7 @@ private fun DishRow(dish: FoodDish, badge: String?, onAdd: (FoodItem) -> Unit) {
                 Text(item.name, color = Paper, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(size?.price ?: item.price, color = Paper, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 if (item.sizes.size > 1) SizeChips(item.sizes, size) { size = it }
+                ZomatoPriceLine(zomato, item.name, size?.price ?: item.price)
                 Text(dish.reason, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -695,6 +703,7 @@ private fun DishRow(dish: FoodDish, badge: String?, onAdd: (FoodItem) -> Unit) {
 
 @Composable
 private fun MenuCard(card: FoodCard.Menu, actions: FoodActions) {
+    val zomato = rememberZomatoShops(card.address, listOf(card.restaurant), actions)[card.restaurant.id]
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         actions.lastResults()?.let { results -> BackLink("Other places") { actions.back(results) } }
         StepHeader(3, card.restaurant.name)
@@ -702,6 +711,7 @@ private fun MenuCard(card: FoodCard.Menu, actions: FoodActions) {
             RatingBadge(card.restaurant.rating)
             Text(card.restaurant.eta, color = Muted, fontSize = 12.sp)
         }
+        ZomatoShopBlock(zomato, card.items.map { it.name })
         Spacer(Modifier.height(6.dp))
         card.items.forEachIndexed { index, listed ->
             var size by remember(listed.id) { mutableStateOf(listed.chosenSize) }
@@ -713,6 +723,7 @@ private fun MenuCard(card: FoodCard.Menu, actions: FoodActions) {
                     Text(item.name, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                     Text(size?.price ?: item.price, color = Paper, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     if (item.sizes.size > 1) SizeChips(item.sizes, size) { size = it }
+                    ZomatoPriceLine(zomato, item.name, size?.price ?: item.price)
                     if (item.description.isNotBlank()) {
                         Text(item.description, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp)
                     }
@@ -1107,3 +1118,87 @@ private fun OrderCard(card: FoodCard.Order, actions: FoodActions) {
         }
     }
 }
+
+
+// ---- The same shop on Zomato ---------------------------------------------------
+
+/** Zomato's answer for one shop while it loads: [shop] is null until it arrives, and stays null without Zomato. */
+internal data class ZomatoLookup(val loading: Boolean, val shop: ZomatoShop?)
+
+/**
+ * Looks up each Swiggy shop on Zomato in parallel, after the Swiggy card is already on screen, so the
+ * comparison never slows down the first answer.
+ */
+@Composable
+private fun rememberZomatoShops(address: FoodAddress, restaurants: List<FoodRestaurant>, actions: FoodActions): Map<String, ZomatoLookup> {
+    val shops = remember(address.id) { mutableStateMapOf<String, ZomatoLookup>() }
+    val wanted = restaurants.distinctBy { it.id }.filter { it.id !in shops }
+    LaunchedEffect(address.id, wanted.map { it.id }) {
+        wanted.forEach { shops[it.id] = ZomatoLookup(loading = true, shop = null) }
+        coroutineScope {
+            wanted.forEach { restaurant ->
+                launch {
+                    val shop = runCatching { actions.zomatoShop(address, restaurant) }
+                        .getOrElse { if (it is CancellationException) throw it else ZomatoShop(restaurant.name, emptyList(), "Zomato didn't answer") }
+                    shops[restaurant.id] = ZomatoLookup(loading = false, shop = shop)
+                }
+            }
+        }
+    }
+    return shops
+}
+
+/** Under a Swiggy dish: its price at the same shop on Zomato and which app is cheaper, or the nearest Zomato dish. */
+@Composable
+private fun ZomatoPriceLine(lookup: ZomatoLookup?, swiggyName: String, swiggyPrice: String) {
+    if (lookup == null || (!lookup.loading && lookup.shop == null)) return
+    val shop = lookup.shop
+    val text = when {
+        lookup.loading -> "Checking Zomato…"
+        shop?.gap != null -> "Zomato: ${shop.gap}"
+        else -> {
+            val same = shop?.sameAs(swiggyName)
+            val swiggy = Regex("""\d+""").find(swiggyPrice)?.value?.toIntOrNull()
+            when {
+                same != null && swiggy != null -> "Zomato ₹${same.price} · ${priceGap(swiggy, same.price)}"
+                same != null -> "Zomato ₹${same.price}"
+                else -> "Not on its Zomato menu · Zomato has ${shop?.dishes?.take(2)?.joinToString { "${it.name} ₹${it.price}" }}"
+            }
+        }
+    }
+    val cheaperOnZomato = text.contains("cheaper on Zomato")
+    Text(
+        text,
+        color = if (cheaperOnZomato) ZomatoRed else Muted,
+        fontSize = 12.sp,
+        fontWeight = if (cheaperOnZomato) FontWeight.SemiBold else FontWeight.Normal,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+/** Above a Swiggy menu: the same shop's dishes on Zomato, so a different biryani or a better price is not missed. */
+@Composable
+private fun ZomatoShopBlock(lookup: ZomatoLookup?, swiggyNames: List<String>) {
+    val shop = lookup?.shop ?: return
+    if (shop.gap != null || shop.dishes.isEmpty()) return
+    val onlyOnZomato = shop.dishes.filter { dish -> swiggyNames.none { sameDish(it, dish.name) } }
+    Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            SectionLabel("Same shop on Zomato · ${shop.dishes.size} dishes", color = ZomatoRed)
+            Text("From ₹${shop.dishes.first().price}. Each dish below shows its Zomato price.", color = Muted, fontSize = 12.sp)
+            if (onlyOnZomato.isNotEmpty()) {
+                Text(
+                    "Only on Zomato: " + onlyOnZomato.take(3).joinToString { "${it.name} ₹${it.price}" },
+                    color = Paper,
+                    fontSize = 12.sp,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** Zomato's red, for its prices beside Swiggy's: a label colour, never the only signal (the text says which is cheaper). */
+private val ZomatoRed = Color(0xFFF0626E)
