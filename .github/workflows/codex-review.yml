@@ -1,4 +1,4 @@
-name: Codex review
+name: NILA PR review
 
 on:
   pull_request:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: codex-review-${{ github.event.issue.number || github.event.pull_request.number }}
+  group: nila-review-${{ github.event.issue.number || github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
@@ -79,42 +79,34 @@ jobs:
           else
             cp .github/codex/prompts/review-output.schema.json .nila-review-schema.json
           fi
-      - name: Configure OpenRouter provider
+      - name: Install Claude Code CLI
+        run: npm install --global @anthropic-ai/claude-code@2.1.296
+      - name: Run read-only Creditclaim review
         env:
-          CODEX_HOME: ${{ runner.temp }}/codex-home
+          ANTHROPIC_BASE_URL: https://creditclaim.reskilll.com/llm
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.CREDITCLAIM_API_KEY }}
+          ANTHROPIC_API_KEY: ""
+          ANTHROPIC_MODEL: deepseek/deepseek-v4-pro
         run: |
-          mkdir -p "$CODEX_HOME"
-          cat > "$CODEX_HOME/config.toml" <<'EOF'
-          model = "openai/gpt-5.4-mini"
-          model_provider = "openrouter"
-          model_reasoning_effort = "low"
-
-          [model_providers.openrouter]
-          name = "OpenRouter"
-          base_url = "https://openrouter.ai/api/v1"
-          wire_api = "responses"
-
-          [model_providers.openrouter.auth]
-          command = "sh"
-          args = ["-c", "printf '%s' \"$OPENROUTER_API_KEY\""]
-          EOF
-      - name: Run read-only Codex review
-        id: codex
-        uses: openai/codex-action@v1
-        with:
-          prompt-file: .nila-review-prompt.md
-          output-file: codex-review.json
-          sandbox: read-only
-          codex-args: '["--output-schema", ".nila-review-schema.json"]'
-          model: openai/gpt-5.4-mini
-          effort: low
-          codex-home: ${{ runner.temp }}/codex-home
-          safety-strategy: drop-sudo
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          if [ -z "$ANTHROPIC_AUTH_TOKEN" ]; then
+            echo "::error::Add a rotated Creditclaim token as the repository Actions secret CREDITCLAIM_API_KEY."
+            exit 1
+          fi
+          git diff --merge-base refs/remotes/review/base HEAD -- > .nila-pr.diff
+          claude --bare \
+            --tools "Read,Glob,Grep" \
+            --allowedTools "Read,Glob,Grep" \
+            --model "$ANTHROPIC_MODEL" \
+            --max-turns 8 \
+            --output-format json \
+            --json-schema "$(cat .nila-review-schema.json)" \
+            -p "$(cat .nila-review-prompt.md)" \
+            > "$RUNNER_TEMP/claude-review.json"
+          jq -ce '.structured_output | select(type == "object")' \
+            "$RUNNER_TEMP/claude-review.json" > codex-review.json
       - uses: actions/upload-artifact@v7
         with:
-          name: codex-review-${{ steps.context.outputs.pr_number }}-${{ steps.context.outputs.head_sha }}
+          name: nila-review-${{ steps.context.outputs.pr_number }}-${{ steps.context.outputs.head_sha }}
           path: codex-review.json
           if-no-files-found: error
           retention-days: 1
@@ -130,7 +122,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: codex-review-${{ needs.review.outputs.pr_number }}-${{ needs.review.outputs.head_sha }}
+          name: nila-review-${{ needs.review.outputs.pr_number }}-${{ needs.review.outputs.head_sha }}
           path: review
       - name: Validate and post review
         id: result
@@ -168,8 +160,8 @@ jobs:
             }
             const marker = '<!-- nila-codex-review -->';
             const body = review.findings.length
-              ? `${marker}\n## Codex review — findings\n\n${review.findings.map(f => `- **${f.severity}** \`${f.file}:${f.line}\` — ${f.finding} Fix: ${f.fix}`).join('\n')}`
-              : `${marker}\n## Codex review — clean\n\nNo actionable findings. ${review.summary}`;
+              ? `${marker}\n## NILA review — findings\n\n${review.findings.map(f => `- **${f.severity}** \`${f.file}:${f.line}\` — ${f.finding} Fix: ${f.fix}`).join('\n')}`
+              : `${marker}\n## NILA review — clean\n\nNo actionable findings. ${review.summary}`;
             const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number, per_page: 100 });
             const prior = comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
             if (prior) {
@@ -225,7 +217,7 @@ jobs:
               pull_number,
               commit_id: head_sha,
               event: 'APPROVE',
-              body: 'Codex review clean; Android CI passed.',
+              body: 'NILA review clean; Android CI passed.',
             });
       - name: Enable GitHub auto-merge for clean review
         if: steps.result.outputs.clean == 'true'
