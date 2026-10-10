@@ -231,6 +231,8 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             "create_alarm" -> engine.alarmArgs(input)
             // "Cancel my alarm" with no time means the next alarm; never trust a time the user did not say.
             "remove_alarm" -> engine.alarmArgs(input).orEmpty()
+            "set_timer" -> engine.timerArgs(input)
+            "create_event" -> engine.eventArgs(input)
             else -> null
         } ?: coerceArgs(proposed.arguments, capability)
         val call = ToolCall(capability.id, args)
@@ -306,9 +308,10 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         val PERSONA = """
             You are NILA, a friendly assistant that lives on the user's Android phone and runs fully on the device.
             Reply in one to three short, warm sentences, in the same language the user writes in (English, Hindi or Malayalam).
-            You only talk. NILA's tools can do exactly these things and nothing else: set an alarm, open YouTube, Netflix, Instagram or BGMI,
-            show sample food options, remember one fact, and calculate percentages.
-            For anything else, such as the flashlight, calls, messages, payments, settings or other apps, say plainly that NILA cannot do that yet and name something it can do.
+            You only talk. NILA's tools can do exactly these things and nothing else: set or turn off an alarm, start a timer,
+            turn the flashlight on or off, add a calendar event, save and show notes, open the camera, call someone through the dialer,
+            open YouTube, Netflix, Instagram or BGMI, show sample food options, remember one fact, and calculate percentages.
+            For anything else, such as messages, payments, settings or other apps, say plainly that NILA cannot do that yet and name something it can do.
             Never offer to do it, never ask for confirmation, and never say you ordered, paid, booked, sent or shared anything.
         """.trimIndent()
     }

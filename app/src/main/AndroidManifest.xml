@@ -3,6 +3,8 @@
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <!-- Voice input. Requested only when the user taps the mic. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Calls: find a contact's number by name. Asked only when the user taps Call on a name. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
 
     <queries>
         <intent>

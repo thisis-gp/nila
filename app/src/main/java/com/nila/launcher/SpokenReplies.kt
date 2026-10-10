@@ -20,6 +20,9 @@ fun spokenText(response: NilaResponse): String? = when (response) {
     is NilaResponse.OpenApp -> "Tap Open to go to ${response.name}."
     is NilaResponse.Choices -> response.intro
     is NilaResponse.NeedsConfirmation -> "Please check the details and confirm. Nothing happens until you do."
+    is Timer -> "Your timer is ready. Tap Start timer."
+    is CalendarEvent -> "${response.title} is ready. Tap Add to calendar to save it."
+    is Call -> "Tap Call to open the dialer for ${response.who}."
     else -> null
 }
 
