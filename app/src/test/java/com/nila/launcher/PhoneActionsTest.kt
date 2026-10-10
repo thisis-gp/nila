@@ -30,6 +30,29 @@ class PhoneActionsTest {
     }
 
     @Test
+    fun timerControlsNeverStartANewTimer() {
+        // "stop timer" used to fall into "start a timer" and ask "How long?".
+        assertEquals(TimerControl("stop"), respond("stop the timer"))
+        assertEquals(TimerControl("pause"), respond("pause timer"))
+        assertEquals(TimerControl("resume"), respond("resume the timer"))
+        assertEquals(TimerControl("status"), respond("how much time is left"))
+        assertEquals(BatteryLevel, respond("how much battery is left"))
+        assertEquals(Timer(300), respond("set a timer for 5 minutes"))
+        assertEquals("9:05", timerText(545_000))
+        assertEquals("1:02:30", timerText(3_750_000))
+    }
+
+    @Test
+    fun alarmRemovalOnlyDismissesAnAlarmAndroidCanSee() {
+        // Seen on the iQOO 15: asking vivo's Clock to dismiss 23:58 when only 06:30 existed removed the 6:30 alarms.
+        assertEquals(DismissPlan.SHOW_LIST, dismissPlan(23, 58, 6, 30))
+        assertEquals(DismissPlan.DISMISS_NEXT, dismissPlan(6, 30, 6, 30))
+        assertEquals(DismissPlan.DISMISS_NEXT, dismissPlan(null, 0, 6, 30))
+        assertEquals(DismissPlan.NOTHING_SET, dismissPlan(null, 0, null, null))
+        assertEquals(DismissPlan.SHOW_LIST, dismissPlan(7, 0, null, null))
+    }
+
+    @Test
     fun flashlight() {
         assertEquals(Torch(true), respond("turn on the flashlight"))
         assertEquals(Torch(false), respond("switch off the torch"))
@@ -39,8 +62,10 @@ class PhoneActionsTest {
     @Test
     fun camera() {
         assertEquals(Camera(false), respond("open the camera"))
-        assertEquals(Camera(false), respond("take a selfie"))
-        assertEquals(Camera(true), respond("record a video"))
+        // A selfie opens the front camera; "record a video" opens the recorder (vivo showed photo mode before).
+        assertEquals(Camera(video = false, front = true), respond("take a selfie"))
+        assertEquals(Camera(video = true, front = false), respond("record a video"))
+        assertEquals(Camera(video = true, front = true), respond("record a video on the front camera"))
     }
 
     @Test
