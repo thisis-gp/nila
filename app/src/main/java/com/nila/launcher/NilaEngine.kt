@@ -74,6 +74,7 @@ sealed interface NilaResponse {
     data class Remember(val fact: String, val kind: MemoryKind = MemoryKind.Other) : NilaResponse
     /** One step of the live Swiggy order flow, rendered by FoodCards.kt. */
     data class Food(val card: FoodCard) : NilaResponse
+    data class Grocery(val card: GroceryCard) : NilaResponse
     /** The router chose search_food. The launcher starts the live Swiggy flow, or shows the labelled mock if Swiggy isn't connected. */
     data class FoodSearch(
         val query: String,
