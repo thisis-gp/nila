@@ -413,6 +413,29 @@ private fun NilaApp(resumeVersion: Int) {
         return
     }
 
+    /**
+     * Web search the router picked (web_search): Tavily when the user added a key, else DuckDuckGo's free
+     * instant answer. Always ends with "open in browser" so a thin answer is never a dead end.
+     */
+    fun searchWeb(query: String) {
+        scope.launch(Dispatchers.IO) {
+            val outcome = runCatching { tavilyAuth.apiKey?.takeIf(String::isNotBlank)?.let { TavilySearch.search(it, query) } ?: InstantAnswer.search(query) }
+            withContext(Dispatchers.Main) {
+                val answer = outcome.getOrNull()
+                answer?.summary?.let { turns += Turn("Web search", NilaResponse.Text(it)) }
+                val browse = AsyncChoice("Open \"$query\" in the browser", "Full results", "", "") {
+                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://duckduckgo.com/?q=" + Uri.encode(query)))) }
+                }
+                val sources = answer?.items.orEmpty().map { result ->
+                    AsyncChoice(result.title, result.snippet.take(140), "", "") {
+                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result.url))) }
+                    }
+                }
+                turns += Turn("Web search", NilaResponse.AsyncChoices(if (sources.isEmpty()) "Nothing quick to show here." else "Sources:", sources + browse))
+            }
+        }
+    }
+
     fun submit(prompt: String = input) {
         if (prompt.isBlank() || isThinking) return
         if (prompt.trim().startsWith("tvly-")) {
@@ -431,36 +454,6 @@ private fun NilaApp(resumeVersion: Int) {
                 ),
             )
             input = ""
-            return
-        }
-        extractWebSearchQuery(prompt)?.let { query ->
-            input = ""
-            if (!tavilyAuth.isConnected) {
-                turns += Turn(prompt, NilaResponse.Text("Web search isn't connected yet. Say \"connect web search\" to set it up."))
-                return
-            }
-            turns += Turn(prompt, NilaResponse.Text("Searching the web for \"$query\"..."))
-            scope.launch(Dispatchers.IO) {
-                val outcome = runCatching { TavilySearch.search(tavilyAuth.apiKey!!, query) }
-                withContext(Dispatchers.Main) {
-                    outcome.fold(
-                        onSuccess = { answer ->
-                            answer.summary?.let { turns += Turn("Web search", NilaResponse.Text(it)) }
-                            if (answer.items.isEmpty()) {
-                                if (answer.summary == null) turns += Turn("Web search", NilaResponse.Text("No results for \"$query\"."))
-                            } else {
-                                val choices = answer.items.map { result ->
-                                    AsyncChoice(result.title, result.snippet.take(140), "", "") {
-                                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result.url))) }
-                                    }
-                                }
-                                turns += Turn("Web search", NilaResponse.AsyncChoices("Sources:", choices))
-                            }
-                        },
-                        onFailure = { turns += Turn("Web search", NilaResponse.Text("Web search error: ${it.message}")) },
-                    )
-                }
-            }
             return
         }
         if (prompt.lowercase().contains("connect zepto")) {
@@ -639,6 +632,10 @@ private fun NilaApp(resumeVersion: Int) {
                         engine.mockFood().let { it.copy(intro = "${it.intro}\nConnect Swiggy in Settings to order for real.") }
                     }
                     is NilaResponse.Navigate -> NilaIntegrations.liveRouteCard(context, routed.destination) ?: routed
+                    is WebSearch -> {
+                        searchWeb(routed.query)
+                        NilaResponse.Text("Searching the web for \"${routed.query}\"…")
+                    }
                     is NilaResponse.GrocerySearch -> {
                         shopGroceries(routed.query)
                         NilaResponse.Text("Comparing Zepto and Swiggy Instamart for \"${routed.query}\"…")
@@ -1450,7 +1447,6 @@ private fun performNow(context: Context, response: NilaResponse): NilaResponse =
     }.fold({ NilaResponse.Text(if (response.video) "Opening the camera for video." else "Opening the camera.") }, { NilaResponse.Text("No camera app is available.") })
     is Note -> NilaResponse.Text(saveNote(context, response.text))
     is MapSearch -> openUri(context, "geo:0,0?q=" + Uri.encode(response.query), "Showing ${response.query} nearby in Maps.", "No maps app is available.")
-    is WebSearch -> start(context, Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, response.query), "Searching the web for ${response.query}.", "No browser is available.")
     is PlayMusic -> if (response.query == null) NilaResponse.Text(pressMediaKey(context, "play")) else start(
         context,
         Intent(android.provider.MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
