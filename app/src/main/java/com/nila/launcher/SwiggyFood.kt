@@ -214,6 +214,8 @@ internal class FoodFlow(private val context: Context) {
             .put("userName", form.name)
             .put("userPhone", form.phone)
             .put("addressTag", form.house)
+            // Without a locality Swiggy wrote "undefined" into the saved line ("Ashok Nagar, undefined, WeWork Galaxy").
+            .put("locality", form.street.substringAfterLast(",").trim().ifBlank { form.city })
         val created = call("create_address", args)?.let { findString(it, "addressId") } ?: return problem("Saving the address")
         // Deliver to the address just saved; restarting from the last-used one showed "To Hotel2" after adding WeWork.
         val saved = call("get_addresses")?.let(::parseAddresses).orEmpty().firstOrNull { it.id == created }
