@@ -1021,6 +1021,11 @@ private fun ConfirmationCard(response: NilaResponse.Confirmation, onConfirm: () 
 
 @Composable
 private fun ActionCard(title: String, detail: String, action: String, onClick: () -> Unit) {
+    // A tap can start a real, non-idempotent call (place a COD order, select an address, start OAuth).
+    // tapOnce is checked and set inside the click handler itself, so even two taps in the same frame
+    // can't both get through before recomposition would otherwise disable the button.
+    val consumed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    var disabled by remember { mutableStateOf(false) }
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = CardInk),
@@ -1037,10 +1042,13 @@ private fun ActionCard(title: String, detail: String, action: String, onClick: (
                     Text(detail, style = MaterialTheme.typography.bodySmall, color = Color.LightGray)
                 }
             }
-            Button(onClick = onClick) { Text(action) }
+            Button(onClick = { if (tapOnce(consumed)) { disabled = true; onClick() } }, enabled = !disabled) { Text(action) }
         }
     }
 }
+
+/** True on the first call, false on every call after — even two calls racing from the same frame. Guards a tap from firing a non-idempotent action (an order, a payment) twice. */
+internal fun tapOnce(consumed: java.util.concurrent.atomic.AtomicBoolean): Boolean = !consumed.getAndSet(true)
 
 /**
  * Asks the Clock app to turn off an alarm after the user confirmed. Android does not let other apps read
