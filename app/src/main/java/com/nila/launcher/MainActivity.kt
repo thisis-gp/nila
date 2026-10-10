@@ -13,6 +13,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -25,12 +27,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.BasicTextField
@@ -69,6 +71,12 @@ class MainActivity : ComponentActivity() {
     private var resumeVersion by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Edge-to-edge hands the keyboard inset to Compose; safeDrawingPadding in NilaApp applies it once.
+        // Dark bar styles keep light status icons on NILA's dark background in any system theme.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
         super.onCreate(savedInstanceState)
         setContent { NilaApp(resumeVersion) }
     }
@@ -235,6 +243,12 @@ private fun NilaApp(resumeVersion: Int) {
                                 onSubmit = ::submit,
                                 context = context,
                                 prepare = engine::prepare,
+                                confirm = { token ->
+                                    // Replace the card with its result so the Confirm button cannot be tapped again.
+                                    val index = turns.indexOfFirst { (it.response as? NilaResponse.NeedsConfirmation)?.token == token }
+                                    val result = engine.confirm(token)
+                                    if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
+                                },
                             ) { label, next -> turns += Turn(label, next) }
                         }
                         NilaScreen.Home -> Unit
@@ -269,7 +283,7 @@ private fun NilaApp(resumeVersion: Int) {
 
 @Composable
 private fun OverlayScaffold(onClose: () -> Unit, content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxSize().background(Ink).imePadding()) {
+    Column(Modifier.fillMaxSize().background(Ink)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
             IconButton(onClick = onClose) {
                 Icon(painterResource(LucideR.drawable.lucide_ic_arrow_left), contentDescription = "Close", tint = Paper)
@@ -288,6 +302,7 @@ private fun AgentSpace(
     onSubmit: (String) -> Unit,
     context: Context,
     prepare: (Choice) -> NilaResponse.Confirmation,
+    confirm: (String) -> Unit,
     addTurn: (String, NilaResponse) -> Unit,
 ) {
     val lastWasConfirmation = turns.lastOrNull()?.response is NilaResponse.Confirmation
@@ -301,6 +316,11 @@ private fun AgentSpace(
         input.isNotBlank() -> MascotMood.Listening
         turns.isEmpty() -> MascotMood.Idle
         else -> MascotMood.Talking
+    }
+    val listState = rememberLazyListState()
+    // Bring the newest turn into view when it is added and again when its reply lands.
+    LaunchedEffect(turns.size, isThinking) {
+        if (turns.isNotEmpty()) listState.animateScrollToItem(turns.lastIndex)
     }
     LaunchedEffect(turns.size) {
         if (lastWasConfirmation) {
@@ -319,6 +339,7 @@ private fun AgentSpace(
         }
         LazyColumn(
             modifier = Modifier.weight(1f),
+            state = listState,
             contentPadding = PaddingValues(vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -336,7 +357,7 @@ private fun AgentSpace(
                     if (index == turns.lastIndex && isThinking) {
                         Text("NILA is thinking…", color = Muted, style = MaterialTheme.typography.bodyMedium)
                     } else {
-                        ResponseView(response = turn.response, context = context, prepare = prepare, addTurn = addTurn)
+                        ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, addTurn = addTurn)
                     }
                 }
             }
@@ -404,9 +425,16 @@ private fun ResponseView(
     response: NilaResponse,
     context: Context,
     prepare: (Choice) -> NilaResponse.Confirmation,
+    confirm: (String) -> Unit,
     addTurn: (String, NilaResponse) -> Unit,
 ) {
     when (response) {
+        // ponytail: plain tap confirms; biometric prompt comes with the confirmation flow.
+        is NilaResponse.NeedsConfirmation -> ActionCard(
+            title = response.capability.description,
+            detail = response.lines.joinToString("\n", postfix = "\nNothing happens until you confirm.") { (name, value) -> "$name: $value" },
+            action = "Confirm",
+        ) { confirm(response.token) }
         is NilaResponse.Text -> Text(response.value)
         is NilaResponse.Remember -> Text("I'll remember: ${response.fact}")
         is NilaResponse.Alarm -> ActionCard(
