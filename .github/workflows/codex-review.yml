@@ -160,12 +160,20 @@ jobs:
             } else {
               const checks = await github.paginate(github.rest.checks.listForRef, { owner, repo, ref: pr.head.sha, per_page: 100 });
               const relevant = checks.filter(check => !['review', 'publish'].includes(check.name));
-              const androidTest = relevant.find(check => check.name === 'test');
+              const workflows = await github.paginate(github.rest.actions.listRepoWorkflows, { owner, repo, per_page: 100 });
+              const androidWorkflow = workflows.find(workflow => workflow.path === '.github/workflows/android.yml');
+              const { data: androidRuns } = androidWorkflow
+                ? await github.rest.actions.listWorkflowRuns({ owner, repo, workflow_id: androidWorkflow.id, head_sha: pr.head.sha, per_page: 100 })
+                : { data: { workflow_runs: [] } };
+              const androidTestPassed = androidRuns.workflow_runs.some(run =>
+                run.event === 'pull_request' && run.head_sha === pr.head.sha &&
+                run.status === 'completed' && run.conclusion === 'success'
+              );
               const blocked = relevant.filter(check => check.status !== 'completed' || !['success', 'skipped'].includes(check.conclusion));
-              if (!androidTest || androidTest.conclusion !== 'success' || blocked.length) {
+              if (!androidTestPassed || blocked.length) {
                 const state = blocked.length
                   ? `Checks are not all green yet: ${blocked.map(check => `${check.name} (${check.status}${check.conclusion ? `/${check.conclusion}` : ''})`).join(', ')}.`
-                  : 'The Android test check has not passed yet.';
+                  : 'The Android workflow has not passed for this PR head.';
                 body = `${marker}\n## NILA review — clean, not merged\n\nNo actionable findings. ${state} Request review again after checks finish.`;
               } else {
                 try {
