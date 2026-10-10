@@ -585,6 +585,11 @@ private fun AgentSpace(
                         keyboardActions = KeyboardActions(onDone = { onSubmit(input) }),
                     )
                 }
+                VoiceMic(
+                    onPartial = onInput,
+                    onFinal = onSubmit,
+                    onMessage = { addTurn("Voice", NilaResponse.Text(it)) },
+                )
                 IconButton(onClick = { onSubmit(input) }) {
                     Icon(painterResource(LucideR.drawable.lucide_ic_send), contentDescription = "Send", tint = Lime)
                 }

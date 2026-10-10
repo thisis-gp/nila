@@ -114,9 +114,12 @@ class NilaEngine(extraCapabilities: List<CapabilityDescriptor> = emptyList()) {
     // ponytail: keyword router standing in for FunctionGemma; swap in the model behind the same NilaIntent output.
     fun route(input: String): NilaIntent {
         val normalized = input.trim().lowercase()
+        // Speech recognizers write "6:30 p.m."; fold a.m./p.m. into am/pm here only, so remember/apps/food
+        // matching below still sees the plain text (remember needs original casing for the stored fact).
+        val alarmNormalized = normalized.replace(Regex("""(?<=[\d\s])([ap])\.\s?m\.?"""), "$1m")
 
         // The router only extracts what was said; run() converts and validates the time.
-        alarm.find(normalized)?.let { match ->
+        alarm.find(alarmNormalized)?.let { match ->
             val args = mutableMapOf<String, Any>(
                 "hour" to match.groupValues[1].toInt(),
                 "minute" to match.groupValues[2].ifBlank { "0" }.toInt(),
