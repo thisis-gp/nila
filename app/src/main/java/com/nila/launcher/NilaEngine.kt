@@ -224,7 +224,15 @@ class NilaEngine(
     fun respond(input: String): NilaResponse = calculate(input) ?: execute(route(input))
 
     /** Greetings and questions about NILA itself. These go straight to conversation, never to a tool. */
-    fun isSmallTalk(input: String) = smallTalk.containsMatchIn(input.lowercase())
+    /**
+     * Only a greeting or a question about NILA, with at most two more words ("hello there", "how are you
+     * doing today"). "hey, wake me up at 7" starts like small talk but is a request, so it still reaches the
+     * rewrite and FunctionGemma instead of chat only.
+     */
+    fun isSmallTalk(input: String): Boolean {
+        val match = smallTalk.find(input.lowercase()) ?: return false
+        return input.substring(match.range.last + 1).split(Regex("""[^\p{L}\p{N}']+""")).count { it.isNotBlank() } <= 2
+    }
 
     /**
      * Reads the alarm time exactly as the user said it. When a model picks create_alarm, these values
