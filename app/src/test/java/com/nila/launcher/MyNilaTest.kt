@@ -32,6 +32,17 @@ class MyNilaTest {
     }
 
     @Test
+    fun tellingNilaSomethingIsNotARequest() {
+        // Seen on the iQOO 15: this started a butter chicken search instead of being remembered.
+        assertTrue(isPersonalStatement("my wife loves butter chicken"))
+        assertTrue(isPersonalStatement("I'm allergic to peanuts"))
+        assertTrue(isPersonalStatement("my mom's birthday is on 12 March"))
+        assertFalse(isPersonalStatement("order my wife's favourite"))
+        assertFalse(isPersonalStatement("my wife loves butter chicken, order it"))
+        assertFalse(isPersonalStatement("order butter chicken"))
+    }
+
+    @Test
     fun aSavedFactIsMadeOfTheUsersOwnWords() {
         assertTrue(groundedFact("loves butter chicken", "my wife loves butter chicken"))
         // Gemma must not invent a dish the user never said.

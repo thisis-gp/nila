@@ -59,6 +59,21 @@ private val PersonalCue = Regex(
 /** True when a message may carry a personal detail worth keeping; only then is Gemma asked to pick it out. */
 internal fun mightBePersonal(text: String): Boolean = PersonalCue.containsMatchIn(text.lowercase())
 
+private val PersonalStatement = Regex(
+    """^\s*(?:my|our)\s+[\p{L}]+(?:'s)?\s+(?:loves?|likes?|hates?|prefers?|enjoys?|is|isn't|eats|doesn't|does not|can't|cannot|favourite|favorite|birthday|name|allergy)\b|""" +
+        """^\s*(?:i|i'm|i am)\s+(?:love|like|hate|prefer|enjoy|am|'m|allergic|vegetarian|vegan|don't|do not|can't|cannot)\b|^\s*i'm\b""",
+)
+private val RequestWords = Regex("""\b(order|buy|get me|book|call|message|tell|remind|set|show|find|search|open|play|take me|what|who|how|when|where|can you|please)\b""")
+
+/**
+ * "my wife loves butter chicken" tells NILA something; it does not ask for anything. Such a statement is
+ * remembered and answered, never routed to an order (it started a butter chicken search on the iQOO 15).
+ */
+internal fun isPersonalStatement(text: String): Boolean {
+    val lower = text.lowercase()
+    return PersonalStatement.containsMatchIn(lower) && !RequestWords.containsMatchIn(lower)
+}
+
 /** A saved fact must be made of the user's own words: every subject word of it appears in what they said. */
 internal fun groundedFact(fact: String, said: String): Boolean {
     val subject = factWords(fact).filter { it !in RelationWords }

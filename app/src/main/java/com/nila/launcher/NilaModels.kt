@@ -283,6 +283,8 @@ class NilaBrain(
      */
     suspend fun respond(input: String): NilaResponse {
         askedAbout(input)?.let { return NilaResponse.Text(personSummary(it, facts())) }
+        // A statement about the user or their people is answered and remembered (learn), never acted on.
+        if (isPersonalStatement(input)) return withContext(llm) { chat(input) } ?: NilaResponse.Text("Got it.")
         val who = favouriteOf(input) ?: return answerFor(input)
         val resolved = withFavourite(input, facts())
             ?: return NilaResponse.Text("I don't know your $who's favourite yet. Tell me, like \"my $who loves butter chicken\".")
