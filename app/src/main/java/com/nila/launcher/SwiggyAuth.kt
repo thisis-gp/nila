@@ -1,0 +1,194 @@
+package com.nila.launcher
+
+import android.content.Context
+import android.net.Uri
+import android.util.Log
+import androidx.browser.customtabs.CustomTabsIntent
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.ServerSocket
+import java.security.MessageDigest
+import java.security.SecureRandom
+import kotlin.coroutines.resume
+
+/**
+ * OAuth 2.1 + PKCE against Swiggy's MCP auth server, using dynamic client
+ * registration (RFC 7591) and an in-app loopback redirect — the documented
+ * dev-mode path (mcp.swiggy.com/builders/docs/start/authenticate/) that works
+ * today without waiting on builders@swiggy.in to approve a `nila://oauth`
+ * custom scheme. Access tokens last 5 days and are never refreshed; once
+ * expired, the full flow must run again.
+ */
+internal object SwiggyAuth {
+    private const val BASE = "https://mcp.swiggy.com"
+    private const val PREFS = "nila_swiggy"
+    private val http = OkHttpClient()
+
+    internal data class Session(val accessToken: String, val expiresAtMillis: Long)
+
+    private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    fun currentSession(context: Context): Session? {
+        val p = prefs(context)
+        val token = p.getString("access_token", null) ?: return null
+        val expiresAt = p.getLong("expires_at", 0L)
+        if (System.currentTimeMillis() >= expiresAt) return null
+        return Session(token, expiresAt)
+    }
+
+    fun logout(context: Context) {
+        prefs(context).edit().remove("access_token").remove("expires_at").apply()
+    }
+
+    /**
+     * Runs the full login flow: register a client if needed, open the Swiggy
+     * consent screen in a Custom Tab, catch the redirect on a local loopback
+     * server, and exchange the code for a token. Returns null on failure or
+     * a 90s timeout (user never completed the browser consent step).
+     */
+    suspend fun login(context: Context): Session? {
+        // The loopback port is random per login, so the registered redirect_uri
+        // must match this run's exact callback URI — register after opening the
+        // socket, not once-and-cache, and always with the real redirectUri.
+        val server = runCatching { ServerSocket(0) }.getOrNull() ?: return null
+        // 127.0.0.1, not "localhost": RFC 8252 §8.3 recommends the IP literal, and
+        // Chrome's Private Network Access checks treat a public HTTPS page
+        // redirecting to "localhost" more strictly than to the loopback literal —
+        // login completed on Swiggy's side but hung forever on "Redirecting you
+        // back to the application..." until this was the redirect target.
+        val redirectUri = "http://127.0.0.1:${server.localPort}/callback"
+
+        // registerClient/exchangeCode do blocking OkHttp calls — without this
+        // they'd run on the caller's dispatcher (Main, from rememberCoroutineScope)
+        // and throw NetworkOnMainThreadException, silently swallowed by runCatching.
+        val clientId = withContext(Dispatchers.IO) { registerClient(redirectUri) }
+        if (clientId == null) {
+            runCatching { server.close() }
+            return null
+        }
+        val verifier = randomUrlSafe(64)
+        val challenge = base64UrlSha256(verifier)
+        val state = randomUrlSafe(16)
+
+        val authorizeUri = Uri.parse("$BASE/auth/authorize").buildUpon()
+            .appendQueryParameter("response_type", "code")
+            .appendQueryParameter("client_id", clientId)
+            .appendQueryParameter("redirect_uri", redirectUri)
+            .appendQueryParameter("code_challenge", challenge)
+            .appendQueryParameter("code_challenge_method", "S256")
+            .appendQueryParameter("state", state)
+            .appendQueryParameter("scope", "mcp:tools")
+            .build()
+
+        CustomTabsIntent.Builder().build().launchUrl(context, authorizeUri)
+
+        val code = withTimeoutOrNull(90_000) { awaitCallback(server, state) }
+        if (code == null) {
+            runCatching { server.close() }
+            return null
+        }
+
+        val tokenJson = withContext(Dispatchers.IO) { exchangeCode(clientId, code, verifier, redirectUri) } ?: return null
+        val accessToken = tokenJson.optString("access_token").ifBlank { return null }
+        val expiresIn = tokenJson.optLong("expires_in", 432_000L) // docs default: 5 days
+        val expiresAt = System.currentTimeMillis() + expiresIn * 1000
+
+        prefs(context).edit()
+            .putString("access_token", accessToken)
+            .putLong("expires_at", expiresAt)
+            .apply()
+        return Session(accessToken, expiresAt)
+    }
+
+    private suspend fun awaitCallback(server: ServerSocket, expectedState: String): String? =
+        suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation { runCatching { server.close() } }
+            Thread {
+                val code = runCatching {
+                    val socket = server.accept()
+                    val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
+                    val requestLine = reader.readLine() ?: ""
+                    val path = requestLine.split(" ").getOrNull(1) ?: ""
+                    val uri = Uri.parse("http://localhost$path")
+                    val response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n" +
+                        "<html><body>Signed in to NILA. You can close this tab.</body></html>"
+                    socket.getOutputStream().write(response.toByteArray())
+                    socket.getOutputStream().flush()
+                    socket.close()
+                    server.close()
+                    if (uri.getQueryParameter("state") == expectedState) uri.getQueryParameter("code") else null
+                }.getOrNull()
+                if (cont.isActive) cont.resume(code)
+            }.start()
+        }
+
+    // Registers fresh on every login: Android's org.json.JSONObject.put(String, Any)
+    // does NOT convert a Kotlin List to a JSONArray the way the reference org.json
+    // does — it silently stores the list's toString(), so the server saw
+    // redirect_uris: "[http://localhost]" (a string) instead of a real JSON array
+    // and rejected the request. That 4xx was swallowed by `return null` before
+    // ever reaching the onFailure handler. Also: the port is random per login, so
+    // caching client_id against a stale redirect_uri would break the next login.
+    private fun registerClient(redirectUri: String): String? {
+        val body = JSONObject().apply {
+            put("client_name", "NILA Launcher")
+            put("redirect_uris", JSONArray().put(redirectUri))
+            put("token_endpoint_auth_method", "none") // public client, PKCE-only
+            put("grant_types", JSONArray().put("authorization_code"))
+            put("response_types", JSONArray().put("code"))
+        }
+        val request = Request.Builder()
+            .url("$BASE/auth/register")
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        return runCatching {
+            http.newCall(request).execute().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    Log.e("NilaSwiggy", "register ${resp.code}: $text")
+                    return null
+                }
+                JSONObject(text).optString("client_id").ifBlank { null }
+            }
+        }.onFailure { Log.e("NilaSwiggy", "register failed", it) }.getOrNull()
+    }
+
+    private fun exchangeCode(clientId: String, code: String, verifier: String, redirectUri: String): JSONObject? {
+        val form = "grant_type=authorization_code" +
+            "&code=${Uri.encode(code)}" +
+            "&code_verifier=${Uri.encode(verifier)}" +
+            "&redirect_uri=${Uri.encode(redirectUri)}" +
+            "&client_id=${Uri.encode(clientId)}"
+        val request = Request.Builder()
+            .url("$BASE/auth/token")
+            .post(form.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+            .build()
+        return runCatching {
+            http.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                JSONObject(resp.body?.string().orEmpty())
+            }
+        }.getOrNull()
+    }
+
+    private fun randomUrlSafe(bytes: Int): String {
+        val raw = ByteArray(bytes)
+        SecureRandom().nextBytes(raw)
+        return android.util.Base64.encodeToString(raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING)
+    }
+
+    private fun base64UrlSha256(input: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
+        return android.util.Base64.encodeToString(digest, android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING)
+    }
+}

@@ -117,15 +117,25 @@ class NilaEngineTest {
     }
 
     @Test
-    fun createsFoodComparison() {
-        val response = engine.respond("Order chicken biryani under 250")
-        assertTrue(response is NilaResponse.Choices)
-        assertEquals(2, (response as NilaResponse.Choices).items.size)
+    fun foodSearchHandsTheModelsQueryToTheLiveFlow() {
+        val call = ToolCall("search_food", mapOf("query" to "chicken biryani"))
+        assertEquals(NilaResponse.FoodSearch("chicken biryani"), engine.execute(NilaIntent.Call(call)))
+    }
+
+    @Test
+    fun directionsHandTheModelsDestinationToMaps() {
+        val call = ToolCall("get_directions", mapOf("destination" to "Indiranagar"))
+        assertEquals(NilaResponse.Navigate("Indiranagar"), engine.execute(NilaIntent.Call(call)))
+    }
+
+    @Test
+    fun foodIsLeftToTheModelNotKeywords() {
+        assertEquals(NilaIntent.Converse("I'm starving, get me biryani"), engine.route("I'm starving, get me biryani"))
     }
 
     @Test
     fun preparesFoodChoiceWithoutOrdering() {
-        val choices = engine.respond("Order chicken biryani under 250") as NilaResponse.Choices
+        val choices = engine.mockFood()
 
         assertEquals(
             NilaResponse.Confirmation(

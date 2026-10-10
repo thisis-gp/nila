@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.provider.AlarmClock
 import android.provider.Settings
 import android.widget.Toast
+import androidx.core.view.WindowCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -79,6 +80,10 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
+        // Edge-to-edge: without this the OS resizes the window around the
+        // keyboard AND Compose's imePadding() pads again on top of that,
+        // double-counting the inset and leaving dead space above the keyboard.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent { NilaApp(resumeVersion) }
     }
 
@@ -145,6 +150,48 @@ private fun NilaApp(resumeVersion: Int) {
     val scope = rememberCoroutineScope()
     var isThinking by remember { mutableStateOf(false) }
     var justReplied by remember { mutableStateOf(false) }
+    var swiggySession by remember { mutableStateOf(SwiggyAuth.currentSession(context)) }
+    val foodFlow = remember { FoodFlow(context.applicationContext) }
+
+    /** Runs one Swiggy step as its own chat turn, with the same thinking state as a typed request. */
+    fun runFood(label: String, step: suspend () -> NilaResponse) {
+        if (isThinking) return
+        val index = turns.size
+        turns += Turn(label, NilaResponse.Text(""))
+        isThinking = true
+        scope.launch {
+            turns[index] = Turn(label, step())
+            isThinking = false
+        }
+    }
+
+    val foodActions = remember {
+        object : FoodActions {
+            override fun pickAddress(address: FoodAddress, query: String) =
+                runFood("Deliver to ${address.label}") { foodFlow.restaurants(address, query) }
+            override fun addAddress(query: String, form: NewAddressForm) =
+                runFood("Add a new address") { foodFlow.addAddress(query, form) }
+            override fun openRestaurant(address: FoodAddress, restaurant: FoodRestaurant, query: String) =
+                runFood(restaurant.name) { foodFlow.menu(address, restaurant, query) }
+            override fun changeItem(address: FoodAddress, restaurant: FoodRestaurant, item: FoodItem, delta: Int) =
+                runFood(if (delta > 0) "Add ${item.name}" else "Remove ${item.name}") { foodFlow.changeItem(address, restaurant, item, delta) }
+            override fun changeLine(address: FoodAddress, restaurant: FoodRestaurant, itemId: String, delta: Int) =
+                runFood(if (delta > 0) "One more" else "One less") { foodFlow.changeLine(address, restaurant, itemId, delta) }
+            override fun checkout(address: FoodAddress, restaurant: FoodRestaurant, cart: FoodCartView) =
+                runFood("Checkout") { foodFlow.payment(address, restaurant, cart) }
+            override fun place(address: FoodAddress, cart: FoodCartView, option: FoodPayOption) =
+                runFood("Place order · ${option.label}") { foodFlow.place(address, cart, option) }
+            override fun openUpi(link: String) {
+                // NPCI routes UPI payments through the payment app; this is the one hop NILA can't avoid.
+                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link))) }
+                    .onFailure { Toast.makeText(context, "No UPI app can open this payment.", Toast.LENGTH_SHORT).show() }
+            }
+            override fun checkPayment(pending: PendingPayment) =
+                runFood("Check payment") { foodFlow.checkPayment(pending) }
+            override fun track(orderId: String?) =
+                runFood("Track order") { foodFlow.track(orderId) }
+        }
+    }
 
     fun submit(prompt: String = input) {
         if (prompt.isBlank() || isThinking) return
@@ -154,10 +201,20 @@ private fun NilaApp(resumeVersion: Int) {
         isThinking = true
         scope.launch {
             delay(550) // a visible thinking beat, so a reply doesn't feel like a canned instant lookup
-            val response = if (prompt.lowercase().contains("what do you remember")) {
+            val normalized = prompt.lowercase()
+            val response = if (normalized.contains("what do you remember")) {
                 NilaResponse.Text(memory.getString("fact", null)?.let { "You asked me to remember: $it" } ?: "You have not asked me to remember anything yet.")
             } else {
-                brain.respond(prompt)
+                // FunctionGemma picks the tool and its arguments; these two hand off to live services.
+                when (val routed = brain.respond(prompt)) {
+                    is NilaResponse.FoodSearch -> if (foodFlow.connected) {
+                        foodFlow.start(routed.query)
+                    } else {
+                        engine.mockFood().let { it.copy(intro = "${it.intro}\nConnect Swiggy in Settings to order for real.") }
+                    }
+                    is NilaResponse.Navigate -> NilaIntegrations.liveRouteCard(routed.destination) ?: routed
+                    else -> routed
+                }
             }
             if (response is NilaResponse.Remember) {
                 memory.edit().putString("fact", response.fact).apply()
@@ -257,6 +314,7 @@ private fun NilaApp(resumeVersion: Int) {
                                     val result = engine.confirm(token)
                                     if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
                                 },
+                                food = foodActions,
                             ) { label, next -> turns += Turn(label, next) }
                         }
                         NilaScreen.Home -> Unit
@@ -269,6 +327,23 @@ private fun NilaApp(resumeVersion: Int) {
                             onForgetMemory = {
                                 memory.edit().remove("fact").apply()
                                 rememberedFact = null
+                            },
+                            swiggyConnected = swiggySession != null,
+                            onConnectSwiggy = {
+                                android.util.Log.d("NilaSwiggy", "Connect Swiggy tapped")
+                                scope.launch {
+                                    android.util.Log.d("NilaSwiggy", "login() starting")
+                                    val session = SwiggyAuth.login(context)
+                                    android.util.Log.d("NilaSwiggy", "login() returned: $session")
+                                    swiggySession = session
+                                    if (session == null) {
+                                        Toast.makeText(context, "Swiggy sign-in didn't complete.", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            onDisconnectSwiggy = {
+                                SwiggyAuth.logout(context)
+                                swiggySession = null
                             },
                         )
                     }
@@ -291,6 +366,8 @@ private fun NilaApp(resumeVersion: Int) {
 
 @Composable
 private fun OverlayScaffold(onClose: () -> Unit, content: @Composable () -> Unit) {
+    // No separate imePadding() here: the root Box already applies safeDrawingPadding(),
+    // which includes the IME inset. Adding it again double-counted the keyboard height.
     Column(Modifier.fillMaxSize().background(Ink)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
             IconButton(onClick = onClose) {
@@ -313,6 +390,7 @@ private fun AgentSpace(
     context: Context,
     prepare: (Choice) -> NilaResponse.Confirmation,
     confirm: (String) -> Unit,
+    food: FoodActions,
     addTurn: (String, NilaResponse) -> Unit,
 ) {
     val lastWasConfirmation = turns.lastOrNull()?.response is NilaResponse.Confirmation
@@ -370,7 +448,7 @@ private fun AgentSpace(
                     if (index == turns.lastIndex && isThinking) {
                         Text("NILA is thinking…", color = Muted, style = MaterialTheme.typography.bodyMedium)
                     } else {
-                        ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, addTurn = addTurn)
+                        ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, addTurn = addTurn)
                     }
                 }
             }
@@ -433,15 +511,30 @@ private fun DemoPrompts(onSubmit: (String) -> Unit) {
     }
 }
 
+private fun openGoogleMaps(context: Context, destination: String, addTurn: (String, NilaResponse) -> Unit) {
+    val navUri = Uri.parse("google.navigation:q=${Uri.encode(destination)}")
+    val mapsIntent = Intent(Intent.ACTION_VIEW, navUri).setPackage("com.google.android.apps.maps")
+    val opened = runCatching { context.startActivity(mapsIntent) }.isSuccess
+    if (!opened) {
+        val webUri = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=${Uri.encode(destination)}")
+        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, webUri)) }
+            .onFailure { addTurn("Action result", NilaResponse.Text("Maps could not be opened.")) }
+    }
+}
+
 @Composable
 private fun ResponseView(
     response: NilaResponse,
     context: Context,
     prepare: (Choice) -> NilaResponse.Confirmation,
     confirm: (String) -> Unit,
+    food: FoodActions,
     addTurn: (String, NilaResponse) -> Unit,
 ) {
     when (response) {
+        is NilaResponse.Food -> FoodCardView(response.card, food)
+        // Resolved into the live flow in submit(); shown only if that ever fails to happen.
+        is NilaResponse.FoodSearch -> Text("Looking for ${response.query}…")
         // ponytail: plain tap confirms; biometric prompt comes with the confirmation flow.
         is NilaResponse.NeedsConfirmation -> ActionCard(
             title = response.capability.description,
@@ -474,7 +567,38 @@ private fun ResponseView(
             runCatching { context.startActivity(launch) }
                 .onFailure { addTurn("Action result", NilaResponse.Text("${response.name} could not be opened.")) }
         }
+        is NilaResponse.Navigate -> ActionCard(
+            title = "Navigate to ${response.destination}",
+            detail = "Opens Google Maps for live turn-by-turn directions.",
+            action = "Open Maps",
+        ) { openGoogleMaps(context, response.destination, addTurn) }
+        is NilaResponse.RouteCard -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(response.source, color = Lime, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = CardInk),
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(response.destination, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text(
+                        "%.1f km · about %.0f min by road".format(response.distanceKm, response.durationMin),
+                        color = Color.LightGray,
+                    )
+                    Text("© OpenStreetMap contributors", color = Muted, fontSize = 10.sp)
+                    Button(onClick = { openGoogleMaps(context, response.destination, addTurn) }) {
+                        Text("Open Maps for navigation")
+                    }
+                }
+            }
+        }
         is NilaResponse.Choices -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                response.source,
+                color = if (response.source.startsWith("LIVE")) Lime else Orange,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+            )
             Text(response.intro)
             response.items.forEach { item ->
                 ActionCard(item.title, "${item.detail} · ${item.eta}", "Review ${item.price}") {

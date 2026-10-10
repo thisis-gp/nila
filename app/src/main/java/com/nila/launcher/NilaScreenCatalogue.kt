@@ -50,6 +50,9 @@ internal fun NilaScreenCatalogue(
     rememberedFact: String?,
     onChooseDefaultHome: () -> Unit,
     onForgetMemory: () -> Unit,
+    swiggyConnected: Boolean,
+    onConnectSwiggy: () -> Unit,
+    onDisconnectSwiggy: () -> Unit,
 ) {
     when (screen) {
         NilaScreen.Welcome -> WelcomeScreen(onOpen)
@@ -64,7 +67,7 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Memory -> MemoryScreen(onOpen, onBack, rememberedFact, onForgetMemory)
         NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
-        NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome)
+        NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, swiggyConnected, onConnectSwiggy, onDisconnectSwiggy)
         NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
         NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps -> Unit
     }
@@ -222,11 +225,28 @@ private fun ActivityScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = P
 }
 
 @Composable
-private fun SettingsScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit, onChooseDefaultHome: () -> Unit) = Page("SETTINGS", onOpen, onBack) {
+private fun SettingsScreen(
+    onOpen: (NilaScreen) -> Unit,
+    onBack: () -> Unit,
+    onChooseDefaultHome: () -> Unit,
+    swiggyConnected: Boolean,
+    onConnectSwiggy: () -> Unit,
+    onDisconnectSwiggy: () -> Unit,
+) = Page("SETTINGS", onOpen, onBack) {
     ScreenTitle("NILA is yours.")
     BodyText("Language, voice, privacy and intelligence stay understandable.")
     PrimaryButton("Choose default Home app") { onChooseDefaultHome() }
     PrimaryButton("Voice languages · English · हिंदी · മലയാളം") { onOpen(NilaScreen.Languages) }
+    SectionCard(
+        "Swiggy account",
+        "OAuth 2.1 with PKCE · access token lasts 5 days, then sign in again",
+        if (swiggyConnected) "CONNECTED" else "NOT CONNECTED",
+    )
+    if (swiggyConnected) {
+        SecondaryButton("Disconnect Swiggy") { onDisconnectSwiggy() }
+    } else {
+        PrimaryButton("Connect Swiggy") { onConnectSwiggy() }
+    }
     SectionCard("Lakshmi voice", "Android on-device voice candidate", "NOT CONNECTED")
     SectionCard("Memory", "Typed demo fact stays in app storage", "LOCAL")
     SectionCard("Commit actions", "Pay, send, book, delete or share", "ALWAYS CONFIRM")
