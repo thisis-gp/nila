@@ -63,7 +63,9 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -585,11 +587,16 @@ private fun NilaApp(resumeVersion: Int) {
         }
     }
 
-    // The listening layer sits on top of the NILA chat; while it is up, "Type instead" drops into that chat.
-    var listening by remember { mutableStateOf(false) }
+    // How the agent screen was last opened: from the mascot it starts listening, from a typed hand-off it does not.
+    var agentEntry by remember { mutableStateOf(AgentEntry.Text) }
+
+    fun openAgent(entry: AgentEntry) {
+        agentEntry = entry
+        open(NilaScreen.Nila)
+    }
 
     fun closeOverlay() {
-        listening = false
+        agentEntry = AgentEntry.Text
         screen = navigation.back()
     }
 
@@ -624,10 +631,7 @@ private fun NilaApp(resumeVersion: Int) {
                 HomeScreen(
                     resumeVersion = resumeVersion,
                     nilaMood = nilaMood,
-                    onInvokeNila = {
-                        listening = true
-                        open(NilaScreen.Nila)
-                    },
+                    onInvokeNila = { openAgent(AgentEntry.Voice) },
                     onOpenApps = { open(NilaScreen.Apps) },
                     onChangeWallpaper = { changeWallpaper(context) },
                 )
@@ -664,49 +668,36 @@ private fun NilaApp(resumeVersion: Int) {
                                     }
                                 },
                                 onAskNila = { request ->
-                                    open(NilaScreen.Nila)
+                                    openAgent(AgentEntry.Text)
                                     submit(request)
                                 },
                                 onBack = ::closeOverlay,
                                 onOpenSettings = { open(NilaScreen.Settings) },
                                 onChangeWallpaper = { changeWallpaper(context) },
                             )
-                            NilaScreen.Nila -> if (listening) {
-                                ListeningLayer(
-                                    transcribe = brain::transcribe,
-                                    onListenStart = lakshmi::stop,
-                                    onUseRequest = { request ->
-                                        listening = false
-                                        speakReply = true
-                                        submit(request)
-                                    },
-                                    onTypeInstead = { listening = false },
-                                    onClose = ::closeOverlay,
-                                )
-                            } else {
-                                AgentSpace(
-                                    turns = turns,
-                                    input = input,
-                                    isThinking = isThinking,
-                                    modelStatus = "Gemma 4 E2B ${brain.assistantState.label} · FunctionGemma ${brain.routerState.label}" +
-                                        (brain.loadError?.let { "\n$it" } ?: ""),
-                                    transcribe = brain::transcribe,
-                                    onInput = { input = it },
-                                    onSubmit = ::submit,
-                                    onVoiceRequest = { speakReply = true; submit(it) },
-                                    onListenStart = lakshmi::stop,
-                                    onClose = ::closeOverlay,
-                                    context = context,
-                                    prepare = engine::prepare,
-                                    confirm = { token ->
-                                        // Replace the card with its result so the Confirm button cannot be tapped again.
-                                        val index = turns.indexOfFirst { (it.response as? NilaResponse.NeedsConfirmation)?.token == token }
-                                        val result = engine.confirm(token).let { if (it is NilaResponse.DismissAlarm) dismissAlarm(context, it) else it }
-                                        if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
-                                    },
-                                    food = foodActions,
-                                ) { label, next -> turns += Turn(label, next) }
-                            }
+                            NilaScreen.Nila -> AgentSpace(
+                                entry = agentEntry,
+                                turns = turns,
+                                input = input,
+                                isThinking = isThinking,
+                                modelStatus = "Gemma 4 E2B ${brain.assistantState.label} · FunctionGemma ${brain.routerState.label}" +
+                                    (brain.loadError?.let { "\n$it" } ?: ""),
+                                transcribe = brain::transcribe,
+                                onInput = { input = it },
+                                onSubmit = ::submit,
+                                onVoiceRequest = { speakReply = true; submit(it) },
+                                onListenStart = lakshmi::stop,
+                                onClose = ::closeOverlay,
+                                context = context,
+                                prepare = engine::prepare,
+                                confirm = { token ->
+                                    // Replace the card with its result so the Confirm button cannot be tapped again.
+                                    val index = turns.indexOfFirst { (it.response as? NilaResponse.NeedsConfirmation)?.token == token }
+                                    val result = engine.confirm(token).let { if (it is NilaResponse.DismissAlarm) dismissAlarm(context, it) else it }
+                                    if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
+                                },
+                                food = foodActions,
+                            ) { label, next -> turns += Turn(label, next) }
                             NilaScreen.Home -> Unit
                             else -> NilaScreenCatalogue(
                                 screen = overlayScreen,
@@ -752,7 +743,7 @@ private fun NilaApp(resumeVersion: Int) {
 }
 
 /** Turns NILA adds on its own (a provider follow-up, an action's result) carry a label, not something the person said. */
-private val FollowUpLabels = setOf("Zepto", "Zepto tools result", "Action result", "Prepared action", "Voice")
+private val FollowUpLabels = setOf("Zepto", "Zepto tools result", "Action result", "Prepared action")
 
 internal fun isFollowUpTurn(label: String): Boolean = label in FollowUpLabels
 
@@ -766,8 +757,12 @@ private val OptionImageSize = 52.dp
 private const val BUSY_CARD_ALPHA = 0.35f
 private const val BOUNDARY_ALPHA = 0.35f
 
+/** Where the agent screen was opened from: the mascot starts listening straight away, typed hand-offs do not. */
+internal enum class AgentEntry { Voice, Text }
+
 @Composable
 private fun AgentSpace(
+    entry: AgentEntry,
     turns: List<Turn>,
     input: String,
     isThinking: Boolean,
@@ -790,18 +785,42 @@ private fun AgentSpace(
     var celebrate by remember { mutableStateOf(false) }
     // Model load status is debug info: hidden until the mascot is tapped.
     var showStatus by remember { mutableStateOf(false) }
+    // What the inline listening state shows: the transcript waiting for "Use this request", or why voice failed.
+    var heard by remember { mutableStateOf<String?>(null) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    val voice = rememberVoiceCapture(
+        transcribe = transcribe,
+        onFinal = { heard = it },
+        onMessage = { notice = it },
+        onListenStart = {
+            heard = null
+            notice = null
+            onListenStart()
+        },
+    )
+    val voiceShown = voice.state != VoiceState.IDLE || heard != null || notice != null
+    fun dismissVoice() {
+        voice.cancel()
+        heard = null
+        notice = null
+    }
+    LaunchedEffect(Unit) {
+        if (entry == AgentEntry.Voice) voice.toggle()
+    }
+    val focusManager = LocalFocusManager.current
     val mood = when {
         celebrate -> MascotMood.Celebrate
         isThinking -> MascotMood.Thinking
         lastWasError -> MascotMood.Error
-        input.isNotBlank() -> MascotMood.Listening
+        voice.state == VoiceState.LISTENING || input.isNotBlank() -> MascotMood.Listening
         turns.isEmpty() -> MascotMood.Idle
         else -> MascotMood.Talking
     }
     val listState = rememberLazyListState()
-    // Bring the newest turn into view when it is added and again when its reply lands.
-    LaunchedEffect(turns.size, isThinking) {
-        if (turns.isNotEmpty()) listState.animateScrollToItem(turns.lastIndex)
+    // Bring the newest turn into view when it is added, when its reply lands and when listening starts below it.
+    LaunchedEffect(turns.size, isThinking, voiceShown) {
+        val newest = if (voiceShown) turns.size else turns.lastIndex
+        if (newest >= 0) listState.animateScrollToItem(newest)
     }
     LaunchedEffect(turns.size) {
         if (lastWasConfirmation) {
@@ -843,7 +862,7 @@ private fun AgentSpace(
             contentPadding = PaddingValues(vertical = 22.dp),
             verticalArrangement = Arrangement.spacedBy(28.dp),
         ) {
-            if (turns.isEmpty()) item { EmptyAgent(onSubmit) }
+            if (turns.isEmpty() && !voiceShown) item { EmptyAgent(onSubmit) }
             itemsIndexed(turns) { index, turn ->
                 val busy = index == turns.lastIndex && isThinking
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -861,6 +880,12 @@ private fun AgentSpace(
                     }
                 }
             }
+            if (voiceShown) item {
+                ListeningTurn(voice = voice, heard = heard, notice = notice) { request ->
+                    heard = null
+                    onVoiceRequest(request)
+                }
+            }
         }
         Surface(
             Modifier.fillMaxWidth(),
@@ -876,20 +901,23 @@ private fun AgentSpace(
                     if (input.isEmpty()) Text("Ask NILA anything", color = Muted)
                     BasicTextField(
                         value = input,
-                        onValueChange = onInput,
-                        modifier = Modifier.fillMaxWidth(),
+                        onValueChange = {
+                            dismissVoice()
+                            onInput(it)
+                        },
+                        // Reaching for the keyboard means typing instead, so any listening stops.
+                        modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) dismissVoice() },
                         textStyle = MaterialTheme.typography.bodyLarge.copy(color = Paper),
                         cursorBrush = SolidColor(Lime),
                         singleLine = true,
                         keyboardActions = KeyboardActions(onDone = { onSubmit(input) }),
                     )
                 }
-                VoiceMic(
-                    transcribe = transcribe,
-                    onFinal = onVoiceRequest,
-                    onListenStart = onListenStart,
-                    onMessage = { addTurn("Voice", NilaResponse.Text(it)) },
-                )
+                VoiceMic(voice) {
+                    // Drop the keyboard so the listening state has room; tapping the field again cancels listening.
+                    focusManager.clearFocus()
+                    voice.toggle()
+                }
                 IconButton(onClick = { onSubmit(input) }) {
                     Icon(painterResource(LucideR.drawable.lucide_ic_send), contentDescription = "Send", tint = Lime)
                 }

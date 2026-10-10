@@ -13,8 +13,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -25,17 +23,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
@@ -48,20 +39,14 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
-import kotlin.math.hypot
 import com.composables.icons.lucide.R as LucideR
 
-private val ListeningGlow = Color(0xFF4A5132)
-private val ListeningShade = Color(0xFF171A13)
 internal val Night = Color(0xFF11120F)
-private val SpokenMuted = Color(0xFFAEAD9F)
 internal val LabelInk = Color(0xFFCFCEC5)
 internal val Stroke = Color.White.copy(alpha = 0.16f)
 internal val RoundFill = Color(0xCC171914)
 
-private const val GLOW_CENTER_Y = 0.72f
-private const val GLOW_SHADE_STOP = 0.42f
-private const val GLOW_NIGHT_STOP = 0.70f
+private const val SPOKEN_LINE_HEIGHT = 1.05f
 private const val WAVE_PERIOD_MS = 800
 private const val WAVE_REST_SCALE = 0.3f
 private const val WAVE_MIN_ALPHA = 0.45f
@@ -96,62 +81,26 @@ internal fun requestKeyPhrase(request: String): IntRange? {
     return phrase.first().range.first until end
 }
 
+/** The spaced label above the inline listening state: what NILA is doing with the person's voice right now. */
+internal fun listeningLabel(state: VoiceState, heard: String?): String = when (state) {
+    VoiceState.LISTENING -> "LISTENING"
+    VoiceState.UNDERSTANDING -> "UNDERSTANDING"
+    VoiceState.IDLE -> if (heard != null) "HEARD YOU" else "READY"
+}
+
 /**
- * The full-screen layer NILA opens when invoked: it listens straight away, shows what it heard in large type
- * and waits for "Use this request" before anything runs, so a misheard request never acts on its own.
+ * The agent screen's listening state, shown where the next request goes: it shows what NILA heard in large
+ * type and waits for "Use this request" before anything runs, so a misheard request never acts on its own.
  */
 @Composable
-internal fun ListeningLayer(
-    transcribe: suspend (wav: ByteArray, languageName: String?) -> String?,
-    onListenStart: () -> Unit,
-    onUseRequest: (String) -> Unit,
-    onTypeInstead: () -> Unit,
-    onClose: () -> Unit,
-) {
-    var heard by remember { mutableStateOf<String?>(null) }
-    var notice by remember { mutableStateOf<String?>(null) }
-    val voice = rememberVoiceCapture(
-        transcribe = transcribe,
-        onFinal = { heard = it },
-        onMessage = { notice = it },
-        onListenStart = {
-            heard = null
-            notice = null
-            onListenStart()
-        },
-    )
-    LaunchedEffect(Unit) { voice.toggle() }
-
-    val label = when (voice.state) {
-        VoiceState.LISTENING -> "LISTENING"
-        VoiceState.UNDERSTANDING -> "UNDERSTANDING"
-        VoiceState.IDLE -> if (heard != null) "HEARD YOU" else "READY"
-    }
+internal fun ListeningTurn(voice: VoiceCapture, heard: String?, notice: String?, onUseRequest: (String) -> Unit) {
     val mood = when (voice.state) {
         VoiceState.LISTENING -> MascotMood.Listening
         VoiceState.UNDERSTANDING -> MascotMood.Thinking
         VoiceState.IDLE -> if (notice != null) MascotMood.Error else MascotMood.Idle
     }
-
-    Column(
-        Modifier.fillMaxSize().drawBehind {
-            val center = Offset(size.width / 2, size.height * GLOW_CENTER_Y)
-            // CSS "circle at": the gradient reaches the farthest corner.
-            val radius = hypot(maxOf(center.x, size.width - center.x), maxOf(center.y, size.height - center.y))
-            drawRect(
-                Brush.radialGradient(
-                    0f to ListeningGlow,
-                    GLOW_SHADE_STOP to ListeningShade,
-                    GLOW_NIGHT_STOP to Night,
-                    center = center,
-                    radius = radius,
-                )
-            )
-        }.padding(start = 24.dp, end = 24.dp, top = 12.dp, bottom = 32.dp),
-    ) {
-        TopAction(label = label, onBack = onClose)
-        Spacer(Modifier.weight(1f))
-        Text("Say it naturally", color = SpokenMuted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 15.dp))
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        StateLabel(listeningLabel(voice.state, heard))
         SpokenText(
             text = heard ?: notice ?: when (voice.state) {
                 VoiceState.UNDERSTANDING -> "One moment…"
@@ -159,7 +108,6 @@ internal fun ListeningLayer(
             },
             quoted = heard != null,
         )
-        Spacer(Modifier.height(65.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Box(Modifier.clip(CircleShape).clickable(onClick = voice::toggle)) {
                 NilaMascot(mood = mood, size = 72.dp)
@@ -167,13 +115,12 @@ internal fun ListeningLayer(
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 VoiceWave(active = voice.state == VoiceState.LISTENING)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val request = heard
-                    when {
-                        request != null -> Pill("Use this request") { onUseRequest(request) }
-                        voice.state == VoiceState.LISTENING -> Pill("Done", onClick = voice::toggle)
-                        voice.state == VoiceState.IDLE -> Pill("Try again", onClick = voice::toggle)
+                    if (heard != null) Pill("Use this request") { onUseRequest(heard) }
+                    when (voice.state) {
+                        VoiceState.LISTENING -> Pill("Done", onClick = voice::toggle)
+                        VoiceState.IDLE -> Pill("Try again", onClick = voice::toggle)
+                        VoiceState.UNDERSTANDING -> Unit
                     }
-                    Pill("Type instead", onClick = onTypeInstead)
                 }
             }
         }
@@ -196,8 +143,8 @@ private fun SpokenText(text: String, quoted: Boolean) {
         styled,
         color = Paper,
         fontFamily = FontFamily.Serif,
-        fontSize = 39.sp,
-        lineHeight = 40.sp,
+        fontSize = HeadlineSize,
+        lineHeight = HeadlineSize * SPOKEN_LINE_HEIGHT,
         letterSpacing = (-0.04).em,
     )
 }
@@ -248,18 +195,22 @@ private fun Pill(text: String, onClick: () -> Unit) {
 internal fun TopAction(label: String, onBack: () -> Unit, trailing: @Composable () -> Unit = {}) {
     Box(Modifier.fillMaxWidth().padding(top = 12.dp)) {
         RoundButton(LucideR.drawable.lucide_ic_chevron_left, "Back", onBack, Modifier.align(Alignment.CenterStart))
-        Text(
-            label,
-            color = LabelInk,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            fontSize = 10.sp,
-            letterSpacing = 0.15.em,
-            modifier = Modifier.align(Alignment.Center),
-        )
+        StateLabel(label, Modifier.align(Alignment.Center))
         Row(Modifier.align(Alignment.CenterEnd), horizontalArrangement = Arrangement.spacedBy(8.dp)) { trailing() }
     }
 }
+
+/** The small spaced-out monospace state label, e.g. "LISTENING". */
+@Composable
+private fun StateLabel(label: String, modifier: Modifier = Modifier) = Text(
+    label,
+    color = LabelInk,
+    fontFamily = FontFamily.Monospace,
+    fontWeight = FontWeight.Bold,
+    fontSize = 10.sp,
+    letterSpacing = 0.15.em,
+    modifier = modifier,
+)
 
 @Composable
 internal fun RoundButton(icon: Int, description: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
