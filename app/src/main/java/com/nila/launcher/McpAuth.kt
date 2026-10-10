@@ -168,24 +168,32 @@ internal class McpAuth(private val provider: McpProvider) {
         return Session(accessToken, expiresAt)
     }
 
+    /**
+     * Serves the loopback until a request carries the code. Chrome opens an empty "preconnect" socket before
+     * the real redirect: reading only the first connection waited on that silent socket forever while the
+     * redirect with the code sat unaccepted in the queue. Silent or code-less connections are answered and skipped.
+     */
     private suspend fun awaitCallback(server: ServerSocket, expectedState: String): String? =
         suspendCancellableCoroutine { cont ->
             cont.invokeOnCancellation { runCatching { server.close() } }
             Thread {
-                val code = runCatching {
-                    val socket = server.accept()
-                    val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
-                    val requestLine = reader.readLine() ?: ""
-                    val path = requestLine.split(" ").getOrNull(1) ?: ""
-                    val uri = Uri.parse("http://localhost$path")
-                    val response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n" +
-                        "<html><body>Signed in to NILA. You can close this tab.</body></html>"
-                    socket.getOutputStream().write(response.toByteArray())
-                    socket.getOutputStream().flush()
-                    socket.close()
-                    server.close()
-                    if (uri.getQueryParameter("state") == expectedState) uri.getQueryParameter("code") else null
-                }.getOrNull()
+                var code: String? = null
+                while (code == null && !server.isClosed) {
+                    val socket = runCatching { server.accept() }.getOrNull() ?: break
+                    code = runCatching {
+                        socket.soTimeout = SILENT_SOCKET_MS
+                        val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
+                        val path = reader.readLine()?.split(" ")?.getOrNull(1).orEmpty()
+                        val uri = Uri.parse("http://localhost$path")
+                        val found = uri.getQueryParameter("code")?.takeIf { uri.getQueryParameter("state") == expectedState }
+                        val body = if (found != null) "Signed in to NILA. You can close this tab." else "Waiting for sign-in…"
+                        socket.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n<html><body>$body</body></html>".toByteArray())
+                        socket.getOutputStream().flush()
+                        found
+                    }.getOrNull()
+                    runCatching { socket.close() }
+                }
+                runCatching { server.close() }
                 if (cont.isActive) cont.resume(code)
             }.start()
         }
@@ -241,6 +249,7 @@ internal class McpAuth(private val provider: McpProvider) {
 
     private companion object {
         const val LOGIN_WAIT_MS = 5 * 60_000L
+        const val SILENT_SOCKET_MS = 5_000
     }
 
     private fun randomUrlSafe(bytes: Int): String {
