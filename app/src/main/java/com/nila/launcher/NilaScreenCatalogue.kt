@@ -241,38 +241,24 @@ private fun SettingsScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit, onC
 @Composable
 private fun LanguagesScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("VOICE LANGUAGES", onOpen, onBack) {
     val context = LocalContext.current
-    var input by remember { mutableStateOf<Map<String, SpeechInputStatus>>(emptyMap()) }
     var output by remember { mutableStateOf<Map<String, SpeechOutputStatus>>(emptyMap()) }
     var checks by remember { mutableStateOf(0) }
     var message by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(checks) {
-        probeSpeechInput(context) { input = it }
-        probeSpeechOutput(context) { output = it }
-    }
+    LaunchedEffect(checks) { probeSpeechOutput(context) { output = it } }
 
     ScreenTitle("Speak in your\nlanguage.")
-    BodyText("NILA checks this phone's on-device speech packs. Typing works in every language, even when a pack is missing.")
+    BodyText("Gemma 4 E2B listens to every language on this phone, with nothing sent online. Pick the language on the chip next to the mic. Typing always works too.")
     voiceLanguages.forEach { language ->
-        val support = LanguageSupport(
-            language,
-            input[language.tag] ?: SpeechInputStatus.UNKNOWN,
-            output[language.tag] ?: SpeechOutputStatus.UNKNOWN,
-        )
-        val checked = language.tag in input && language.tag in output
+        val speaking = output[language.tag]
         SectionCard(
             title = language.name,
-            detail = "Listening: ${support.input.label}\nSpeaking: ${support.output.label}",
-            status = when {
-                !checked -> "CHECKING…"
-                support.voiceReady -> "VOICE READY · OFFLINE"
-                else -> "TEXT ONLY FOR NOW"
+            detail = "Listening: Gemma 4 E2B on this phone\nSpeaking:${(speaking ?: SpeechOutputStatus.UNKNOWN).label}",
+            status = when (speaking) {
+                null -> "CHECKING…"
+                SpeechOutputStatus.OFFLINE -> "LISTENS AND SPEAKS · OFFLINE"
+                else -> "LISTENS · REPLIES IN TEXT"
             },
         )
-        if (support.input == SpeechInputStatus.DOWNLOADABLE) {
-            SecondaryButton("Download ${language.name} speech pack") {
-                message = if (downloadSpeechInput(context, language.tag)) "Download requested. Tap Check again in a minute." else "This phone cannot download that pack from here."
-            }
-        }
     }
     if (output.values.any { it == SpeechOutputStatus.NEEDS_DOWNLOAD || it == SpeechOutputStatus.UNAVAILABLE }) {
         SecondaryButton("Install speaking voices") {

@@ -151,6 +151,9 @@ internal val Orange = Color(0xFFE84619)
 private fun NilaApp(resumeVersion: Int) {
     val context = LocalContext.current
     val engine = remember { NilaEngine() }
+    // Gemma 4 E2B and FunctionGemma load in the background; until then NILA answers with its rules.
+    val brain = remember { NilaBrain(context.applicationContext, engine) }
+    LaunchedEffect(brain) { brain.load() }
     val turns = remember { mutableStateListOf<Turn>() }
     var input by remember { mutableStateOf("") }
     val installedApps = remember(context, resumeVersion) { loadInstalledApps(context) }
@@ -358,7 +361,7 @@ private fun NilaApp(resumeVersion: Int) {
             val response = if (prompt.lowercase().contains("what do you remember")) {
                 NilaResponse.Text(memory.getString("fact", null)?.let { "You asked me to remember: $it" } ?: "You have not asked me to remember anything yet.")
             } else {
-                engine.respond(prompt)
+                brain.respond(prompt)
             }
             if (response is NilaResponse.Remember) {
                 memory.edit().putString("fact", response.fact).apply()
@@ -446,6 +449,8 @@ private fun NilaApp(resumeVersion: Int) {
                                 turns = turns,
                                 input = input,
                                 isThinking = isThinking,
+                                modelStatus = "Gemma 4 E2B ${brain.assistantState.label} · FunctionGemma ${brain.routerState.label}",
+                                transcribe = brain::transcribe,
                                 onInput = { input = it },
                                 onSubmit = ::submit,
                                 context = context,
@@ -505,6 +510,8 @@ private fun AgentSpace(
     turns: List<Turn>,
     input: String,
     isThinking: Boolean,
+    modelStatus: String,
+    transcribe: suspend (wav: ByteArray, languageName: String) -> String?,
     onInput: (String) -> Unit,
     onSubmit: (String) -> Unit,
     context: Context,
@@ -541,7 +548,10 @@ private fun AgentSpace(
         Modifier.fillMaxSize().background(Ink).padding(horizontal = 18.dp, vertical = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("NILA", color = Lime, fontWeight = FontWeight.Bold, letterSpacing = 2.sp, modifier = Modifier.weight(1f))
+            Column(Modifier.weight(1f)) {
+                Text("NILA", color = Lime, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                Text(modelStatus, color = Muted, fontSize = 11.sp)
+            }
             NilaMascot(mood = mood, size = 36.dp)
         }
         LazyColumn(
@@ -586,7 +596,7 @@ private fun AgentSpace(
                     )
                 }
                 VoiceMic(
-                    onPartial = onInput,
+                    transcribe = transcribe,
                     onFinal = onSubmit,
                     onMessage = { addTurn("Voice", NilaResponse.Text(it)) },
                 )

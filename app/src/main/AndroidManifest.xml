@@ -10,10 +10,7 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
-        <!-- Lets NILA see the speech recognition and text-to-speech services on Android 11+. -->
-        <intent>
-            <action android:name="android.speech.RecognitionService" />
-        </intent>
+        <!-- Lets NILA see the text-to-speech services on Android 11+. -->
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
@@ -24,6 +21,9 @@
         android:label="NILA"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
+        <!-- GPU inference for Gemma through LiteRT-LM; CPU is used when these are absent. -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

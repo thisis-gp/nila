@@ -36,6 +36,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.12.0")
     implementation("androidx.security:security-crypto:1.1.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.17.1")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("com.composables:icons-lucide-android:2.2.1")
