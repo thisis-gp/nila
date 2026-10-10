@@ -47,9 +47,10 @@ internal fun NilaScreenCatalogue(
     screen: NilaScreen,
     onOpen: (NilaScreen) -> Unit,
     onBack: () -> Unit,
-    rememberedFact: String?,
+    facts: List<MemoryFact>,
     onChooseDefaultHome: () -> Unit,
-    onForgetMemory: () -> Unit,
+    onForgetFact: (String) -> Unit,
+    onForgetAll: () -> Unit,
     accounts: List<ServiceAccount>,
 ) {
     when (screen) {
@@ -62,7 +63,7 @@ internal fun NilaScreenCatalogue(
         NilaScreen.PreparedOrder -> PreparedOrderScreen(onOpen, onBack)
         NilaScreen.ActionResult -> ActionResultScreen(onOpen)
         NilaScreen.People -> PeopleScreen(onOpen, onBack)
-        NilaScreen.Memory -> MemoryScreen(onOpen, onBack, rememberedFact, onForgetMemory)
+        NilaScreen.Memory -> MemoryScreen(onOpen, onBack, facts, onForgetFact, onForgetAll)
         NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
         NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, accounts)
@@ -183,16 +184,23 @@ private fun PeopleScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Pag
 private fun MemoryScreen(
     onOpen: (NilaScreen) -> Unit,
     onBack: () -> Unit,
-    rememberedFact: String?,
-    onForgetMemory: () -> Unit,
+    facts: List<MemoryFact>,
+    onForgetFact: (String) -> Unit,
+    onForgetAll: () -> Unit,
 ) = Page("MEMORY · ON DEVICE", onOpen, onBack) {
     ScreenTitle("What NILA\nremembers.")
     BodyText("Saved facts stay on this device and can be removed here.")
-    if (rememberedFact == null) {
+    if (facts.isEmpty()) {
         SectionCard("No saved memories", "Tell NILA ‘remember …’ to save a fact.", "EMPTY")
     } else {
-        SectionCard(rememberedFact, "Stored in this app on this device.", "YOU ASKED NILA TO REMEMBER")
-        SecondaryButton("Forget this") { onForgetMemory() }
+        facts.forEach { fact ->
+            NilaCard {
+                SectionLabel(fact.kind.label.uppercase(), color = Lime)
+                Text(fact.text, color = Paper, fontWeight = FontWeight.Bold)
+                TextAction("Forget", onClick = { onForgetFact(fact.id) })
+            }
+        }
+        SecondaryButton("Forget everything") { onForgetAll() }
     }
     SecondaryButton("Back to chat") { onOpen(NilaScreen.Home) }
 }
@@ -204,7 +212,7 @@ private fun CapabilitiesScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit)
     SectionCard("Calculator", "Deterministic · offline", "AVAILABLE")
     SectionCard("Alarms", "Android intent", "AVAILABLE")
     SectionCard("App redirects", "Installed app or browser fallback", "AVAILABLE")
-    SectionCard("Memory", "One local typed fact", "DEMO")
+    SectionCard("Memory", "Typed facts on this device, used by chat and food", "AVAILABLE")
     SectionCard("Food", "Hard-coded comparison", "MOCK PROVIDER")
     SectionCard("Messages & routes", "Catalogue preview only", "MOCK")
 }
@@ -249,7 +257,7 @@ private fun SettingsScreen(
     }
     SectionLabel("Voice, memory and consent", Modifier.padding(top = 8.dp))
     SectionCard("Lakshmi voice", "Android on-device voice candidate", "NOT CONNECTED")
-    SectionCard("Memory", "Typed demo fact stays in app storage", "LOCAL")
+    SectionCard("Memory", "Typed facts stay in app storage", "LOCAL")
     SectionCard("Commit actions", "Pay, send, book, delete or share", "ALWAYS CONFIRM")
     PrimaryButton("Permission centre") { onOpen(NilaScreen.Permissions) }
     SectionLabel("More", Modifier.padding(top = 8.dp))

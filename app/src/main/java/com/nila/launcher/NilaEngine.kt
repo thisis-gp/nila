@@ -71,7 +71,7 @@ sealed interface NilaResponse {
     /** Like GroupedChoices, but each item is a quantity stepper (search results, cart contents) instead of a single tap. */
     data class ProductGroupChoices(val intro: String, val groups: List<ProductProviderGroup>) : NilaResponse
     data class Confirmation(val title: String, val detail: String, val price: String) : NilaResponse
-    data class Remember(val fact: String) : NilaResponse
+    data class Remember(val fact: String, val kind: MemoryKind = MemoryKind.Other) : NilaResponse
     /** One step of the live Swiggy order flow, rendered by FoodCards.kt. */
     data class Food(val card: FoodCard) : NilaResponse
     /** The router chose search_food. The launcher starts the live Swiggy flow, or shows the labelled mock if Swiggy isn't connected. */
@@ -152,7 +152,17 @@ class NilaEngine(
         CapabilityDescriptor(
             id = "remember_fact",
             description = "Store a fact the user explicitly asked NILA to remember",
-            params = listOf(Param("fact", ParamType.STRING)),
+            params = listOf(
+                Param("fact", ParamType.STRING),
+                Param(
+                    "kind",
+                    ParamType.STRING,
+                    required = false,
+                    label = "What the fact is about, one of: ${MemoryKind.entries.joinToString { it.name }}. " +
+                        "Preference is something they like, Diet is how they eat, Allergy is what they must avoid, " +
+                        "Routine is a habit or schedule, Place is a location, Other is anything else.",
+                ),
+            ),
             permission = PermissionClass.PREPARE,
         ),
         CapabilityDescriptor(
@@ -383,7 +393,7 @@ class NilaEngine(
                 ?: NilaResponse.Text("That alarm time is not valid.")
             "open_app" -> apps[args["app"]]?.let { NilaResponse.OpenApp(it.first, it.second, it.third) }
                 ?: NilaResponse.Text("I can't open that app.")
-            "remember_fact" -> NilaResponse.Remember(args["fact"] as String)
+            "remember_fact" -> NilaResponse.Remember(args["fact"] as String, MemoryKind.from(args["kind"] as? String))
             "search_food" -> NilaResponse.FoodSearch(
                 query = args["query"] as String,
                 // "chicken" for "chicken biryani" repeats the dish; only a word the dish doesn't already say is a preference.
