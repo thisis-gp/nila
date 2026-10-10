@@ -34,6 +34,7 @@ dependencies {
     androidTestImplementation(composeBom)
 
     implementation("androidx.activity:activity-compose:1.12.0")
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.17.1")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("com.composables:icons-lucide-android:2.2.1")

@@ -47,6 +47,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -101,6 +102,11 @@ internal val Orange = Color(0xFFE84619)
 private fun NilaApp(resumeVersion: Int) {
     val context = LocalContext.current
     val engine = remember { NilaEngine() }
+    // Gemma 4 E2B and FunctionGemma load in the background; until then NILA answers with its rules.
+    val brain = remember { NilaBrain(context.applicationContext, engine) }
+    LaunchedEffect(brain) { brain.load() }
+    // Free both native models when this screen goes away, so recreating it never leaves old engines open.
+    DisposableEffect(brain) { onDispose { brain.close() } }
     val turns = remember { mutableStateListOf<Turn>() }
     var input by remember { mutableStateOf("") }
     val installedApps = remember(context, resumeVersion) { loadInstalledApps(context) }
@@ -151,7 +157,7 @@ private fun NilaApp(resumeVersion: Int) {
             val response = if (prompt.lowercase().contains("what do you remember")) {
                 NilaResponse.Text(memory.getString("fact", null)?.let { "You asked me to remember: $it" } ?: "You have not asked me to remember anything yet.")
             } else {
-                engine.respond(prompt)
+                brain.respond(prompt)
             }
             if (response is NilaResponse.Remember) {
                 memory.edit().putString("fact", response.fact).apply()
@@ -239,6 +245,8 @@ private fun NilaApp(resumeVersion: Int) {
                                 turns = turns,
                                 input = input,
                                 isThinking = isThinking,
+                                modelStatus = "Gemma 4 E2B ${brain.assistantState.label} · FunctionGemma ${brain.routerState.label}",
+                                transcribe = brain::transcribe,
                                 onInput = { input = it },
                                 onSubmit = ::submit,
                                 context = context,
@@ -298,6 +306,8 @@ private fun AgentSpace(
     turns: List<Turn>,
     input: String,
     isThinking: Boolean,
+    modelStatus: String,
+    transcribe: suspend (wav: ByteArray, languageName: String) -> String?,
     onInput: (String) -> Unit,
     onSubmit: (String) -> Unit,
     context: Context,
@@ -334,7 +344,10 @@ private fun AgentSpace(
         Modifier.fillMaxSize().background(Ink).padding(horizontal = 18.dp, vertical = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("NILA", color = Lime, fontWeight = FontWeight.Bold, letterSpacing = 2.sp, modifier = Modifier.weight(1f))
+            Column(Modifier.weight(1f)) {
+                Text("NILA", color = Lime, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                Text(modelStatus, color = Muted, fontSize = 11.sp)
+            }
             NilaMascot(mood = mood, size = 36.dp)
         }
         LazyColumn(
@@ -378,6 +391,11 @@ private fun AgentSpace(
                         keyboardActions = KeyboardActions(onDone = { onSubmit(input) }),
                     )
                 }
+                VoiceMic(
+                    transcribe = transcribe,
+                    onFinal = onSubmit,
+                    onMessage = { addTurn("Voice", NilaResponse.Text(it)) },
+                )
                 IconButton(onClick = { onSubmit(input) }) {
                     Icon(painterResource(LucideR.drawable.lucide_ic_send), contentDescription = "Send", tint = Lime)
                 }
