@@ -159,7 +159,8 @@ jobs:
               body = `${marker}\n## NILA review — findings\n\n${review.findings.map(f => `- **${f.severity}** \`${f.file}:${f.line}\` — ${f.finding} Fix: ${f.fix}`).join('\n')}`;
             } else {
               const checks = await github.paginate(github.rest.checks.listForRef, { owner, repo, ref: pr.head.sha, per_page: 100 });
-              const relevant = checks.filter(check => !['review', 'publish'].includes(check.name));
+              const { data: reviewRun } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: context.runId });
+              const relevant = checks.filter(check => check.check_suite.id !== reviewRun.check_suite_id);
               const workflows = await github.paginate(github.rest.actions.listRepoWorkflows, { owner, repo, per_page: 100 });
               const androidWorkflow = workflows.find(workflow => workflow.path === '.github/workflows/android.yml');
               const { data: androidRuns } = androidWorkflow
