@@ -111,8 +111,9 @@ private fun wholeNumber(value: Any): Long? = when (value) {
  * it told a user "set an alarm for 1:30" was done when no alarm existed.
  */
 fun claimsAction(reply: String): Boolean = Regex(
-    """(?i)\b(i'?ve|i have|i just|i went ahead|has been|have been|successfully|done)\b[^.!?]*\b(set|created|scheduled|ordered|placed|sent|booked|paid|called|turned on)\b""" +
-        """|(?i)\b(alarm|order|message|booking|reminder)\b[^.!?]*\b(is|has been) (now )?(set|placed|sent|confirmed|scheduled)\b""" +
+    """(?i)\b(i'?ve|i have|i just|i went ahead|i'?m|i am|has been|have been|successfully|done)\b[^.!?]*""" +
+        """\b(set|created|scheduled|ordered|placed|sent|booked|paid|called|turn(?:ed|ing)? ?(?:on|off)|switch(?:ed|ing)? ?(?:on|off))\b""" +
+        """|(?i)\b(alarm|order|message|booking|reminder|flashlight|torch)\b[^.!?]*\b(is|has been) (now )?(set|placed|sent|confirmed|scheduled|on|off)\b""" +
         """|(?i)^\s*(alarm|reminder) (set|scheduled)\b""",
 ).containsMatchIn(reply)
 
