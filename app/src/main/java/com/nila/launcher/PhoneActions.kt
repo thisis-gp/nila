@@ -44,8 +44,8 @@ fun timerSeconds(text: String): Int? {
 /** "off", "disable" or "stop" anywhere means off; otherwise on. */
 fun torchOn(text: String) = !Regex("""\b(off|disable|stop|switch off|turn off)\b""").containsMatchIn(text.lowercase())
 
-/** True when the user asked for a video rather than a photo. */
-fun wantsVideo(text: String) = Regex("""\b(video|record)\b""").containsMatchIn(text.lowercase())
+/** True when the user asked for a video rather than a photo. A voice note is recorded as a video too. */
+fun wantsVideo(text: String) = Regex("""\b(video|record|voice note|voice recording|voice memo)\b""").containsMatchIn(text.lowercase())
 
 /** "take a selfie" or "front camera": the camera should open facing the user. */
 fun wantsFront(text: String) = Regex("""\b(selfie|front camera|front-facing)\b""").containsMatchIn(text.lowercase())

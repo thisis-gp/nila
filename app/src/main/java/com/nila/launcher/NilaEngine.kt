@@ -342,7 +342,8 @@ class NilaEngine(
         timerControl(input)?.let { return NilaIntent.Call(ToolCall("timer_control", mapOf("action" to it))) }
         if (Regex("""\btimer\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("set_timer", timerArgs(input).orEmpty()))
         if (Regex("""\b(flash ?light|torch)\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("flashlight", mapOf("on" to torchOn(input))))
-        if (Regex("""\b(camera|selfie)\b|\btake an? (photo|picture|pic)\b|\brecord an? video\b""").containsMatchIn(normalized)) {
+        // Voice is recorded on the video camera, not a voice recorder app: "record my voice", "voice note".
+        if (Regex("""\b(camera|selfie)\b|\btake an? (photo|picture|pic)\b|\brecord an? video\b|\brecord\b.*\b(voice|audio|sound)\b|\bvoice (note|recording|memo)\b""").containsMatchIn(normalized)) {
             return NilaIntent.Call(ToolCall("open_camera", mapOf("video" to wantsVideo(input), "front" to wantsFront(input))))
         }
         if (Regex("""^\s*(please\s+)?((take|make|add|write|save|create)\s+(a\s+)?note|note\s+down)\b""").containsMatchIn(normalized)) {
