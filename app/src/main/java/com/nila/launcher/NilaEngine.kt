@@ -229,7 +229,7 @@ class NilaEngine(
             permission = PermissionClass.PREPARE,
             label = "Call",
         ),
-    ).plus(extraCapabilities).associateBy { it.id }
+    ).plus(moreCapabilities).plus(extraCapabilities).associateBy { it.id }
 
     /** Timer length read from the user's words, so the model never decides the duration. */
     fun timerArgs(input: String): Map<String, Any>? = timerSeconds(input)?.let { mapOf("seconds" to it) }
@@ -322,6 +322,7 @@ class NilaEngine(
             return NilaIntent.Call(ToolCall("add_note", noteText(input)?.let { mapOf("text" to it) }.orEmpty()))
         }
         callTarget(input)?.let { return NilaIntent.Call(ToolCall("call_contact", mapOf("who" to it))) }
+        moreActionCall(input)?.let { return NilaIntent.Call(it) }
         if (Regex("""\b(event|meeting|appointment|calendar)\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("create_event", eventArgs(input)))
 
         // The router only extracts what was said; run() converts and validates the time.
@@ -343,6 +344,7 @@ class NilaEngine(
         apps.keys.firstOrNull(normalized::contains)?.let { app ->
             return NilaIntent.Call(ToolCall("open_app", mapOf("app" to app)))
         }
+        appToOpen(input)?.let { return NilaIntent.Call(ToolCall("launch_app", mapOf("name" to it))) }
 
         // Food and directions have no keyword rule: FunctionGemma reads the intent and
         // extracts the dish or place, so "I'm starving" works as well as "find biryani".
@@ -409,7 +411,7 @@ class NilaEngine(
                 if (hour != null && time == null) NilaResponse.Text("That event time is not valid.")
                 else CalendarEvent(args["title"] as String, eventDate(args["day"] as String? ?: "", today()), time)
             }
-            else -> NilaResponse.Text("I can't do that yet. Nothing was done.")
+            else -> moreRun(call) ?: NilaResponse.Text("I can't do that yet. Nothing was done.")
         }
     }
 

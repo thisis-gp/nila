@@ -335,6 +335,7 @@ private fun NilaApp(resumeVersion: Int) {
     // silently picks a saved address for that (no address UI shown — only "go to cart" -> proceed
     // asks). The resolved client+store is then reused for every later "buy" in this session.
     var activeZeptoSession by remember { mutableStateOf<ActiveZeptoSession?>(null) }
+    val tavilyAuth = remember { TavilyAuth(context) }
 
     /**
      * Groceries: Zepto and Swiggy Instamart side by side. Reached when the router picks search_groceries;
@@ -394,6 +395,54 @@ private fun NilaApp(resumeVersion: Int) {
 
     fun submit(prompt: String = input) {
         if (prompt.isBlank() || isThinking) return
+        if (prompt.trim().startsWith("tvly-")) {
+            // Never render the raw key: it would sit in the chat scrollback (and any screenshot) for
+            // the rest of the session. Only the redacted turn and a generic status reach the UI.
+            tavilyAuth.apiKey = prompt.trim()
+            turns += Turn("Web search key", NilaResponse.Text("Web search connected. Try \"search for <something>\"."))
+            input = ""
+            return
+        }
+        if (prompt.lowercase().contains("connect web search")) {
+            turns += Turn(
+                prompt,
+                NilaResponse.Text(
+                    "Get a free key at tavily.com (sign up, no card needed), copy the key starting with \"tvly-\", and paste it here as your next message.",
+                ),
+            )
+            input = ""
+            return
+        }
+        extractWebSearchQuery(prompt)?.let { query ->
+            input = ""
+            if (!tavilyAuth.isConnected) {
+                turns += Turn(prompt, NilaResponse.Text("Web search isn't connected yet. Say \"connect web search\" to set it up."))
+                return
+            }
+            turns += Turn(prompt, NilaResponse.Text("Searching the web for \"$query\"..."))
+            scope.launch(Dispatchers.IO) {
+                val outcome = runCatching { TavilySearch.search(tavilyAuth.apiKey!!, query) }
+                withContext(Dispatchers.Main) {
+                    outcome.fold(
+                        onSuccess = { answer ->
+                            answer.summary?.let { turns += Turn("Web search", NilaResponse.Text(it)) }
+                            if (answer.items.isEmpty()) {
+                                if (answer.summary == null) turns += Turn("Web search", NilaResponse.Text("No results for \"$query\"."))
+                            } else {
+                                val choices = answer.items.map { result ->
+                                    AsyncChoice(result.title, result.snippet.take(140), "", "") {
+                                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result.url))) }
+                                    }
+                                }
+                                turns += Turn("Web search", NilaResponse.AsyncChoices("Sources:", choices))
+                            }
+                        },
+                        onFailure = { turns += Turn("Web search", NilaResponse.Text("Web search error: ${it.message}")) },
+                    )
+                }
+            }
+            return
+        }
         if (prompt.lowercase().contains("connect zepto")) {
             turns += Turn(prompt, NilaResponse.Text("Opening Zepto login in your browser. Sign in and come back to NILA."))
             input = ""
@@ -1040,7 +1089,9 @@ private fun ResponseView(
         // Only reached if a dismissal was not confirmed through the card; it is never sent without confirmation.
         is NilaResponse.DismissAlarm -> AnswerCard("This alarm was not turned off.")
         // Torch, Camera and Note are done in performNow before they reach the chat.
-        is Torch, is Camera, is Note -> AnswerCard("Done.")
+        is Torch, is Camera, is Note, is Directions, is MapSearch, is WebSearch, is PlayMusic, is MediaKey, is SoundChange,
+        is SettingsPage, is LaunchApp, ShowAlarms, BatteryLevel -> AnswerCard("Done.")
+        is Message -> MessageCard(response, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is Timer -> ActionCard(
             label = "Timer",
             title = "%d:%02d".format(response.seconds / 60, response.seconds % 60),
@@ -1371,7 +1422,101 @@ private fun performNow(context: Context, response: NilaResponse): NilaResponse =
         context.startActivity(Intent(action))
     }.fold({ NilaResponse.Text(if (response.video) "Opening the camera for video." else "Opening the camera.") }, { NilaResponse.Text("No camera app is available.") })
     is Note -> NilaResponse.Text(saveNote(context, response.text))
+    is Directions -> openUri(context, "google.navigation:q=" + Uri.encode(response.place), "Opening directions to ${response.place}.", "No maps app is available.")
+    is MapSearch -> openUri(context, "geo:0,0?q=" + Uri.encode(response.query), "Showing ${response.query} nearby in Maps.", "No maps app is available.")
+    is WebSearch -> start(context, Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, response.query), "Searching the web for ${response.query}.", "No browser is available.")
+    is PlayMusic -> if (response.query == null) NilaResponse.Text(pressMediaKey(context, "play")) else start(
+        context,
+        Intent(android.provider.MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
+            .putExtra(android.app.SearchManager.QUERY, response.query)
+            .putExtra(android.provider.MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*"),
+        "Playing ${response.query}.",
+        "No music app can play that.",
+    )
+    is MediaKey -> NilaResponse.Text(pressMediaKey(context, response.action))
+    is SoundChange -> NilaResponse.Text(changeSound(context, response.action))
+    is SettingsPage -> start(context, Intent(settingsAction(response.page)), "Opening ${if (response.page == "main") "" else response.page + " "}settings.", "That settings page isn't available.")
+    is LaunchApp -> NilaResponse.Text(launchByName(context, response.name))
+    ShowAlarms -> start(context, Intent(AlarmClock.ACTION_SHOW_ALARMS), "Opening your alarms.", "No clock app is available.")
+    BatteryLevel -> NilaResponse.Text(batteryStatus(context))
     else -> response
+}
+
+private fun start(context: Context, intent: Intent, done: String, failed: String): NilaResponse.Text =
+    NilaResponse.Text(runCatching { context.startActivity(intent) }.fold({ done }, { failed }))
+
+private fun openUri(context: Context, uri: String, done: String, failed: String) = start(context, Intent(Intent.ACTION_VIEW, Uri.parse(uri)), done, failed)
+
+private fun pressMediaKey(context: Context, action: String): String {
+    val code = when (action) {
+        "pause" -> android.view.KeyEvent.KEYCODE_MEDIA_PAUSE
+        "next" -> android.view.KeyEvent.KEYCODE_MEDIA_NEXT
+        "previous" -> android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS
+        else -> android.view.KeyEvent.KEYCODE_MEDIA_PLAY
+    }
+    val audio = context.getSystemService(android.media.AudioManager::class.java)
+    audio.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, code))
+    audio.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, code))
+    return when (action) {
+        "pause" -> "Paused."
+        "next" -> "Skipped to the next song."
+        "previous" -> "Back to the previous song."
+        else -> "Playing."
+    }
+}
+
+private fun changeSound(context: Context, action: String): String = runCatching {
+    val audio = context.getSystemService(android.media.AudioManager::class.java)
+    val stream = android.media.AudioManager.STREAM_MUSIC
+    when (action) {
+        "up" -> audio.adjustStreamVolume(stream, android.media.AudioManager.ADJUST_RAISE, android.media.AudioManager.FLAG_SHOW_UI).let { "Volume up." }
+        "down" -> audio.adjustStreamVolume(stream, android.media.AudioManager.ADJUST_LOWER, android.media.AudioManager.FLAG_SHOW_UI).let { "Volume down." }
+        "mute" -> audio.adjustStreamVolume(stream, android.media.AudioManager.ADJUST_MUTE, android.media.AudioManager.FLAG_SHOW_UI).let { "Media muted." }
+        "vibrate" -> { audio.ringerMode = android.media.AudioManager.RINGER_MODE_VIBRATE; "Phone is on vibrate." }
+        "silent" -> { audio.ringerMode = android.media.AudioManager.RINGER_MODE_SILENT; "Phone is on silent." }
+        else -> {
+            audio.ringerMode = android.media.AudioManager.RINGER_MODE_NORMAL
+            audio.adjustStreamVolume(stream, android.media.AudioManager.ADJUST_UNMUTE, 0)
+            "Sound is back on."
+        }
+    }
+}.getOrElse {
+    // Android blocks silent mode for apps without Do Not Disturb access; send the user to grant it.
+    runCatching { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)) }
+    "Android needs you to allow NILA Do Not Disturb access for that. I opened the setting."
+}
+
+private fun settingsAction(page: String) = when (page) {
+    "wifi" -> Settings.ACTION_WIFI_SETTINGS
+    "bluetooth" -> Settings.ACTION_BLUETOOTH_SETTINGS
+    "battery" -> Intent.ACTION_POWER_USAGE_SUMMARY
+    "display" -> Settings.ACTION_DISPLAY_SETTINGS
+    "sound" -> Settings.ACTION_SOUND_SETTINGS
+    "location" -> Settings.ACTION_LOCATION_SOURCE_SETTINGS
+    "airplane" -> Settings.ACTION_AIRPLANE_MODE_SETTINGS
+    // No public constant for the main notifications page; this action is what Settings itself uses.
+    "notifications" -> "android.settings.NOTIFICATION_SETTINGS"
+    "storage" -> Settings.ACTION_INTERNAL_STORAGE_SETTINGS
+    "apps" -> Settings.ACTION_APPLICATION_SETTINGS
+    else -> Settings.ACTION_SETTINGS
+}
+
+/** Opens the installed app whose name best matches: exact label first, then a label containing the words. */
+private fun launchByName(context: Context, name: String): String {
+    val wanted = name.lowercase().trim()
+    val apps = context.packageManager.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+        .map { it.loadLabel(context.packageManager).toString() to it.activityInfo.packageName }
+        .filter { it.second != context.packageName }
+    val match = apps.firstOrNull { it.first.lowercase() == wanted } ?: apps.firstOrNull { it.first.lowercase().contains(wanted) }
+        ?: return "I couldn't find an app called $name on this phone."
+    val launch = context.packageManager.getLaunchIntentForPackage(match.second) ?: return "${match.first} can't be opened."
+    return runCatching { context.startActivity(launch) }.fold({ "Opening ${match.first}." }, { "${match.first} can't be opened." })
+}
+
+private fun batteryStatus(context: Context): String {
+    val battery = context.getSystemService(android.os.BatteryManager::class.java)
+    val level = battery.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+    return "Battery is at $level%" + if (battery.isCharging) " and charging." else "."
 }
 
 private fun setTorch(context: Context, on: Boolean): String = runCatching {
@@ -1433,6 +1578,34 @@ private fun findContact(context: Context, name: String): Pair<String, String>? {
     val numberColumn = android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER
     return context.contentResolver.query(uri, arrayOf(nameColumn, numberColumn), "$nameColumn LIKE ?", arrayOf("%$name%"), null)?.use { cursor ->
         if (cursor.moveToFirst()) cursor.getString(0) to cursor.getString(1) else null
+    }
+}
+
+/** Shows who gets which words and opens Messages with them filled in; the user presses Send there. */
+@Composable
+private fun MessageCard(message: Message, context: Context, report: (String) -> Unit) {
+    fun compose(number: String) {
+        val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Uri.encode(number))).putExtra("sms_body", message.body)
+        runCatching { context.startActivity(intent) }.onFailure { report("No messaging app is available.") }
+    }
+    fun composeForContact() {
+        val found = findContact(context, message.who)
+        if (found == null) report("I couldn't find \"${message.who}\" in your contacts.") else {
+            report("Opening Messages to ${found.first}. Press Send when it looks right.")
+            compose(found.second)
+        }
+    }
+    val askContacts = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (granted) composeForContact() else report("NILA needs contacts access to find ${message.who}. You can say the number instead.") }
+    ActionCard(label = "MESSAGE", title = "Message ${message.who}", detail = "\"${message.body}\"\nOpens Messages with this filled in. You press Send.", action = "Write") {
+        val number = phoneNumber(message.who)
+        when {
+            number != null -> compose(number)
+            androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_CONTACTS) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED -> composeForContact()
+            else -> askContacts.launch(android.Manifest.permission.READ_CONTACTS)
+        }
     }
 }
 
