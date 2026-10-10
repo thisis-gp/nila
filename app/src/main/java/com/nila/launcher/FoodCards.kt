@@ -101,7 +101,7 @@ internal fun FoodCardView(card: FoodCard, actions: FoodActions) {
 }
 
 @Composable
-private fun BackLink(label: String, onBack: () -> Unit) {
+internal fun BackLink(label: String, onBack: () -> Unit) {
     Text(
         "‹ $label",
         color = Lime,
@@ -112,14 +112,14 @@ private fun BackLink(label: String, onBack: () -> Unit) {
 }
 
 @Composable
-private fun StepHeader(step: Int, title: String) {
-    SourceLabel("Swiggy · live")
+internal fun StepHeader(step: Int, title: String, source: String = "Swiggy · live") {
+    SourceLabel(source)
     Spacer(Modifier.height(4.dp))
     Text(title, color = Paper, fontSize = 26.sp, fontFamily = FontFamily.Serif, lineHeight = 30.sp)
 }
 
 @Composable
-private fun FoodImage(url: String?, modifier: Modifier) {
+internal fun FoodImage(url: String?, modifier: Modifier) {
     if (url == null) {
         Box(modifier.background(Panel), contentAlignment = Alignment.Center) {
             Text("🍽", fontSize = 22.sp)
@@ -292,7 +292,7 @@ private fun HereCard(
 }
 
 @Composable
-private fun AddressRow(address: FoodAddress, onPick: () -> Unit) {
+internal fun AddressRow(address: FoodAddress, onPick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onPick).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
