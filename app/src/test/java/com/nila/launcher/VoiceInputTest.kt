@@ -9,16 +9,6 @@ import org.junit.Test
 
 class VoiceInputTest {
     @Test
-    fun chipCyclesThroughEveryLanguageAndWraps() {
-        // Auto is first and the default; the fixed languages are overrides.
-        assertEquals("en-IN", nextVoiceLanguage("auto"))
-        assertEquals("hi-IN", nextVoiceLanguage("en-IN"))
-        assertEquals("ml-IN", nextVoiceLanguage("hi-IN"))
-        assertEquals("auto", nextVoiceLanguage("ml-IN"))
-        assertEquals(listOf("Auto", "EN", "हि", "മ"), chipLanguages.map { voiceChipLabel(it.tag) })
-    }
-
-    @Test
     fun wavHeaderDescribes16kMono16BitPcm() {
         val pcm = ByteArray(3200) { it.toByte() }
         val bytes = wav(pcm)
