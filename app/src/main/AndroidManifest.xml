@@ -3,6 +3,7 @@
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- Voice input. Requested only when the user taps the mic. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
@@ -45,11 +46,15 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
-            <!-- Keeps NILA running while a sign-in tab is open: the cached-app freezer otherwise froze the loopback. -->
+        <!-- Keeps the user-initiated OAuth callback alive while the browser sign-in is open. -->
         <service
             android:name=".SignInKeepAlive"
             android:exported="false"
-            android:foregroundServiceType="shortService" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keep the user-initiated OAuth callback alive while browser sign-in is open." />
+        </service>
     </application>
 </manifest>
 
