@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -227,7 +228,8 @@ private fun HealthForm(health: HealthStore, draft: HealthPrompt, onDone: (Health
     }
 
     SectionLabel("What is it")
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+    // Five kinds don't fit one phone row: the row scrolls instead of cutting "Note" off (seen on the iQOO 15).
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
         HealthKind.entries.forEach { k -> Chip(k.label.substringBefore(" "), k == kind) { kind = k } }
     }
     OutlinedTextField(
