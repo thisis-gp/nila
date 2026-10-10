@@ -240,6 +240,13 @@ class NilaEngine(
             label = "Camera",
         ),
         CapabilityDescriptor(
+            id = "record_audio",
+            description = "Open the phone's voice recorder to record the user's voice or a voice note.",
+            params = emptyList(),
+            permission = PermissionClass.READ,
+            label = "Voice recorder",
+        ),
+        CapabilityDescriptor(
             id = "call_contact",
             description = "Call a person by name or a phone number. NILA opens the dialer; the user presses call.",
             params = listOf(Param("who", ParamType.STRING)),
@@ -342,8 +349,11 @@ class NilaEngine(
         timerControl(input)?.let { return NilaIntent.Call(ToolCall("timer_control", mapOf("action" to it))) }
         if (Regex("""\btimer\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("set_timer", timerArgs(input).orEmpty()))
         if (Regex("""\b(flash ?light|torch)\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("flashlight", mapOf("on" to torchOn(input))))
-        // Voice is recorded on the video camera, not a voice recorder app: "record my voice", "voice note".
-        if (Regex("""\b(camera|selfie)\b|\btake an? (photo|picture|pic)\b|\brecord an? video\b|\brecord\b.*\b(voice|audio|sound)\b|\bvoice (note|recording|memo)\b""").containsMatchIn(normalized)) {
+        // Voice goes to the voice recorder, checked before the camera: "record my voice" is audio, not video.
+        if (Regex("""\brecord\b.*\b(voice|audio|sound)\b|\bvoice (note|recording|memo|recorder)\b|\b(audio|sound) recorder\b""").containsMatchIn(normalized)) {
+            return NilaIntent.Call(ToolCall("record_audio", emptyMap()))
+        }
+        if (Regex("""\b(camera|selfie)\b|\btake an? (photo|picture|pic)\b|\brecord an? video\b""").containsMatchIn(normalized)) {
             return NilaIntent.Call(ToolCall("open_camera", mapOf("video" to wantsVideo(input), "front" to wantsFront(input))))
         }
         if (Regex("""^\s*(please\s+)?((take|make|add|write|save|create)\s+(a\s+)?note|note\s+down)\b""").containsMatchIn(normalized)) {
@@ -429,6 +439,7 @@ class NilaEngine(
                     ?: NilaResponse.Text("How long should the timer run? Try \"timer for 10 minutes\".")
             }
             "flashlight" -> Torch(args["on"] as Boolean)
+            "record_audio" -> VoiceRecorder
             "open_camera" -> Camera(args["video"] as Boolean? ?: false, args["front"] as Boolean? ?: false)
             "timer_control" -> (args["action"] as String).takeIf { it in setOf("pause", "resume", "stop", "status") }?.let { TimerControl(it) }
                 ?: NilaResponse.Text("I can pause, resume or stop the timer, or tell you how much time is left.")
