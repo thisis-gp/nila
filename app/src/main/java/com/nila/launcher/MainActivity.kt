@@ -104,6 +104,10 @@ private fun NilaApp(resumeVersion: Int) {
     val engine = remember { NilaEngine() }
     // Gemma 4 E2B and FunctionGemma load in the background; until then NILA answers with its rules.
     val brain = remember { NilaBrain(context.applicationContext, engine) }
+    // Lakshmi speaks replies to spoken requests; typed requests stay silent.
+    val lakshmi = remember { Lakshmi(context) }
+    DisposableEffect(lakshmi) { onDispose { lakshmi.close() } }
+    var speakReply by remember { mutableStateOf(false) }
     LaunchedEffect(brain) { brain.load() }
     // Free both native models when this screen goes away, so recreating it never leaves old engines open.
     DisposableEffect(brain) { onDispose { brain.close() } }
@@ -164,6 +168,8 @@ private fun NilaApp(resumeVersion: Int) {
                 rememberedFact = response.fact
             }
             turns[pendingIndex] = Turn(prompt, response)
+            if (speakReply) spokenText(response)?.let(lakshmi::speak)
+            speakReply = false
             isThinking = false
             justReplied = true
             delay(900) // the dock head visibly "speaks" for a beat right after a reply lands
@@ -249,6 +255,8 @@ private fun NilaApp(resumeVersion: Int) {
                                 transcribe = brain::transcribe,
                                 onInput = { input = it },
                                 onSubmit = ::submit,
+                                onVoiceRequest = { speakReply = true; submit(it) },
+                                onListenStart = lakshmi::stop,
                                 context = context,
                                 prepare = engine::prepare,
                                 confirm = { token ->
@@ -310,6 +318,8 @@ private fun AgentSpace(
     transcribe: suspend (wav: ByteArray, languageName: String) -> String?,
     onInput: (String) -> Unit,
     onSubmit: (String) -> Unit,
+    onVoiceRequest: (String) -> Unit,
+    onListenStart: () -> Unit,
     context: Context,
     prepare: (Choice) -> NilaResponse.Confirmation,
     confirm: (String) -> Unit,
@@ -393,7 +403,8 @@ private fun AgentSpace(
                 }
                 VoiceMic(
                     transcribe = transcribe,
-                    onFinal = onSubmit,
+                    onFinal = onVoiceRequest,
+                    onListenStart = onListenStart,
                     onMessage = { addTurn("Voice", NilaResponse.Text(it)) },
                 )
                 IconButton(onClick = { onSubmit(input) }) {
