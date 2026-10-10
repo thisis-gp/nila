@@ -20,6 +20,10 @@ data class FoodRestaurant(
     val imageUrl: String?,
     val offer: String,
     val open: Boolean,
+    val area: String = "",
+    val ratingCount: String = "",
+    /** Swiggy marks promoted listings "(Ad)" in the name; NILA shows that as a tag instead. */
+    val ad: Boolean = false,
 )
 
 data class FoodItem(
@@ -32,7 +36,12 @@ data class FoodItem(
     val customizable: Boolean,
     /** The item exactly as Swiggy returned it, needed to send its variant IDs back to the cart. */
     val raw: String,
+    /** Options of the item's first variant group (usually Size), cheapest first as Swiggy lists them. */
+    val sizes: List<FoodSize> = emptyList(),
+    val chosenSize: FoodSize? = null,
 )
+
+data class FoodSize(val groupId: String, val id: String, val name: String, val price: String, val isDefault: Boolean)
 
 data class FoodCartLine(val itemId: String, val name: String, val quantity: Int, val price: String)
 
@@ -43,7 +52,7 @@ data class FoodCartView(
     val total: String,
 )
 
-data class FoodPayOption(val label: String, val method: String, val intentApp: String?)
+data class FoodPayOption(val label: String, val method: String, val intentApp: String?, val iconUrl: String? = null)
 
 data class NewAddressForm(
     val house: String,
@@ -67,7 +76,13 @@ data class PendingPayment(
 )
 
 sealed interface FoodCard {
-    data class Addresses(val query: String, val addresses: List<FoodAddress>) : FoodCard
+    /** [here] is null when location is off or not allowed; [addresses] are ranked nearest first. */
+    data class Addresses(
+        val query: String,
+        val addresses: List<FoodAddress>,
+        val here: CurrentPlace?,
+        val locationAllowed: Boolean,
+    ) : FoodCard
     data class Restaurants(val address: FoodAddress, val query: String, val restaurants: List<FoodRestaurant>) : FoodCard
     data class Menu(val address: FoodAddress, val restaurant: FoodRestaurant, val items: List<FoodItem>) : FoodCard
     data class Cart(val address: FoodAddress, val restaurant: FoodRestaurant, val cart: FoodCartView) : FoodCard
@@ -118,8 +133,10 @@ internal class FoodFlow(private val context: Context) {
         card(FoodCard.Problem("$step didn't work: ${client?.lastError ?: "Swiggy is not connected."}"))
 
     suspend fun start(query: String): NilaResponse {
+        val here = CurrentPlaces.locate(context)
         val result = call("get_addresses") ?: return problem("Loading your addresses")
-        return card(FoodCard.Addresses(query, parseAddresses(result)))
+        val addresses = CurrentPlaces.rank(parseAddresses(result), here)
+        return card(FoodCard.Addresses(query, addresses, here, CurrentPlaces.allowed(context)))
     }
 
     suspend fun addAddress(query: String, form: NewAddressForm): NilaResponse {
@@ -168,8 +185,10 @@ internal class FoodFlow(private val context: Context) {
             cartItems.clear()
             cartRestaurantId = restaurant.id
         }
-        val quantity = (cartItems[item.id]?.second ?: 0) + delta
-        if (quantity <= 0) cartItems.remove(item.id) else cartItems[item.id] = item to quantity
+        // A different size replaces the line: NILA keeps one size per dish.
+        val previous = cartItems[item.id]?.takeIf { (it.first.chosenSize ?: item.chosenSize) == item.chosenSize || delta < 0 }
+        val quantity = (previous?.second ?: 0) + delta
+        if (quantity <= 0) cartItems.remove(item.id) else cartItems[item.id] = (if (delta < 0) previous?.first ?: item else item) to quantity
         if (cartItems.isEmpty()) {
             call("flush_food_cart")
             return card(FoodCard.Problem("Your cart is empty."))
@@ -353,6 +372,8 @@ private fun parseAddresses(result: JSONObject): List<FoodAddress> =
         }
         .distinctBy { it.id }
 
+private val AD_SUFFIX = Regex("""\s*\(Ad\)\s*$""", RegexOption.IGNORE_CASE)
+
 private fun parseRestaurants(result: JSONObject): List<FoodRestaurant> =
     allObjects(result)
         .filter { o -> o.pick("name") != null && o.pick("id", "restaurantId") != null && (o.has("cuisines") || o.has("avgRating") || o.has("rating") || o.has("sla") || o.has("availabilityStatus") || o.has("distanceKm")) }
@@ -361,10 +382,12 @@ private fun parseRestaurants(result: JSONObject): List<FoodRestaurant> =
             val discount = o.optJSONObject("aggregatedDiscountInfoV3") ?: o.optJSONObject("aggregatedDiscountInfo")
             FoodRestaurant(
                 id = o.pick("id", "restaurantId") ?: return@mapNotNull null,
-                name = o.pick("name")!!,
+                name = o.pick("name")!!.replace(AD_SUFFIX, "").trim(),
                 cuisines = listText(o, "cuisines") ?: o.pick("cuisine").orEmpty(),
                 rating = o.pick("avgRatingString", "avgRating", "rating").orEmpty(),
-                eta = sla?.pick("slaString") ?: sla?.pick("deliveryTime")?.let { "$it min" }
+                eta = o.pick("deliveryTimeRange")?.lowercase()
+                    ?: o.pick("deliveryTimeMinutes")?.let { "$it mins" }
+                    ?: sla?.pick("slaString") ?: sla?.pick("deliveryTime")?.let { "$it min" }
                     ?: o.pick("slaString", "deliveryTime", "eta", "sla")?.let { if (it.all(Char::isDigit)) "$it min" else it }.orEmpty(),
                 distance = o.pick("distanceKm")?.let { "$it km" } ?: sla?.pick("lastMileTravelString") ?: o.pick("distance").orEmpty(),
                 costForTwo = o.pick("costForTwoMessage", "costForTwoString", "costForTwo").orEmpty(),
@@ -373,13 +396,20 @@ private fun parseRestaurants(result: JSONObject): List<FoodRestaurant> =
                     ?: o.pick("offer", "discountText", "offerText").orEmpty(),
                 open = o.pick("availabilityStatus")?.equals("OPEN", ignoreCase = true)
                     ?: o.pick("isOpen", "open")?.toBooleanStrictOrNull() ?: true,
+                area = o.pick("areaName", "locality").orEmpty(),
+                ratingCount = o.pick("totalRatings", "totalRatingsString").orEmpty(),
+                ad = AD_SUFFIX.containsMatchIn(o.pick("name")!!),
             )
         }
         .distinctBy { it.id }
         .take(10)
 
-private fun parseMenuItems(result: JSONObject): List<FoodItem> =
-    allObjects(result)
+private fun parseMenuItems(result: JSONObject): List<FoodItem> {
+    val objects = allObjects(result)
+    // search_menu marks dishes with menu_item_id; without this filter a dish's sizes ("Mini", "Regular")
+    // also matched name + id + price and showed up as separate dishes.
+    val dishes = objects.filter { it.has("menu_item_id") }.ifEmpty { objects }
+    return dishes
         .filter { o -> o.pick("name") != null && o.pick("id", "menu_item_id", "itemId", "menuItemId") != null && o.pick("price", "finalPrice", "defaultPrice", "basePrice") != null }
         .mapNotNull { o ->
             val vegValue = o.pick("isVeg", "veg", "vegClassifier", "itemAttribute")?.uppercase()
@@ -397,12 +427,31 @@ private fun parseMenuItems(result: JSONObject): List<FoodItem> =
                 customizable = o.has("variantsV2") || o.has("variations") ||
                     o.pick("hasVariants")?.toBooleanStrictOrNull() == true || o.pick("hasAddons")?.toBooleanStrictOrNull() == true,
                 raw = o.toString(),
-            )
+                sizes = parseSizes(o),
+            ).let { item -> item.copy(chosenSize = item.sizes.firstOrNull { it.isDefault } ?: item.sizes.firstOrNull()) }
         }
         .distinctBy { it.id }
         .take(24)
+}
 
-/** One cart line. Customizable items get the first option of each variant group (shown as "default" in the UI). */
+private fun parseSizes(item: JSONObject): List<FoodSize> {
+    val group = (item.optJSONArray("variantsV2") ?: item.optJSONArray("variations"))?.optJSONObject(0) ?: return emptyList()
+    val groupId = group.pick("group_id", "groupId", "id") ?: return emptyList()
+    val options = group.optJSONArray("variations") ?: group.optJSONArray("variants") ?: return emptyList()
+    return (0 until options.length()).mapNotNull { i ->
+        val option = options.optJSONObject(i) ?: return@mapNotNull null
+        if (option.pick("inStock") == "0") return@mapNotNull null
+        FoodSize(
+            groupId = groupId,
+            id = option.pick("variation_id", "variationId", "id") ?: return@mapNotNull null,
+            name = option.pick("name") ?: return@mapNotNull null,
+            price = rupees(option.pick("price")),
+            isDefault = option.pick("default") == "1",
+        )
+    }
+}
+
+/** One cart line. The size the user picked fills its group; other variant groups take Swiggy's default option. */
 private fun cartItemJson(item: FoodItem, quantity: Int): JSONObject {
     val line = JSONObject().put("menu_item_id", item.id).put("quantity", quantity)
     val raw = runCatching { JSONObject(item.raw) }.getOrNull() ?: return line
@@ -412,8 +461,10 @@ private fun cartItemJson(item: FoodItem, quantity: Int): JSONObject {
         allObjects(source).forEach { group ->
             val groupId = group.pick("group_id", "groupId", "id") ?: return@forEach
             val options = group.optJSONArray("variations") ?: group.optJSONArray("variants") ?: return@forEach
-            val first = options.optJSONObject(0) ?: return@forEach
-            val variationId = first.pick("variation_id", "variationId", "id") ?: return@forEach
+            val picked = item.chosenSize?.takeIf { it.groupId == groupId }?.id
+            val fallback = (0 until options.length()).mapNotNull { options.optJSONObject(it) }
+                .let { all -> all.firstOrNull { it.pick("default") == "1" } ?: all.firstOrNull() }
+            val variationId = picked ?: fallback?.pick("variation_id", "variationId", "id") ?: return@forEach
             chosen.put(JSONObject().put("group_id", groupId).put("variation_id", variationId))
         }
         if (chosen.length() > 0) line.put(targetKey, chosen)
@@ -427,7 +478,10 @@ private fun parseCart(result: JSONObject, restaurantName: String): FoodCartView 
         .map { o ->
             FoodCartLine(
                 itemId = o.pick("menu_item_id", "menuItemId", "itemId", "id").orEmpty(),
-                name = o.pick("name", "itemName")!!,
+                name = listOfNotNull(
+                    o.pick("name", "itemName")!!,
+                    o.optJSONArray("variants")?.optJSONObject(0)?.pick("name"),
+                ).joinToString(" · "),
                 quantity = o.pick("quantity")?.toDoubleOrNull()?.toInt() ?: 1,
                 price = rupees(o.pick("final_price", "finalPrice", "total", "subtotal", "price")),
             )
@@ -435,16 +489,23 @@ private fun parseCart(result: JSONObject, restaurantName: String): FoodCartView 
         .distinctBy { it.itemId + it.name }
     val billKeys = listOf(
         "Item total" to listOf("item_total", "itemTotal", "itemsTotal"),
-        "Delivery fee" to listOf("delivery_fee", "deliveryFee", "deliveryCharges"),
+        "Delivery fee" to listOf("delivery_charge", "delivery_fee", "deliveryFee", "deliveryCharges"),
         "Packing" to listOf("packing_charges", "packingCharges"),
         "Platform fee" to listOf("platform_fee", "platformFee"),
-        "Taxes" to listOf("taxes", "gst", "total_taxes", "totalTaxes"),
+        "Taxes and charges" to listOf("taxes_and_charges", "taxes", "gst", "total_taxes", "totalTaxes"),
         "Discount" to listOf("coupon_discount", "discount", "totalDiscount"),
     )
     val bill = billKeys.mapNotNull { (label, keys) ->
         keys.firstNotNullOfOrNull { findString(result, it) }
             ?.takeIf { it.toDoubleOrNull() != 0.0 }
             ?.let { label to rupees(it) }
+    }.let { lines ->
+        // Swiggy sends delivery_charge 0 with free_delivery_applied; say so instead of dropping the line.
+        if (findString(result, "free_delivery_applied") == "true" && lines.none { it.first == "Delivery fee" }) {
+            lines.take(1) + ("Delivery fee" to "FREE") + lines.drop(1)
+        } else {
+            lines
+        }
     }
     val total = listOf("to_pay", "toPay", "grand_total", "grandTotal", "order_total", "orderTotal", "finalAmount", "total")
         .firstNotNullOfOrNull { findString(result, it) }
@@ -457,20 +518,22 @@ private fun parseCart(result: JSONObject, restaurantName: String): FoodCartView 
 }
 
 private fun parsePayOptions(result: JSONObject): List<FoodPayOption> {
-    val options = allObjects(result)
-        .filter { o -> o.pick("intentApp", "appName", "displayName", "packageName") != null }
-        .map { o ->
-            FoodPayOption(
-                label = o.pick("displayName", "appName", "name", "label") ?: "UPI",
-                method = o.pick("paymentMethod", "method") ?: "UPI",
-                intentApp = o.pick("intentApp", "packageName", "app"),
-            )
-        }
-        .distinctBy { it.label }
-        .toMutableList()
-    if (options.none { it.method.equals("UPI", ignoreCase = true) } && allStrings(result).any { it.contains("UPI", ignoreCase = true) }) {
-        options += FoodPayOption("UPI", "UPI", null)
+    // Swiggy lists phone UPI apps under platforms.mobile.methods; each id ("gpay://upi/") is the
+    // intentApp that place_food_order needs. Desktop QR is skipped: NILA runs on the phone.
+    val methods = result.optJSONObject("platforms")?.optJSONObject("mobile")?.optJSONArray("methods")
+    val options = (0 until (methods?.length() ?: 0)).mapNotNull { i ->
+        val method = methods?.optJSONObject(i) ?: return@mapNotNull null
+        if (method.pick("kind") != "intent") return@mapNotNull null
+        FoodPayOption(
+            label = method.pick("displayName") ?: return@mapNotNull null,
+            method = "UPI",
+            intentApp = method.pick("id") ?: return@mapNotNull null,
+            iconUrl = method.pick("iconUrl"),
+        )
+    }.toMutableList()
+    val cod = result.optJSONObject("cod")
+    if (cod == null || cod.pick("available") == "true") {
+        options += FoodPayOption(cod?.pick("displayName") ?: "Pay on delivery", "Cash", null)
     }
-    options += FoodPayOption("Cash on delivery", "Cash", null)
     return options
 }

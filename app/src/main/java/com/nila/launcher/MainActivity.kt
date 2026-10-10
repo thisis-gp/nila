@@ -63,6 +63,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -167,6 +168,8 @@ private fun NilaApp(resumeVersion: Int) {
 
     val foodActions = remember {
         object : FoodActions {
+            override fun locate(query: String) =
+                runFood("Use my current location") { foodFlow.start(query) }
             override fun pickAddress(address: FoodAddress, query: String) =
                 runFood("Deliver to ${address.label}") { foodFlow.restaurants(address, query) }
             override fun addAddress(query: String, form: NewAddressForm) =
@@ -193,9 +196,13 @@ private fun NilaApp(resumeVersion: Int) {
         }
     }
 
+    val keyboard = LocalSoftwareKeyboardController.current
+
     fun submit(prompt: String = input) {
         if (prompt.isBlank() || isThinking) return
         input = ""
+        // The answer card needs the room: Swiggy's address step was hidden behind the keyboard.
+        keyboard?.hide()
         val pendingIndex = turns.size
         turns += Turn(prompt, NilaResponse.Text(""))
         isThinking = true

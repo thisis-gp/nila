@@ -91,14 +91,14 @@ class NilaEngine(
         ),
         CapabilityDescriptor(
             id = "search_food",
-            description = "Find restaurants or dishes to eat or order, only when the user asks for food, a meal, a dish or says they are hungry. query is just the dish or restaurant name, for example \"biryani\" or \"Meghana Foods\"; leave out budgets, prices and how many people.",
-            params = listOf(Param("query", ParamType.STRING)),
+            description = "Order food or find restaurants and dishes to eat, for example biryani, pizza or dinner.",
+            params = listOf(Param("query", ParamType.STRING, label = "Dish or restaurant name only, like biryani")),
             permission = PermissionClass.READ,
         ),
         CapabilityDescriptor(
             id = "get_directions",
-            description = "Get the route, distance or travel time to a place, or navigate somewhere. destination is just the place name, for example \"Indiranagar\".",
-            params = listOf(Param("destination", ParamType.STRING)),
+            description = "Show a map with the route, distance or travel time to a place, for example take me to or how far is.",
+            params = listOf(Param("destination", ParamType.STRING, label = "Place name only, like Indiranagar")),
             permission = PermissionClass.READ,
         ),
     ).plus(extraCapabilities).associateBy { it.id }

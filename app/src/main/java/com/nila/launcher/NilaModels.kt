@@ -208,8 +208,10 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         engine.calculate(input)?.let { return@withContext done("calculator", it) }
         val keyword = engine.route(input)
         if (keyword is NilaIntent.Call) return@withContext done("rules:${keyword.call.capabilityId}", engine.execute(keyword))
-        if (!engine.isSmallTalk(input)) modelRoute(input)?.let { return@withContext done("functiongemma", it) }
-        chat(input)?.let { done("gemma", NilaResponse.Text(it)) } ?: done("fallback", engine.execute(NilaIntent.Converse(input)))
+        // Stock FunctionGemma scored 31% on NILA's tools (training/functiongemma eval) and its wrong picks
+        // pre-empt Gemma, so it routes only when Gemma 4 E2B is not loaded, until the fine-tuned router ships.
+        if (assistant == null && !engine.isSmallTalk(input)) modelRoute(input)?.let { return@withContext done("functiongemma", it) }
+        chat(input)?.let { done("gemma", it) } ?: done("fallback", engine.execute(NilaIntent.Converse(input)))
     }
 
     /**
@@ -231,14 +233,25 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         val proposed = response.toolCalls.firstOrNull()
         // Argument names only: values can carry what the user said.
         Log.i(TAG, "functiongemma tool=${proposed?.name} args=${proposed?.arguments?.keys}")
+        trace("functiongemma tool=${proposed?.name} args=${proposed?.arguments?.keys}")
         // "chat" or an unknown tool means this is conversation, not an action.
         if (proposed == null) return null
-        val capability = engine.capabilities[proposed.name] ?: return null
+        return act(proposed.name, proposed.arguments, input)
+    }
+
+    /**
+     * Turns a model's proposed tool into a response. Business rules stay in NilaEngine: the proposal runs
+     * only when checkCall accepts it (or only needs more details) and the tool produced a real result.
+     */
+    private fun act(name: String, arguments: Map<String, Any?>, input: String): NilaResponse? {
+        val capability = engine.capabilities[name] ?: return null
         // The model picks the action; exact values come from the user's own words where NILA can read them.
-        val args = (if (capability.id == "create_alarm") engine.alarmArgs(input) else null) ?: coerceArgs(proposed.arguments, capability)
+        val args = (if (capability.id == "create_alarm") engine.alarmArgs(input) else null) ?: coerceArgs(arguments, capability)
         val call = ToolCall(capability.id, args)
         if (!numbersGrounded(call.args, input)) return null.also { Log.i(TAG, "rejected ungrounded numbers for ${call.capabilityId}") }
-        return when (checkCall(call, engine.capabilities)) {
+        val check = checkCall(call, engine.capabilities)
+        trace("check=${check::class.simpleName}")
+        return when (check) {
             // A Text result from a validated call is a refusal ("I can't open that app"); prefer conversation.
             is CallCheck.Ok, is CallCheck.Missing -> engine.execute(NilaIntent.Call(call)).let { result ->
                 when {
@@ -271,23 +284,39 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             ?.takeIf { it.isNotBlank() }
     }
 
-    private fun chat(input: String): String? {
+    /**
+     * Gemma 4 E2B answers and can also call a tool: the 270M router misses requests it was not fine-tuned
+     * on ("im hungry get me some biryani" came back as chat on the iQOO 15). A proposed call goes through
+     * the same [act] checks as FunctionGemma's, so chat never acts on its own.
+     */
+    private fun chat(input: String): NilaResponse? {
         val model = assistant ?: return null
-        val reply = runCatching {
+        val response = runCatching {
             model.createConversation(
                 ConversationConfig(
                     systemInstruction = Contents.of(PERSONA),
                     initialMessages = history.flatMap { (user, nila) -> listOf(Message.user(user), Message.model(nila)) },
                     samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.6),
+                    tools = engine.capabilities.values.map { tool(CapabilityTool(it)) },
+                    automaticToolCalling = false,
                 ),
-            ).use { conversation ->
-                conversation.sendMessage(input).contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim()
-            }
-        }.getOrNull()?.takeIf { it.isNotBlank() }?.let { if (claimsAction(it)) NO_ACTION_TAKEN.also { Log.i(TAG, "replaced a reply that claimed an action") } else it }
+            ).use { it.sendMessage(input) }
+        }.getOrNull() ?: return null
+        response.toolCalls.firstOrNull()?.let { proposed ->
+            trace("gemma tool=${proposed.name} args=${proposed.arguments.keys}")
+            act(proposed.name, proposed.arguments, input)?.let { return it }
+        }
+        val reply = response.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim()
+            .takeIf { it.isNotBlank() }?.let { if (claimsAction(it)) NO_ACTION_TAKEN.also { Log.i(TAG, "replaced a reply that claimed an action") } else it }
             ?: return null
         history.addLast(input to reply)
         while (history.size > HISTORY_TURNS) history.removeFirst()
-        return reply
+        return NilaResponse.Text(reply)
+    }
+
+    // vivo drops app logcat; the same keys-only lines go to a private file for device debugging.
+    private fun trace(line: String) {
+        runCatching { File(context.filesDir, "route.txt").appendText("$line\n") }
     }
 
     private companion object {
@@ -309,8 +338,9 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         val PERSONA = """
             You are NILA, a friendly assistant that lives on the user's Android phone and runs fully on the device.
             Reply in one to three short, warm sentences, in the same language the user writes in (English, Hindi or Malayalam).
-            You only talk. NILA's tools can do exactly these things and nothing else: set an alarm, open YouTube, Netflix, Instagram or BGMI,
-            show sample food options, remember one fact, and calculate percentages.
+            Call a tool only when the user asks NILA to do something now: set an alarm, open YouTube, Netflix, Instagram or BGMI,
+            order food on Swiggy, show the route to a place, or remember one fact.
+            Questions are not requests: "is biryani healthy" or "what is Koramangala famous for" get a spoken answer, not a tool.
             For anything else, such as the flashlight, calls, messages, payments, settings or other apps, say plainly that NILA cannot do that yet and name something it can do.
             Never offer to do it, never ask for confirmation, and never say you ordered, paid, booked, sent or shared anything.
         """.trimIndent()

@@ -1,5 +1,8 @@
 package com.nila.launcher
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -49,6 +52,7 @@ import kotlinx.coroutines.delay
 
 /** What the food cards can ask NILA to do next. Implemented in MainActivity. */
 internal interface FoodActions {
+    fun locate(query: String)
     fun pickAddress(address: FoodAddress, query: String)
     fun addAddress(query: String, form: NewAddressForm)
     fun openRestaurant(address: FoodAddress, restaurant: FoodRestaurant, query: String)
@@ -137,42 +141,48 @@ private fun VegMark(veg: Boolean?) {
 @Composable
 private fun AddressesCard(card: FoodCard.Addresses, actions: FoodActions) {
     var showForm by rememberSaveable { mutableStateOf(card.addresses.isEmpty()) }
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    var asked by rememberSaveable { mutableStateOf(false) }
+    val askLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) actions.locate(card.query)
+    }
+    // Current location comes first, so ask once as soon as the address step appears.
+    LaunchedEffect(card) {
+        if (!card.locationAllowed && !asked) {
+            asked = true
+            askLocation.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
+    }
+    val nearest = card.here?.let { here -> card.addresses.firstOrNull { CurrentPlaces.matchScore(it, here) >= CurrentPlaces.NEARBY_SCORE } }
+    val others = card.addresses.filter { it != nearest }
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         StepHeader(1, "Where should I deliver?")
-        if (card.addresses.isEmpty()) {
-            Text("No saved addresses on your Swiggy account yet. Add one below.", color = Muted, fontSize = 13.sp)
-        }
-        card.addresses.forEach { address ->
-            Surface(
-                color = CardInk,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth().clickable { actions.pickAddress(address, card.query) },
-            ) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.size(36.dp).background(Panel, CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
+        HereCard(card, nearest, actions, onAddHere = { showForm = true }, onAllow = { askLocation.launch(Manifest.permission.ACCESS_COARSE_LOCATION) })
+        if (others.isNotEmpty()) {
+            Text("SAVED ADDRESSES", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(top = 6.dp))
+            Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+                Column {
+                    val shown = if (showAll) others else others.take(SAVED_PREVIEW)
+                    shown.forEachIndexed { index, address ->
+                        if (index > 0) HorizontalDivider(color = Panel, modifier = Modifier.padding(start = 62.dp))
+                        AddressRow(address) { actions.pickAddress(address, card.query) }
+                    }
+                    if (!showAll && others.size > SAVED_PREVIEW) {
+                        HorizontalDivider(color = Panel)
                         Text(
-                            when (address.label.lowercase()) {
-                                "home" -> "⌂"
-                                "work", "office" -> "▣"
-                                else -> "●"
-                            },
+                            "Show all ${others.size} addresses",
                             color = Lime,
-                            fontSize = 16.sp,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.fillMaxWidth().clickable { showAll = true }.padding(14.dp),
                         )
                     }
-                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                        Text(address.label, color = Paper, fontWeight = FontWeight.SemiBold)
-                        Text(address.line, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
-                    Text("Deliver here", color = Lime, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
         if (showForm) {
-            NewAddressFormCard(onSave = { actions.addAddress(card.query, it) })
+            NewAddressFormCard(prefill = card.here, onSave = { actions.addAddress(card.query, it) })
         } else {
             OutlinedButton(
                 onClick = { showForm = true },
@@ -184,12 +194,114 @@ private fun AddressesCard(card: FoodCard.Addresses, actions: FoodActions) {
     }
 }
 
+private const val SAVED_PREVIEW = 3
+
+/** The phone's own location on top: the nearest saved address to deliver to, or a one-tap way to add it. */
 @Composable
-private fun NewAddressFormCard(onSave: (NewAddressForm) -> Unit) {
+private fun HereCard(
+    card: FoodCard.Addresses,
+    nearest: FoodAddress?,
+    actions: FoodActions,
+    onAddHere: () -> Unit,
+    onAllow: () -> Unit,
+) {
+    val here = card.here
+    Surface(
+        color = CardInk,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, Lime.copy(alpha = 0.6f)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.size(40.dp).background(Lime.copy(alpha = 0.15f), CircleShape), contentAlignment = Alignment.Center) {
+                    Text("◎", color = Lime, fontSize = 20.sp)
+                }
+                Column(Modifier.weight(1f)) {
+                    Text("CURRENT LOCATION", color = Lime, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    Text(
+                        when {
+                            here != null -> here.title
+                            card.locationAllowed -> "Couldn't find you right now"
+                            else -> "Location is off for NILA"
+                        },
+                        color = Paper,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (here != null) {
+                        Text(
+                            listOf(here.street, here.pincode).filter(String::isNotBlank).joinToString(" · "),
+                            color = Muted,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+            when {
+                nearest != null -> {
+                    Text("Nearest saved address: ${nearest.label} · ${nearest.line.substringAfter(": ")}", color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Button(
+                        onClick = { actions.pickAddress(nearest, card.query) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink),
+                    ) { Text("Deliver to ${nearest.label}", fontWeight = FontWeight.Bold) }
+                }
+                here != null -> Button(
+                    onClick = onAddHere,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink),
+                ) { Text("Deliver here · add this address", fontWeight = FontWeight.Bold) }
+                !card.locationAllowed -> OutlinedButton(
+                    onClick = onAllow,
+                    modifier = Modifier.fillMaxWidth(),
+                    border = BorderStroke(1.dp, Lime.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(14.dp),
+                ) { Text("Use my current location", color = Lime) }
+                else -> Text("Pick a saved address below.", color = Muted, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AddressRow(address: FoodAddress, onPick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onPick).padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(36.dp).background(Panel, CircleShape), contentAlignment = Alignment.Center) {
+            Text(
+                when (address.label.lowercase()) {
+                    "home" -> "⌂"
+                    "work", "office" -> "▣"
+                    else -> "●"
+                },
+                color = Lime,
+                fontSize = 15.sp,
+            )
+        }
+        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Text(address.label, color = Paper, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(address.line.substringAfter(": "), color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Text("›", color = Muted, fontSize = 22.sp, modifier = Modifier.padding(start = 8.dp))
+    }
+}
+
+@Composable
+private fun NewAddressFormCard(prefill: CurrentPlace?, onSave: (NewAddressForm) -> Unit) {
     var house by rememberSaveable { mutableStateOf("") }
-    var street by rememberSaveable { mutableStateOf("") }
-    var city by rememberSaveable { mutableStateOf("Bengaluru") }
-    var pincode by rememberSaveable { mutableStateOf("") }
+    // Filled from the current location; the user only adds the house number, name and phone.
+    var street by rememberSaveable { mutableStateOf(prefill?.let { listOf(it.street, it.area).filter(String::isNotBlank).joinToString(", ") }.orEmpty()) }
+    var city by rememberSaveable { mutableStateOf(prefill?.city.orEmpty()) }
+    var pincode by rememberSaveable { mutableStateOf(prefill?.pincode?.filter(Char::isDigit)?.take(6).orEmpty()) }
     var name by rememberSaveable { mutableStateOf("") }
     var phone by rememberSaveable { mutableStateOf("") }
     var category by rememberSaveable { mutableStateOf("HOME") }
@@ -257,59 +369,93 @@ private fun FormField(label: String, value: String, keyboard: KeyboardType = Key
 
 @Composable
 private fun RestaurantsCard(card: FoodCard.Restaurants, actions: FoodActions) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         StepHeader(2, "${card.restaurants.size} places for \"${card.query}\"")
-        Text("Delivering to ${card.address.label} · ${card.address.line}", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        card.restaurants.take(6).forEach { restaurant ->
-            Surface(
-                color = CardInk,
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .alpha(if (restaurant.open) 1f else 0.45f)
-                    .clickable(enabled = restaurant.open) { actions.openRestaurant(card.address, restaurant, card.query) },
-            ) {
-                Column {
-                    Box {
-                        FoodImage(
-                            restaurant.imageUrl,
-                            Modifier.fillMaxWidth().aspectRatio(16f / 8f).clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)),
-                        )
-                        if (restaurant.offer.isNotBlank()) {
-                            Box(
-                                Modifier
-                                    .align(Alignment.BottomStart)
-                                    .fillMaxWidth()
-                                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
-                                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                            ) {
-                                Text(restaurant.offer.uppercase(), color = Color.White, fontWeight = FontWeight.Black, fontSize = 15.sp)
-                            }
-                        }
-                        if (!restaurant.open) {
-                            Text(
-                                "Closed now",
-                                color = Paper,
-                                fontSize = 11.sp,
-                                modifier = Modifier.align(Alignment.TopEnd).padding(10.dp)
-                                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
-                                    .padding(horizontal = 8.dp, vertical = 3.dp),
-                            )
-                        }
-                    }
-                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(restaurant.name, color = Paper, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            RatingBadge(restaurant.rating)
-                            Text(listOf(restaurant.eta, restaurant.distance).filter(String::isNotBlank).joinToString(" · "), color = Paper, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                        if (restaurant.cuisines.isNotBlank()) {
-                            Text(restaurant.cuisines, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        if (restaurant.costForTwo.isNotBlank()) Text(restaurant.costForTwo, color = Muted, fontSize = 12.sp)
-                    }
+        Text(
+            "Delivering to ${card.address.label} · ${card.address.line.substringAfter(": ")}",
+            color = Muted,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        // Compact rows, like Swiggy's own list: four or five places fit on one screen.
+        Surface(color = CardInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+            Column {
+                card.restaurants.forEachIndexed { index, restaurant ->
+                    if (index > 0) HorizontalDivider(color = Panel, modifier = Modifier.padding(horizontal = 14.dp))
+                    RestaurantRow(restaurant) { actions.openRestaurant(card.address, restaurant, card.query) }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun RestaurantRow(restaurant: FoodRestaurant, onOpen: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .alpha(if (restaurant.open) 1f else 0.45f)
+            .clickable(enabled = restaurant.open, onClick = onOpen)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(92.dp)) {
+            FoodImage(restaurant.imageUrl, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(14.dp)))
+            if (restaurant.offer.isNotBlank()) {
+                Text(
+                    restaurant.offer.uppercase(),
+                    color = Color.White,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 2,
+                    lineHeight = 10.sp,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(bottomStart = 14.dp, bottomEnd = 14.dp))
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f))))
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                )
+            }
+        }
+        Column(Modifier.weight(1f).padding(start = 14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    restaurant.name,
+                    color = Paper,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (restaurant.ad) {
+                    Text(
+                        "AD",
+                        color = Muted,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.border(1.dp, Muted.copy(alpha = 0.5f), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                RatingBadge(restaurant.rating)
+                if (restaurant.ratingCount.isNotBlank()) Text("(${restaurant.ratingCount})", color = Muted, fontSize = 11.sp)
+                if (restaurant.eta.isNotBlank()) Text("· ${restaurant.eta}", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            }
+            if (restaurant.cuisines.isNotBlank()) {
+                Text(restaurant.cuisines, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Text(
+                listOf(restaurant.area, restaurant.distance, restaurant.costForTwo).filter(String::isNotBlank).joinToString(" · "),
+                color = Muted,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (!restaurant.open) Text("Closed now", color = NonVegRed, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -325,13 +471,16 @@ private fun MenuCard(card: FoodCard.Menu, actions: FoodActions) {
             Text(card.restaurant.eta, color = Muted, fontSize = 12.sp)
         }
         Spacer(Modifier.height(6.dp))
-        card.items.forEachIndexed { index, item ->
+        card.items.forEachIndexed { index, listed ->
+            var size by remember(listed.id) { mutableStateOf(listed.chosenSize) }
+            val item = listed.copy(chosenSize = size)
             if (index > 0) HorizontalDivider(color = Panel, modifier = Modifier.padding(vertical = 4.dp))
             Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
                 Column(Modifier.weight(1f).padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     VegMark(item.veg)
                     Text(item.name, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                    Text(item.price, color = Paper, fontSize = 14.sp)
+                    Text(size?.price ?: item.price, color = Paper, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    if (item.sizes.size > 1) SizeChips(item.sizes, size) { size = it }
                     if (item.description.isNotBlank()) {
                         Text(item.description, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp)
                     }
@@ -349,10 +498,33 @@ private fun MenuCard(card: FoodCard.Menu, actions: FoodActions) {
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(vertical = 6.dp)) {
                             Text("ADD", color = VegGreen, fontWeight = FontWeight.Black, fontSize = 15.sp)
-                            if (item.customizable) Text("default options", color = Color.Gray, fontSize = 8.sp)
+                            if (item.customizable && item.sizes.size <= 1) Text("customisable", color = Color.Gray, fontSize = 8.sp)
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SizeChips(sizes: List<FoodSize>, selected: FoodSize?, onPick: (FoodSize) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+        sizes.take(3).forEach { size ->
+            val on = size == selected
+            Surface(
+                color = if (on) Lime else Panel,
+                shape = RoundedCornerShape(50),
+                modifier = Modifier.clickable { onPick(size) },
+            ) {
+                Text(
+                    size.name.substringBefore(" ("),
+                    color = if (on) Ink else Paper,
+                    fontSize = 12.sp,
+                    fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                    maxLines = 1,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                )
             }
         }
     }
@@ -430,48 +602,52 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
             armed = false
         }
     }
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        StepHeader(5, "How do you want to pay?")
-        card.options.forEach { option ->
-            val isSelected = selected == option
-            Surface(
-                color = CardInk,
-                shape = RoundedCornerShape(14.dp),
-                border = if (isSelected) BorderStroke(1.5.dp, Lime) else null,
-                modifier = Modifier.fillMaxWidth().clickable(enabled = !placed) {
-                    selected = option
-                    armed = false
-                },
-            ) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.size(18.dp).border(2.dp, if (isSelected) Lime else Muted, CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) { if (isSelected) Box(Modifier.size(8.dp).background(Lime, CircleShape)) }
-                    Column(Modifier.padding(start = 12.dp)) {
-                        Text(option.label, color = Paper, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            if (option.method.equals("Cash", true)) "Pay the delivery partner. Stays inside NILA."
-                            else "Opens your UPI app for this one payment.",
-                            color = Muted,
-                            fontSize = 12.sp,
-                        )
+    val upi = card.options.filter { !it.method.equals("Cash", true) }
+    val cash = card.options.filter { it.method.equals("Cash", true) }
+
+    @Composable
+    fun Group(title: String, options: List<FoodPayOption>) {
+        if (options.isEmpty()) return
+        Text(title, color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(top = 4.dp))
+        Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+            Column {
+                options.forEachIndexed { index, option ->
+                    if (index > 0) HorizontalDivider(color = Panel, modifier = Modifier.padding(start = 60.dp))
+                    PayRow(option, selected == option, enabled = !placed) {
+                        selected = option
+                        armed = false
                     }
                 }
             }
         }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        StepHeader(5, "How do you want to pay?")
+        Text(
+            "${card.cart.total} · ${card.cart.lines.sumOf { it.quantity }} item from ${card.restaurant.name}",
+            color = Muted,
+            fontSize = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Group("PAY BY UPI APP", upi)
+        Group("PAY ON DELIVERY", cash)
+        Spacer(Modifier.height(4.dp))
         Surface(color = CommitInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("REAL ORDER · CONFIRM BEFORE PLACING", color = Orange, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                Text(
-                    "${card.cart.lines.sumOf { it.quantity }} items from ${card.restaurant.name}",
-                    color = Paper,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                card.cart.lines.forEach { Text("${it.quantity} × ${it.name}", color = Muted, fontSize = 12.sp) }
-                Text("Deliver to ${card.address.label} · ${card.address.line}", color = Muted, fontSize = 12.sp)
-                Text(card.cart.total, color = Paper, fontSize = 26.sp, fontWeight = FontWeight.Black)
-                Text("This places a real Swiggy order and charges you.", color = Muted, fontSize = 12.sp)
+                card.cart.lines.forEach { Text("${it.quantity} × ${it.name}", color = Paper, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
+                Text("Your order will be delivered to ${card.address.label}: ${card.address.line.substringAfter(": ")}", color = Muted, fontSize = 12.sp)
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(card.cart.total, color = Paper, fontSize = 26.sp, fontWeight = FontWeight.Black)
+                    Text(
+                        selected?.let { "  via ${it.label}" }.orEmpty(),
+                        color = Muted,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                }
                 Button(
                     onClick = {
                         val option = selected ?: return@Button
@@ -496,8 +672,30 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
                         fontWeight = FontWeight.Bold,
                     )
                 }
+                Text("This places a real Swiggy order and charges you.", color = Muted, fontSize = 11.sp)
             }
         }
+    }
+}
+
+@Composable
+private fun PayRow(option: FoodPayOption, selected: Boolean, enabled: Boolean, onPick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onPick).padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).background(Color.White), contentAlignment = Alignment.Center) {
+            if (option.iconUrl != null) {
+                AsyncImage(model = option.iconUrl, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.size(26.dp))
+            } else {
+                Text("₹", color = Ink, fontWeight = FontWeight.Black)
+            }
+        }
+        Text(option.label, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, modifier = Modifier.weight(1f).padding(start = 14.dp))
+        Box(
+            Modifier.size(20.dp).border(2.dp, if (selected) Lime else Muted, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) { if (selected) Box(Modifier.size(10.dp).background(Lime, CircleShape)) }
     }
 }
 
