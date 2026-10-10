@@ -1,7 +1,8 @@
 name: NILA PR review
 
 on:
-  pull_request:
+  # Keep secret-bearing review/merge logic on the trusted base branch, not PR-modified workflow YAML.
+  pull_request_target:
     types: [review_requested]
 
 permissions:
@@ -14,7 +15,7 @@ concurrency:
 jobs:
   review:
     if: >-
-      ${{ github.event_name == 'pull_request' &&
+      ${{ github.event_name == 'pull_request_target' &&
       github.event.action == 'review_requested' &&
       github.event.requested_reviewer.login == 'thisis-gp' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
