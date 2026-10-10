@@ -27,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -63,6 +65,7 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
         NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome)
+        NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
         NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps -> Unit
     }
 }
@@ -223,7 +226,7 @@ private fun SettingsScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit, onC
     ScreenTitle("NILA is yours.")
     BodyText("Language, voice, privacy and intelligence stay understandable.")
     PrimaryButton("Choose default Home app") { onChooseDefaultHome() }
-    SectionCard("Languages", "English · हिंदी · മലയാളം", "PLANNED")
+    PrimaryButton("Voice languages · English · हिंदी · മലയാളം") { onOpen(NilaScreen.Languages) }
     SectionCard("Lakshmi voice", "Android on-device voice candidate", "NOT CONNECTED")
     SectionCard("Memory", "Typed demo fact stays in app storage", "LOCAL")
     SectionCard("Commit actions", "Pay, send, book, delete or share", "ALWAYS CONFIRM")
@@ -233,6 +236,37 @@ private fun SettingsScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit, onC
     SecondaryButton("Memory") { onOpen(NilaScreen.Memory) }
     SecondaryButton("People & messages") { onOpen(NilaScreen.People) }
     SecondaryButton("Activity & approvals") { onOpen(NilaScreen.Activity) }
+}
+
+@Composable
+private fun LanguagesScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("VOICE LANGUAGES", onOpen, onBack) {
+    val context = LocalContext.current
+    var output by remember { mutableStateOf<Map<String, SpeechOutputStatus>>(emptyMap()) }
+    var checks by remember { mutableStateOf(0) }
+    var message by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(checks) { probeSpeechOutput(context) { output = it } }
+
+    ScreenTitle("Speak in your\nlanguage.")
+    BodyText("Gemma 4 E2B listens to every language on this phone, with nothing sent online. Pick the language on the chip next to the mic. Typing always works too.")
+    voiceLanguages.forEach { language ->
+        val speaking = output[language.tag]
+        SectionCard(
+            title = language.name,
+            detail = "Listening: Gemma 4 E2B on this phone\nSpeaking:${(speaking ?: SpeechOutputStatus.UNKNOWN).label}",
+            status = when (speaking) {
+                null -> "CHECKING…"
+                SpeechOutputStatus.OFFLINE -> "LISTENS AND SPEAKS · OFFLINE"
+                else -> "LISTENS · REPLIES IN TEXT"
+            },
+        )
+    }
+    if (output.values.any { it == SpeechOutputStatus.NEEDS_DOWNLOAD || it == SpeechOutputStatus.UNAVAILABLE }) {
+        SecondaryButton("Install speaking voices") {
+            if (!installSpeechOutput(context)) message = "No voice installer is available on this phone."
+        }
+    }
+    message?.let { BodyText(it, Lime) }
+    PrimaryButton("Check again") { message = null; checks++ }
 }
 
 @Composable

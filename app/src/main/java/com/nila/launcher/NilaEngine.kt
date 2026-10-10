@@ -86,6 +86,9 @@ class NilaEngine(
         ),
     ).plus(extraCapabilities).associateBy { it.id }
 
+    // Speech recognizers write "6:30 p.m."; fold a.m./p.m. into am/pm so the time is not misread.
+    private fun normalize(input: String) = input.trim().lowercase().replace(Regex("""(?<=[\d\s])([ap])\.\s?m\.?"""), "$1m")
+
     fun respond(input: String): NilaResponse = calculate(input) ?: execute(route(input))
 
     /** Greetings and questions about NILA itself. These go straight to conversation, never to a tool. */
@@ -96,7 +99,7 @@ class NilaEngine(
      * replace the model's: FunctionGemma dropped "pm" and ":45" on the iQOO 15.
      */
     fun alarmArgs(input: String): Map<String, Any>? {
-        val text = input.lowercase()
+        val text = normalize(input)
         val match = clockTime.find(text) ?: compactTime.find(text) ?: return null
         val args = mutableMapOf<String, Any>("hour" to match.groupValues[1].toInt(), "minute" to match.groupValues[2].ifBlank { "0" }.toInt())
         match.groupValues[3].ifEmpty { null }?.let { args["meridiem"] = it }
@@ -105,7 +108,7 @@ class NilaEngine(
 
     /** Deterministic fast path: blank input and exact arithmetic never go through a router or model. */
     fun calculate(input: String): NilaResponse? {
-        val normalized = input.trim().lowercase()
+        val normalized = normalize(input)
         if (normalized.isBlank()) return NilaResponse.Text("Tell me what you want to do.")
         val match = percentage.find(normalized) ?: return null
         val rate = match.groupValues[1].toBigDecimal()
@@ -116,7 +119,7 @@ class NilaEngine(
 
     // ponytail: keyword router standing in for FunctionGemma; swap in the model behind the same NilaIntent output.
     fun route(input: String): NilaIntent {
-        val normalized = input.trim().lowercase()
+        val normalized = normalize(input)
 
         // The router only extracts what was said; run() converts and validates the time.
         alarm.find(normalized)?.let { match ->
@@ -128,7 +131,8 @@ class NilaEngine(
             return NilaIntent.Call(ToolCall("create_alarm", args))
         }
 
-        remember.find(normalized)?.let {
+        // Match on the raw text: the user's fact is stored as they said it, not as normalized for parsing.
+        remember.find(input.lowercase())?.let {
             val fact = input.substring(input.lowercase().indexOf(it.groupValues[1])).trim()
             return NilaIntent.Call(ToolCall("remember_fact", mapOf("fact" to fact)))
         }

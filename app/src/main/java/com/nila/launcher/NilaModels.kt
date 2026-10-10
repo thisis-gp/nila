@@ -115,6 +115,11 @@ fun claimsAction(reply: String): Boolean = Regex(
         """|(?i)^\s*(alarm|reminder) (set|scheduled)\b""",
 ).containsMatchIn(reply)
 
+/** Asks Gemma for a transcript only, in the language's own script, never an answer to the request. */
+fun transcriptionPrompt(languageName: String) =
+    "Transcribe this speech exactly as spoken. The speaker most likely uses $languageName. " +
+        "Write it in that language's own script. Output only the transcript, with no answer, translation or notes."
+
 /** Exposes a capability's schema to LiteRT-LM. Execution stays in NilaEngine, never inside the model runtime. */
 private class CapabilityTool(private val capability: CapabilityDescriptor) : OpenApiTool {
     override fun getToolDescriptionJsonString() = toolSchemaJson(capability)
@@ -151,16 +156,24 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
     }
 
     suspend fun load() = withContext(llm) {
-        router = loadModel(ModelFiles.ROUTER, gpuFirst = false) { routerState = it }
-        assistant = loadModel(ModelFiles.ASSISTANT, gpuFirst = true) { assistantState = it }
+        router = loadModel(ModelFiles.ROUTER, gpuFirst = false, audio = false) { routerState = it }
+        assistant = loadModel(ModelFiles.ASSISTANT, gpuFirst = true, audio = true) { assistantState = it }
     }
 
-    private fun loadModel(name: String, gpuFirst: Boolean, setState: (ModelState) -> Unit): Engine? {
+    private fun loadModel(name: String, gpuFirst: Boolean, audio: Boolean, setState: (ModelState) -> Unit): Engine? {
         val file = ModelFiles.find(context, name) ?: return null.also { setState(ModelState.MISSING) }
         setState(ModelState.LOADING)
         val backends = if (gpuFirst) listOf(Backend.GPU(), Backend.CPU()) else listOf(Backend.CPU())
         for (backend in backends) {
-            val created = Engine(EngineConfig(modelPath = file.absolutePath, backend = backend, cacheDir = context.cacheDir.absolutePath))
+            val created = Engine(
+                EngineConfig(
+                    modelPath = file.absolutePath,
+                    backend = backend,
+                    // Gemma's audio encoder runs on the CPU, as in Google's AI Edge Gallery.
+                    audioBackend = if (audio) Backend.CPU() else null,
+                    cacheDir = context.cacheDir.absolutePath,
+                ),
+            )
             try {
                 created.initialize()
                 setState(ModelState.READY)
@@ -223,6 +236,25 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             }
             is CallCheck.Rejected -> null
         }
+    }
+
+    /**
+     * Turns a spoken WAV clip into text with Gemma 4 E2B on the phone. The text then takes the same path
+     * as typing, so voice never skips the rules, checks or confirmations.
+     */
+    suspend fun transcribe(wav: ByteArray, languageName: String): String? = withContext(llm) {
+        val model = assistant ?: return@withContext null
+        val start = SystemClock.elapsedRealtime()
+        runCatching {
+            model.createConversation(ConversationConfig(samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0))).use { conversation ->
+                conversation.sendMessage(
+                    Contents.of(Content.AudioBytes(wav), Content.Text(transcriptionPrompt(languageName))),
+                ).contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim()
+            }
+        }.onFailure { Log.w(TAG, "transcribe failed", it) }.getOrNull()
+            // Timing and size only: a transcript is what the user said and must never reach device logs.
+            .also { Log.i(TAG, "transcribe ms=${SystemClock.elapsedRealtime() - start} bytes=${wav.size} chars=${it?.length ?: 0}") }
+            ?.takeIf { it.isNotBlank() }
     }
 
     private fun chat(input: String): String? {
