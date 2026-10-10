@@ -61,6 +61,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -155,13 +156,19 @@ private fun NilaApp(resumeVersion: Int) {
     val foodFlow = remember { FoodFlow(context.applicationContext) }
 
     /** Runs one Swiggy step as its own chat turn, with the same thinking state as a typed request. */
+    /**
+     * Swiggy steps update the booking card in place: one sheet for one intent, like the prototype's
+     * temporary layer, instead of a new chat turn and a new card for every tap.
+     */
     fun runFood(label: String, step: suspend () -> NilaResponse) {
         if (isThinking) return
-        val index = turns.size
-        turns += Turn(label, NilaResponse.Text(""))
+        val index = if (turns.lastOrNull()?.response is NilaResponse.Food) turns.lastIndex else {
+            turns += Turn(label, NilaResponse.Text(""))
+            turns.lastIndex
+        }
         isThinking = true
         scope.launch {
-            turns[index] = Turn(label, step())
+            turns[index] = turns[index].copy(response = step())
             isThinking = false
         }
     }
@@ -170,8 +177,16 @@ private fun NilaApp(resumeVersion: Int) {
         object : FoodActions {
             override fun locate(query: String) =
                 runFood("Use my current location") { foodFlow.start(query) }
+            override fun refine(address: FoodAddress, search: NilaResponse.FoodSearch) =
+                runFood(foodIntentTitle(search)) { foodFlow.refine(address, search) }
             override fun pickAddress(address: FoodAddress, query: String) =
-                runFood("Deliver to ${address.label}") { foodFlow.restaurants(address, query) }
+                runFood("Deliver to ${address.label}") { foodFlow.deliverTo(address, query) }
+            override fun back(card: FoodCard) = runFood("Back") { NilaResponse.Food(card) }
+            override fun lastResults() = foodFlow.lastResults
+            override fun lastMenu() = foodFlow.lastMenu
+            override fun lastCart() = foodFlow.lastCart
+            override fun changeAddress(query: String) =
+                runFood("Change address") { foodFlow.chooseAddress(query) }
             override fun addAddress(query: String, form: NewAddressForm) =
                 runFood("Add a new address") { foodFlow.addAddress(query, form) }
             override fun openRestaurant(address: FoodAddress, restaurant: FoodRestaurant, query: String) =
@@ -220,7 +235,7 @@ private fun NilaApp(resumeVersion: Int) {
                 // FunctionGemma picks the tool and its arguments; these two hand off to live services.
                 when (val routed = brain.respond(prompt)) {
                     is NilaResponse.FoodSearch -> if (foodFlow.connected) {
-                        foodFlow.start(routed.query)
+                        foodFlow.start(routed)
                     } else {
                         engine.mockFood().let { it.copy(intro = "${it.intro}\nConnect Swiggy in Settings to order for real.") }
                     }
@@ -458,7 +473,14 @@ private fun AgentSpace(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("YOU", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                     Text(turn.user, style = MaterialTheme.typography.titleMedium)
-                    if (index == turns.lastIndex && isThinking) {
+                    val busy = index == turns.lastIndex && isThinking
+                    if (busy && turn.response is NilaResponse.Food) {
+                        // Keep the booking card on screen while Swiggy answers, faded so taps wait.
+                        Text("Working on it…", color = Lime, style = MaterialTheme.typography.labelMedium)
+                        Box(Modifier.alpha(0.35f)) {
+                            ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, addTurn = addTurn)
+                        }
+                    } else if (busy) {
                         Text("NILA is thinking…", color = Muted, style = MaterialTheme.typography.bodyMedium)
                     } else {
                         ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, addTurn = addTurn)

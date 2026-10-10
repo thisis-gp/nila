@@ -82,8 +82,16 @@ sealed interface FoodCard {
         val addresses: List<FoodAddress>,
         val here: CurrentPlace?,
         val locationAllowed: Boolean,
+        val intent: NilaResponse.FoodSearch = NilaResponse.FoodSearch(query),
     ) : FoodCard
-    data class Restaurants(val address: FoodAddress, val query: String, val restaurants: List<FoodRestaurant>) : FoodCard
+    /** [picks] are the best fits for [intent] with the reason each was picked; [restaurants] is everything Swiggy returned. */
+    data class Restaurants(
+        val address: FoodAddress,
+        val query: String,
+        val restaurants: List<FoodRestaurant>,
+        val intent: NilaResponse.FoodSearch,
+        val picks: List<Pair<FoodRestaurant, String>>,
+    ) : FoodCard
     data class Menu(val address: FoodAddress, val restaurant: FoodRestaurant, val items: List<FoodItem>) : FoodCard
     data class Cart(val address: FoodAddress, val restaurant: FoodRestaurant, val cart: FoodCartView) : FoodCard
     data class Payment(
@@ -116,6 +124,18 @@ internal class FoodFlow(private val context: Context) {
 
     val connected: Boolean get() = SwiggyAuth.currentSession(context) != null
 
+    /** What the user asked for, as the router and NilaEngine read it. Chips on the cards edit it. */
+    private var intent = NilaResponse.FoodSearch("")
+    private val memory = context.getSharedPreferences("nila_food", Context.MODE_PRIVATE)
+
+    /** The cards a Back link returns to, shown again without asking Swiggy. */
+    var lastResults: FoodCard.Restaurants? = null
+        private set
+    var lastMenu: FoodCard.Menu? = null
+        private set
+    var lastCart: FoodCard.Cart? = null
+        private set
+
     private suspend fun call(tool: String, args: JSONObject = JSONObject()): JSONObject? = withContext(Dispatchers.IO) {
         val session = SwiggyAuth.currentSession(context) ?: return@withContext null
         val c = client ?: SwiggyClient(session.accessToken).also { client = it }
@@ -132,11 +152,34 @@ internal class FoodFlow(private val context: Context) {
     private fun problem(step: String) =
         card(FoodCard.Problem("$step didn't work: ${client?.lastError ?: "Swiggy is not connected."}"))
 
+    suspend fun start(search: NilaResponse.FoodSearch): NilaResponse {
+        intent = search
+        return start(search.query)
+    }
+
+    /**
+     * Straight to the best fits: NILA picks the address the user last ordered to, else a saved one near
+     * where the phone is, and shows it as one "To Hotel2 · Change" line. Only with nothing to go on
+     * does the user get the address picker.
+     */
     suspend fun start(query: String): NilaResponse {
+        if (intent.query != query) intent = NilaResponse.FoodSearch(query)
+        val here = CurrentPlaces.locate(context)
+        val result = call("get_addresses") ?: return problem("Loading your addresses")
+        val addresses = parseAddresses(result)
+        val last = memory.getString(LAST_ADDRESS, null)
+        val chosen = addresses.firstOrNull { it.id == last }
+            ?: here?.let { spot -> addresses.firstOrNull { CurrentPlaces.matchScore(it, spot) >= CurrentPlaces.NEARBY_SCORE } }
+            ?: return card(FoodCard.Addresses(query, CurrentPlaces.rank(addresses, here), here, CurrentPlaces.allowed(context), intent))
+        return restaurants(chosen, query)
+    }
+
+    suspend fun chooseAddress(query: String): NilaResponse {
         val here = CurrentPlaces.locate(context)
         val result = call("get_addresses") ?: return problem("Loading your addresses")
         val addresses = CurrentPlaces.rank(parseAddresses(result), here)
-        return card(FoodCard.Addresses(query, addresses, here, CurrentPlaces.allowed(context)))
+        if (intent.query != query) intent = NilaResponse.FoodSearch(query)
+        return card(FoodCard.Addresses(query, addresses, here, CurrentPlaces.allowed(context), intent))
     }
 
     suspend fun addAddress(query: String, form: NewAddressForm): NilaResponse {
@@ -154,12 +197,27 @@ internal class FoodFlow(private val context: Context) {
         return start(query)
     }
 
+    suspend fun refine(address: FoodAddress, search: NilaResponse.FoodSearch): NilaResponse {
+        intent = search
+        return restaurants(address, search.query)
+    }
+
+    suspend fun deliverTo(address: FoodAddress, query: String): NilaResponse {
+        memory.edit().putString(LAST_ADDRESS, address.id).apply()
+        return restaurants(address, query)
+    }
+
     suspend fun restaurants(address: FoodAddress, query: String): NilaResponse {
-        val result = call("search_restaurants", JSONObject().put("query", query).put("addressId", address.id))
-            ?: return problem("Searching restaurants")
-        val list = parseRestaurants(result)
+        // A taste word ("light", "spicy") goes into Swiggy's search; if that finds nothing, the dish alone.
+        val worded = listOfNotNull(intent.preference, query).joinToString(" ")
+        var list = call("search_restaurants", JSONObject().put("query", worded).put("addressId", address.id))
+            ?.let(::parseRestaurants) ?: return problem("Searching restaurants")
+        if (list.isEmpty() && worded != query) {
+            list = call("search_restaurants", JSONObject().put("query", query).put("addressId", address.id))
+                ?.let(::parseRestaurants).orEmpty()
+        }
         if (list.isEmpty()) return card(FoodCard.Problem("No restaurants found for \"$query\" near ${address.label}."))
-        return card(FoodCard.Restaurants(address, query, list))
+        return card(FoodCard.Restaurants(address, query, list, intent, bestFits(list, intent)).also { lastResults = it })
     }
 
     suspend fun menu(address: FoodAddress, restaurant: FoodRestaurant, query: String): NilaResponse {
@@ -176,7 +234,7 @@ internal class FoodFlow(private val context: Context) {
         }
         if (result == null) return problem("Loading the menu")
         if (items.isEmpty()) return card(FoodCard.Problem("Couldn't read ${restaurant.name}'s menu."))
-        return card(FoodCard.Menu(address, restaurant, items))
+        return card(FoodCard.Menu(address, restaurant, items).also { lastMenu = it })
     }
 
     /** Adds or removes one unit; the full cart is sent each time so Swiggy's cart matches what NILA shows. */
@@ -214,17 +272,22 @@ internal class FoodFlow(private val context: Context) {
     suspend fun cart(address: FoodAddress, restaurant: FoodRestaurant): NilaResponse {
         val result = call("get_food_cart", JSONObject().put("addressId", address.id).put("restaurantName", restaurant.name))
             ?: return problem("Loading the cart")
-        return card(FoodCard.Cart(address, restaurant, parseCart(result, restaurant.name)))
+        return card(FoodCard.Cart(address, restaurant, parseCart(result, restaurant.name)).also { lastCart = it })
     }
 
     suspend fun payment(address: FoodAddress, restaurant: FoodRestaurant, cart: FoodCartView): NilaResponse {
         val result = call("get_payment_options", JSONObject().put("addressId", address.id))
             ?: return problem("Loading payment options")
-        return card(FoodCard.Payment(address, restaurant, cart, parsePayOptions(result)))
+        val options = parsePayOptions(result)
+        val usual = memory.getString(LAST_PAYMENT, null)
+        // The method used last time comes first, so checkout is one tap unless the user wants another.
+        val ordered = options.sortedByDescending { it.label == usual }
+        return card(FoodCard.Payment(address, restaurant, cart, ordered))
     }
 
     /** Commit: places a real Swiggy order. Only reachable from the two-tap confirmation. */
     suspend fun place(address: FoodAddress, cart: FoodCartView, option: FoodPayOption): NilaResponse {
+        memory.edit().putString(LAST_PAYMENT, option.label).apply()
         val args = JSONObject().put("addressId", address.id).put("paymentMethod", option.method)
         option.intentApp?.let { args.put("intentApp", it) }
         val result = call("place_food_order", args) ?: return problem("Placing the order")
@@ -377,6 +440,44 @@ private fun parseAddresses(result: JSONObject): List<FoodAddress> =
             )
         }
         .distinctBy { it.id }
+
+private const val BEST_FIT_COUNT = 3
+private const val LAST_ADDRESS = "last_address"
+private const val LAST_PAYMENT = "last_payment"
+
+/**
+ * The few places that fit what the user said: open first, then inside their budget (cost for two scaled to
+ * their party size), then rating, then speed. Each pick carries the reason in words, shown on the card.
+ */
+internal fun bestFits(list: List<FoodRestaurant>, intent: NilaResponse.FoodSearch): List<Pair<FoodRestaurant, String>> {
+    val people = intent.people ?: 1
+    fun estimate(r: FoodRestaurant) = digitsOf(r.costForTwo)?.let { it * people / 2 }
+    fun minutes(r: FoodRestaurant) = digitsOf(r.eta) ?: Int.MAX_VALUE
+    fun fits(r: FoodRestaurant) = intent.budgetRupees?.let { budget -> estimate(r)?.let { it <= budget } } ?: true
+    val ranked = list.filter { it.open }.sortedWith(
+        compareByDescending<FoodRestaurant> { fits(it) }
+            .thenByDescending { it.rating.toDoubleOrNull() ?: 0.0 }
+            .thenBy { minutes(it) },
+    )
+    val fastest = ranked.minByOrNull { minutes(it) }
+    return ranked.take(BEST_FIT_COUNT).map { r ->
+        val reasons = buildList {
+            val cost = estimate(r)
+            when {
+                intent.budgetRupees != null && cost != null && fits(r) -> add("About ₹$cost for ${partyWords(people)}, inside ₹${intent.budgetRupees}")
+                intent.budgetRupees != null -> add("Over your ₹${intent.budgetRupees} budget")
+                cost != null && intent.people != null -> add("About ₹$cost for ${partyWords(people)}")
+            }
+            if (r == fastest) add("Fastest here") else if (r.eta.isNotBlank()) add(r.eta)
+            if (r.rating.isNotBlank()) add("★ ${r.rating}")
+        }
+        r to reasons.joinToString(" · ")
+    }
+}
+
+private fun partyWords(people: Int) = if (people == 1) "one" else "$people"
+
+private fun digitsOf(text: String) = Regex("""\d+""").find(text)?.value?.toIntOrNull()
 
 private val AD_SUFFIX = Regex("""\s*\(Ad\)\s*$""", RegexOption.IGNORE_CASE)
 

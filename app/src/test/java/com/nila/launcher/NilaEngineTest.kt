@@ -129,6 +129,36 @@ class NilaEngineTest {
     }
 
     @Test
+    fun readsPartySizeAndBudgetFromTheUsersWords() {
+        val search = NilaResponse.FoodSearch("dinner", preference = "light")
+        assertEquals(
+            search.copy(people = 3, budgetRupees = 800),
+            engine.foodConstraints("Find a light dinner for three under ₹800", search),
+        )
+        assertEquals(search.copy(people = 2), engine.foodConstraints("biryani for 2 people", search))
+        // The dish name keeps only the dish when the model leaves the party size in it.
+        assertEquals(
+            NilaResponse.FoodSearch("dinner", people = 3, budgetRupees = 800),
+            engine.foodConstraints("dinner for three under 800", NilaResponse.FoodSearch("dinner for three")),
+        )
+        // A time is not a party size.
+        assertEquals(search, engine.foodConstraints("order dinner for 8 pm", search))
+    }
+
+    @Test
+    fun bestFitPutsPlacesInsideTheBudgetFirst() {
+        fun place(name: String, rating: String, cost: String, eta: String) =
+            FoodRestaurant(name, name, "", rating, eta, "", cost, null, "", open = true)
+        val pricey = place("Social", "4.6", "₹1200 for two", "40-50 mins")
+        val cheap = place("Malgudi", "4.4", "₹250 for two", "35-40 mins")
+        val fast = place("Blues", "4.1", "₹400 for two", "15-20 mins")
+        val picks = bestFits(listOf(pricey, cheap, fast), NilaResponse.FoodSearch("biryani", people = 3, budgetRupees = 800))
+        assertEquals(listOf(cheap, fast, pricey), picks.map { it.first })
+        assertEquals("About ₹375 for 3, inside ₹800 · 35-40 mins · ★ 4.4", picks.first().second)
+        assertTrue(picks.last().second.startsWith("Over your ₹800 budget"))
+    }
+
+    @Test
     fun foodIsLeftToTheModelNotKeywords() {
         assertEquals(NilaIntent.Converse("I'm starving, get me biryani"), engine.route("I'm starving, get me biryani"))
     }

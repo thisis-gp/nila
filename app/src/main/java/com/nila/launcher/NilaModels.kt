@@ -255,6 +255,7 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             // A Text result from a validated call is a refusal ("I can't open that app"); prefer conversation.
             is CallCheck.Ok, is CallCheck.Missing -> engine.execute(NilaIntent.Call(call)).let { result ->
                 when {
+                    result is NilaResponse.FoodSearch -> engine.foodConstraints(input, result)
                     result !is NilaResponse.Text -> result
                     // A failed alarm must never reach Gemma: on the iQOO 15 it then claimed the alarm was set.
                     capability.id == "create_alarm" -> NilaResponse.Text(ALARM_HELP)

@@ -7,6 +7,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +44,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,6 +56,12 @@ import kotlinx.coroutines.delay
 /** What the food cards can ask NILA to do next. Implemented in MainActivity. */
 internal interface FoodActions {
     fun locate(query: String)
+    fun back(card: FoodCard)
+    fun lastResults(): FoodCard.Restaurants?
+    fun lastMenu(): FoodCard.Menu?
+    fun lastCart(): FoodCard.Cart?
+    fun changeAddress(query: String)
+    fun refine(address: FoodAddress, search: NilaResponse.FoodSearch)
     fun pickAddress(address: FoodAddress, query: String)
     fun addAddress(query: String, form: NewAddressForm)
     fun openRestaurant(address: FoodAddress, restaurant: FoodRestaurant, query: String)
@@ -89,14 +98,24 @@ internal fun FoodCardView(card: FoodCard, actions: FoodActions) {
 }
 
 @Composable
+private fun BackLink(label: String, onBack: () -> Unit) {
+    Text(
+        "‹ $label",
+        color = Lime,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.clickable(onClick = onBack).padding(vertical = 4.dp),
+    )
+}
+
+@Composable
 private fun StepHeader(step: Int, title: String) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(Modifier.size(6.dp).background(Lime, CircleShape))
         Text("SWIGGY · LIVE", color = Lime, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-        Text("Step $step of 5", color = Muted, fontSize = 10.sp)
     }
     Spacer(Modifier.height(4.dp))
-    Text(title, color = Paper, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, lineHeight = 24.sp)
+    Text(title, color = Paper, fontSize = 26.sp, fontFamily = FontFamily.Serif, lineHeight = 30.sp)
 }
 
 @Composable
@@ -157,7 +176,9 @@ private fun AddressesCard(card: FoodCard.Addresses, actions: FoodActions) {
     val others = card.addresses.filter { it != nearest }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        StepHeader(1, "Where should I deliver?")
+        StepHeader(1, foodIntentTitle(card.intent))
+        IntentChips(card.intent, onChange = null)
+        Text("Where should I deliver?", color = Paper, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
         HereCard(card, nearest, actions, onAddHere = { showForm = true }, onAllow = { askLocation.launch(Manifest.permission.ACCESS_COARSE_LOCATION) })
         if (others.isNotEmpty()) {
             Text("SAVED ADDRESSES", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(top = 6.dp))
@@ -369,25 +390,132 @@ private fun FormField(label: String, value: String, keyboard: KeyboardType = Key
 
 @Composable
 private fun RestaurantsCard(card: FoodCard.Restaurants, actions: FoodActions) {
+    var showAll by rememberSaveable { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        StepHeader(2, "${card.restaurants.size} places for \"${card.query}\"")
-        Text(
-            "Delivering to ${card.address.label} · ${card.address.line.substringAfter(": ")}",
-            color = Muted,
-            fontSize = 12.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        // Compact rows, like Swiggy's own list: four or five places fit on one screen.
-        Surface(color = CardInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
-            Column {
-                card.restaurants.forEachIndexed { index, restaurant ->
-                    if (index > 0) HorizontalDivider(color = Panel, modifier = Modifier.padding(horizontal = 14.dp))
-                    RestaurantRow(restaurant) { actions.openRestaurant(card.address, restaurant, card.query) }
+        StepHeader(2, if (card.picks.isEmpty()) "Nothing open right now" else foodIntentTitle(card.intent))
+        IntentChips(card.intent) { actions.refine(card.address, it) }
+        Row(
+            Modifier.clickable { actions.changeAddress(card.query) }.padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("To ${card.address.label}", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(" · Change", color = Lime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+        card.picks.forEachIndexed { index, (restaurant, reason) ->
+            PickCard(restaurant, reason, best = index == 0) { actions.openRestaurant(card.address, restaurant, card.query) }
+        }
+        val rest = card.restaurants.filter { r -> card.picks.none { it.first == r } }
+        if (rest.isNotEmpty()) {
+            if (showAll) {
+                Surface(color = CardInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+                    Column {
+                        rest.forEachIndexed { index, restaurant ->
+                            if (index > 0) HorizontalDivider(color = Panel, modifier = Modifier.padding(horizontal = 14.dp))
+                            RestaurantRow(restaurant) { actions.openRestaurant(card.address, restaurant, card.query) }
+                        }
+                    }
+                }
+            } else {
+                OutlinedButton(
+                    onClick = { showAll = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    border = BorderStroke(1.dp, Lime.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(14.dp),
+                ) { Text("See all ${card.restaurants.size} places", color = Lime) }
+            }
+        }
+    }
+}
+
+/** One of the best fits: image-led like the compare step in the prototype, with why NILA picked it. */
+@Composable
+private fun PickCard(restaurant: FoodRestaurant, reason: String, best: Boolean, onOpen: () -> Unit) {
+    Surface(
+        color = CardInk,
+        shape = RoundedCornerShape(20.dp),
+        border = if (best) BorderStroke(1.5.dp, Lime) else null,
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
+    ) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            FoodImage(restaurant.imageUrl, Modifier.size(104.dp).clip(RoundedCornerShape(16.dp)))
+            Column(Modifier.weight(1f).padding(start = 14.dp, end = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        restaurant.name,
+                        color = Paper,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (restaurant.ad) {
+                        Text(
+                            "AD",
+                            color = Muted,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.border(1.dp, Muted.copy(alpha = 0.5f), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 1.dp),
+                        )
+                    }
+                }
+                Text(reason, color = Paper.copy(alpha = 0.85f), fontSize = 12.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    listOf(restaurant.cuisines, restaurant.area).filter(String::isNotBlank).joinToString(" · "),
+                    color = Muted,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (best) {
+                    Text(
+                        "BEST FIT",
+                        color = Ink,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 1.sp,
+                        modifier = Modifier.padding(top = 2.dp).background(Lime, RoundedCornerShape(50)).padding(horizontal = 8.dp, vertical = 3.dp),
+                    )
                 }
             }
         }
     }
+}
+
+/** "What I understood": the request as chips. Removing one searches again without it. */
+@Composable
+private fun IntentChips(intent: NilaResponse.FoodSearch, onChange: ((NilaResponse.FoodSearch) -> Unit)?) {
+    val chips = buildList {
+        add(Triple(intent.query, null as NilaResponse.FoodSearch?, true))
+        intent.people?.let { add(Triple("For $it", intent.copy(people = null), false)) }
+        intent.budgetRupees?.let { add(Triple("Under ₹$it", intent.copy(budgetRupees = null), false)) }
+        intent.preference?.let { add(Triple(it.replaceFirstChar(Char::uppercase), intent.copy(preference = null), false)) }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+        chips.forEach { (label, without, main) ->
+            Surface(
+                color = if (main) Paper else Panel,
+                shape = RoundedCornerShape(50),
+                modifier = if (without != null && onChange != null) Modifier.clickable { onChange(without) } else Modifier,
+            ) {
+                Text(
+                    if (without != null && onChange != null) "$label  ✕" else label,
+                    color = if (main) Ink else Paper,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+/** The request in one line, the way a person would say it back: "Biryani for 3 under ₹800". */
+internal fun foodIntentTitle(intent: NilaResponse.FoodSearch): String = buildString {
+    append(listOfNotNull(intent.preference, intent.query).joinToString(" ").replaceFirstChar(Char::uppercase))
+    intent.people?.let { append(" for $it") }
+    intent.budgetRupees?.let { append(" under ₹$it") }
 }
 
 @Composable
@@ -465,6 +593,7 @@ private fun RestaurantRow(restaurant: FoodRestaurant, onOpen: () -> Unit) {
 @Composable
 private fun MenuCard(card: FoodCard.Menu, actions: FoodActions) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        actions.lastResults()?.let { results -> BackLink("Other places") { actions.back(results) } }
         StepHeader(3, card.restaurant.name)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             RatingBadge(card.restaurant.rating)
@@ -536,6 +665,7 @@ private fun SizeChips(sizes: List<FoodSize>, selected: FoodSize?, onPick: (FoodS
 private fun CartCard(card: FoodCard.Cart, actions: FoodActions) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         StepHeader(4, "Your cart")
+        actions.lastMenu()?.let { menu -> BackLink("Add more from ${card.restaurant.name}") { actions.back(menu) } }
         Surface(color = CardInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(card.cart.restaurantName, color = Paper, fontWeight = FontWeight.Bold, fontSize = 16.sp)
@@ -576,7 +706,7 @@ private fun CartCard(card: FoodCard.Cart, actions: FoodActions) {
                     Text("To pay", color = Paper, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     Text(card.cart.total, color = Paper, fontWeight = FontWeight.Black, fontSize = 20.sp)
                 }
-                Text("Deliver to ${card.address.label} · ${card.address.line}", color = Muted, fontSize = 12.sp, maxLines = 2)
+                Text("To ${card.address.label} · ${card.address.line.substringAfter(": ")}", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         Button(
@@ -595,6 +725,7 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
     var selected by remember { mutableStateOf(card.options.firstOrNull()) }
     var armed by remember { mutableStateOf(false) }
     var placed by remember { mutableStateOf(false) }
+    var showAll by remember { mutableStateOf(false) }
     // The second tap must come soon after the first; otherwise the gate closes again.
     LaunchedEffect(armed) {
         if (armed) {
@@ -623,22 +754,28 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        StepHeader(5, "How do you want to pay?")
-        Text(
-            "${card.cart.total} · ${card.cart.lines.sumOf { it.quantity }} item from ${card.restaurant.name}",
-            color = Muted,
-            fontSize = 13.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Group("PAY BY UPI APP", upi)
-        Group("PAY ON DELIVERY", cash)
+        actions.lastCart()?.let { cart -> BackLink("Edit cart") { actions.back(cart) } }
+        StepHeader(5, "Review and pay")
+        // One method shown: the one used last time, or the first. The rest stay one tap away.
+        if (showAll) {
+            Group("PAY BY UPI APP", upi)
+            Group("PAY ON DELIVERY", cash)
+        } else {
+            selected?.let { Group("PAY WITH", listOf(it)) }
+            Text(
+                "Other ways to pay",
+                color = Lime,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clickable(enabled = !placed) { showAll = true }.padding(vertical = 4.dp),
+            )
+        }
         Spacer(Modifier.height(4.dp))
         Surface(color = CommitInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("REAL ORDER · CONFIRM BEFORE PLACING", color = Orange, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                 card.cart.lines.forEach { Text("${it.quantity} × ${it.name}", color = Paper, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
-                Text("Your order will be delivered to ${card.address.label}: ${card.address.line.substringAfter(": ")}", color = Muted, fontSize = 12.sp)
+                Text("To ${card.address.label} · ${card.address.line.substringAfter(": ")}", color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(card.cart.total, color = Paper, fontSize = 26.sp, fontWeight = FontWeight.Black)
                     Text(
@@ -703,42 +840,50 @@ private fun PayRow(option: FoodPayOption, selected: Boolean, enabled: Boolean, o
 
 @Composable
 private fun OrderCard(card: FoodCard.Order, actions: FoodActions) {
-    Surface(
-        color = if (card.placed) Color(0xFF16261D) else CardInk,
-        shape = RoundedCornerShape(18.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
+    if (card.placed) {
+        Surface(color = Lime, shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(Modifier.size(44.dp).background(Ink, CircleShape), contentAlignment = Alignment.Center) {
+                    Text("✓", color = Lime, fontSize = 22.sp, fontWeight = FontWeight.Black)
+                }
+                Text("Ordered.\nYou stayed in control.", color = Ink, fontSize = 30.sp, fontFamily = FontFamily.Serif, lineHeight = 34.sp)
+                Text(card.detail, color = Ink.copy(alpha = 0.75f), fontSize = 13.sp)
+                card.orderId?.let { Text("Swiggy order $it", color = Ink.copy(alpha = 0.6f), fontSize = 11.sp) }
+                Button(
+                    onClick = { actions.track(card.orderId) },
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Paper),
+                ) { Text("Track order", fontWeight = FontWeight.Bold) }
+            }
+        }
+        return
+    }
+    Surface(color = CardInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.size(32.dp).background(if (card.placed) RatingGreen else Panel, CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) { Text(if (card.placed) "✓" else "₹", color = Color.White, fontWeight = FontWeight.Black) }
-                Text(card.title, color = Paper, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 12.dp))
+                Box(Modifier.size(32.dp).background(Panel, CircleShape), contentAlignment = Alignment.Center) {
+                    Text("₹", color = Color.White, fontWeight = FontWeight.Black)
+                }
+                Text(card.title, color = Paper, fontSize = 20.sp, fontFamily = FontFamily.Serif, modifier = Modifier.padding(start = 12.dp))
             }
             Text(card.detail, color = Muted, fontSize = 13.sp)
             card.orderId?.let { Text("Order $it", color = Muted, fontSize = 11.sp) }
-            val pending = card.pending
-            if (pending != null) {
-                pending.upiLink?.let { link ->
-                    Button(onClick = { actions.openUpi(link) }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
-                        Text("Open UPI app to pay")
-                    }
-                }
-                OutlinedButton(
-                    onClick = { actions.checkPayment(pending) },
+            val pending = card.pending ?: return@Column
+            pending.upiLink?.let { link ->
+                Button(
+                    onClick = { actions.openUpi(link) },
                     modifier = Modifier.fillMaxWidth(),
-                    border = BorderStroke(1.dp, Lime.copy(alpha = 0.5f)),
                     shape = RoundedCornerShape(14.dp),
-                ) { Text("I've paid — check status", color = Lime) }
-            } else if (card.placed) {
-                OutlinedButton(
-                    onClick = { actions.track(card.orderId) },
-                    modifier = Modifier.fillMaxWidth(),
-                    border = BorderStroke(1.dp, Lime.copy(alpha = 0.5f)),
-                    shape = RoundedCornerShape(14.dp),
-                ) { Text("Track order", color = Lime) }
+                    colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink),
+                ) { Text("Open UPI app to pay", fontWeight = FontWeight.Bold) }
             }
+            OutlinedButton(
+                onClick = { actions.checkPayment(pending) },
+                modifier = Modifier.fillMaxWidth(),
+                border = BorderStroke(1.dp, Lime.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(14.dp),
+            ) { Text("I've paid — check status", color = Lime) }
         }
     }
 }

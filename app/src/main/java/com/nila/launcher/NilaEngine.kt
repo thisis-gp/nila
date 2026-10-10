@@ -29,7 +29,12 @@ sealed interface NilaResponse {
     /** One step of the live Swiggy order flow, rendered by FoodCards.kt. */
     data class Food(val card: FoodCard) : NilaResponse
     /** The router chose search_food. The launcher starts the live Swiggy flow, or shows the labelled mock if Swiggy isn't connected. */
-    data class FoodSearch(val query: String) : NilaResponse
+    data class FoodSearch(
+        val query: String,
+        val people: Int? = null,
+        val budgetRupees: Int? = null,
+        val preference: String? = null,
+    ) : NilaResponse
     /**
      * A validated Commit call that has not run. [lines] are the call's own values, so the user sees exactly
      * what Confirm authorizes. Pass [token] to NilaEngine.confirm after the user approves; it works once.
@@ -92,7 +97,10 @@ class NilaEngine(
         CapabilityDescriptor(
             id = "search_food",
             description = "Order food or find restaurants and dishes to eat, for example biryani, pizza or dinner.",
-            params = listOf(Param("query", ParamType.STRING, label = "Dish or restaurant name only, like biryani")),
+            params = listOf(
+                Param("query", ParamType.STRING, label = "Dish or restaurant name only, like biryani"),
+                Param("preference", ParamType.STRING, required = false, label = "Taste or diet words the user said, like light, spicy or veg"),
+            ),
             permission = PermissionClass.READ,
         ),
         CapabilityDescriptor(
@@ -102,6 +110,14 @@ class NilaEngine(
             permission = PermissionClass.READ,
         ),
     ).plus(extraCapabilities).associateBy { it.id }
+
+    private companion object {
+        const val MAX_PARTY = 20
+        val NUMBER_WORDS = mapOf(
+            "one" to 1, "two" to 2, "three" to 3, "four" to 4, "five" to 5,
+            "six" to 6, "seven" to 7, "eight" to 8, "nine" to 9, "ten" to 10,
+        )
+    }
 
     // Speech recognizers write "6:30 p.m."; fold a.m./p.m. into am/pm so the time is not misread.
     private fun normalize(input: String) = input.trim().lowercase().replace(Regex("""(?<=[\d\s])([ap])\.\s?m\.?"""), "$1m")
@@ -115,6 +131,26 @@ class NilaEngine(
      * Reads the alarm time exactly as the user said it. When a model picks create_alarm, these values
      * replace the model's: FunctionGemma dropped "pm" and ":45" on the iQOO 15.
      */
+    /**
+     * How many people and the budget, read from the user's own words like the alarm time is: a model
+     * invents numbers ("for three" is not a digit it can ground), so these never come from the model.
+     */
+    fun foodConstraints(input: String, search: NilaResponse.FoodSearch): NilaResponse.FoodSearch {
+        val text = normalize(input)
+        val budget = Regex("""(?:under|below|within|less than|up ?to|max|budget(?: of)?)\s*(?:rs\.?|₹|inr)?\s*(\d{2,6})""").find(text)
+            ?: Regex("""(?:₹|rs\.?\s?)(\d{2,6})""").find(text)
+        val party = Regex("""\bfor\s+(\d{1,2}|${NUMBER_WORDS.keys.joinToString("|")})\b(?!\s*(?:am|pm|:))(?:\s+(?:people|persons|of us))?""")
+        val people = party.find(text)?.groupValues?.get(1)?.let { it.toIntOrNull() ?: NUMBER_WORDS[it] }
+        // Gemma sometimes keeps "for three" or "under 800" in the dish name; the chips carry those now.
+        val dish = normalize(search.query).replace(party, " ").let { rest -> budget?.let { rest.replace(it.value, " ") } ?: rest }
+            .replace(Regex("""\s+"""), " ").trim()
+        return search.copy(
+            query = dish.ifBlank { search.query },
+            people = people?.takeIf { it in 1..MAX_PARTY },
+            budgetRupees = budget?.groupValues?.get(1)?.toIntOrNull(),
+        )
+    }
+
     fun alarmArgs(input: String): Map<String, Any>? {
         val text = normalize(input)
         val match = clockTime.find(text) ?: compactTime.find(text) ?: return null
@@ -194,7 +230,11 @@ class NilaEngine(
             "open_app" -> apps[args["app"]]?.let { NilaResponse.OpenApp(it.first, it.second, it.third) }
                 ?: NilaResponse.Text("I can't open that app.")
             "remember_fact" -> NilaResponse.Remember(args["fact"] as String)
-            "search_food" -> NilaResponse.FoodSearch(args["query"] as String)
+            "search_food" -> NilaResponse.FoodSearch(
+                query = args["query"] as String,
+                // "chicken" for "chicken biryani" repeats the dish; only a word the dish doesn't already say is a preference.
+                preference = (args["preference"] as? String)?.takeIf { it.isNotBlank() && !(args["query"] as String).contains(it, ignoreCase = true) },
+            )
             "get_directions" -> NilaResponse.Navigate(args["destination"] as String)
             else -> NilaResponse.Text("I can't do that yet. Nothing was done.")
         }
