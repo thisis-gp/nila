@@ -66,8 +66,11 @@ jobs:
           HEAD_SHA: ${{ steps.context.outputs.head_sha }}
         run: |
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          git -c http.extraheader="$AUTH_HEADER" fetch --no-tags origin "$BASE_SHA"
-          unset AUTH_HEADER GH_TOKEN
+          GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0=http.extraheader \
+          GIT_CONFIG_VALUE_0="$AUTH_HEADER" \
+            git fetch --no-tags origin "$BASE_SHA"
+          unset AUTH_HEADER GH_TOKEN GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
           git update-ref refs/remotes/review/base FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
           if git cat-file -e refs/remotes/review/base:.github/codex/prompts/review.md 2>/dev/null; then
@@ -104,7 +107,10 @@ jobs:
             -p "$(cat .nila-review-prompt.md)" \
             > "$RUNNER_TEMP/claude-review.json"
           jq -ce '.structured_output | select(type == "object")' \
-            "$RUNNER_TEMP/claude-review.json" > codex-review.json
+            "$RUNNER_TEMP/claude-review.json" > codex-review.json || {
+              echo "::error::Claude did not return a structured review object."
+              exit 1
+            }
       - uses: actions/upload-artifact@v7
         with:
           name: nila-review-${{ steps.context.outputs.pr_number }}-${{ steps.context.outputs.head_sha }}
@@ -117,16 +123,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: read
-      contents: write
       issues: write
-      pull-requests: write
     steps:
       - uses: actions/download-artifact@v8
         with:
           name: nila-review-${{ needs.review.outputs.pr_number }}-${{ needs.review.outputs.head_sha }}
           path: review
       - name: Validate and post review
-        id: result
         uses: actions/github-script@v7
         env:
           REVIEW_FILE: review/codex-review.json
@@ -163,70 +166,10 @@ jobs:
             const body = review.findings.length
               ? `${marker}\n## NILA review — findings\n\n${review.findings.map(f => `- **${f.severity}** \`${f.file}:${f.line}\` — ${f.finding} Fix: ${f.fix}`).join('\n')}`
               : `${marker}\n## NILA review — clean\n\nNo actionable findings. ${review.summary}`;
-            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number, per_page: 100 });
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
             const prior = comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
             if (prior) {
               await github.rest.issues.updateComment({ owner, repo, comment_id: prior.id, body });
             } else {
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
-            core.setOutput('clean', review.verdict === 'clean' ? 'true' : 'false');
-            core.setOutput('head_sha', process.env.HEAD_SHA);
-      - name: Wait for Android CI and approve clean review
-        if: steps.result.outputs.clean == 'true'
-        uses: actions/github-script@v7
-        env:
-          PR_NUMBER: ${{ needs.review.outputs.pr_number }}
-          HEAD_SHA: ${{ needs.review.outputs.head_sha }}
-        with:
-          script: |
-            const pull_number = Number(process.env.PR_NUMBER);
-            const head_sha = process.env.HEAD_SHA;
-            let android;
-            for (let attempt = 0; attempt < 40; attempt++) {
-              const { data: workflows } = await github.rest.actions.listRepoWorkflows(context.repo);
-              const workflow = workflows.workflows.find(item => item.path === '.github/workflows/android.yml');
-              if (!workflow) throw new Error('Android CI workflow not found; refusing approval and auto-merge.');
-              const { data } = await github.rest.actions.listWorkflowRuns({
-                ...context.repo,
-                workflow_id: workflow.id,
-                head_sha,
-                event: 'pull_request',
-                per_page: 100,
-              });
-              android = data.workflow_runs.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
-              if (android?.status === 'completed') break;
-              await new Promise(resolve => setTimeout(resolve, 15000));
-            }
-            if (!android || android.status !== 'completed' || android.conclusion !== 'success') {
-              throw new Error('Android CI did not pass; refusing approval and auto-merge.');
-            }
-            const { data: jobs } = await github.rest.actions.listJobsForWorkflowRun({
-              ...context.repo,
-              run_id: android.id,
-              per_page: 100,
-            });
-            if (!jobs.jobs.some(job => job.name === 'test' && job.conclusion === 'success')) {
-              throw new Error('Android test job did not pass; refusing approval and auto-merge.');
-            }
-            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number });
-            if (pr.head.sha !== head_sha || pr.state !== 'open') {
-              throw new Error('PR head changed or PR closed; refusing approval and auto-merge.');
-            }
-            await github.rest.pulls.createReview({
-              ...context.repo,
-              pull_number,
-              commit_id: head_sha,
-              event: 'APPROVE',
-              body: 'NILA review clean; Android CI passed.',
-            });
-      - name: Enable GitHub auto-merge for clean review
-        if: steps.result.outputs.clean == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.review.outputs.pr_number }}
-          REVIEWED_SHA: ${{ needs.review.outputs.head_sha }}
-        run: |
-          test "$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq .head.sha)" = "$REVIEWED_SHA"
-          gh pr merge "$PR_NUMBER" --auto --squash
