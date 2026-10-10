@@ -28,6 +28,9 @@ internal object MapsClient {
     /** How far around [near] a place search looks first, in degrees (about 55 km). */
     private const val NEARBY_DEGREES = 0.5
 
+    /** Matches compared by importance before one is picked. */
+    private const val CANDIDATES = 5
+
     /**
      * Returns null on failure — caller falls back to the Maps redirect only. With [near], places within about
      * 55 km are searched first, so "the airport" means the local one; the open search is the fallback.
@@ -39,13 +42,15 @@ internal object MapsClient {
     private fun search(query: String, area: String): Place? = runCatching {
         val url = "https://nominatim.openstreetmap.org/search" +
             "?q=${java.net.URLEncoder.encode(query, "UTF-8")}" +
-            "&format=json&limit=1$area"
+            "&format=json&limit=$CANDIDATES$area"
         val request = Request.Builder().url(url).header("User-Agent", USER_AGENT).build()
         http.newCall(request).execute().use { resp ->
             if (!resp.isSuccessful) return null
             val results = JSONArray(resp.body?.string().orEmpty())
             if (results.length() == 0) return null
-            val first = results.getJSONObject(0)
+            // The best-known place wins: "the airport" near Ashokanagar first matched a hotel called
+            // "The Belvedere - Airport District"; Nominatim's importance ranks Kempegowda far above it.
+            val first = (0 until results.length()).map { results.getJSONObject(it) }.maxByOrNull { it.optDouble("importance", 0.0) }!!
             Place(
                 name = first.optString("display_name").substringBefore(","),
                 address = first.optString("display_name"),
