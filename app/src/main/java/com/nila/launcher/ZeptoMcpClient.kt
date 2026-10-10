@@ -28,6 +28,16 @@ internal fun sseDataOrRaw(raw: String): String =
     raw.lineSequence().filter { it.startsWith("data:") }.map { it.removePrefix("data:").trim() }.lastOrNull() ?: raw
 
 /**
+ * Headers carried on every MCP request after the session/version are known. Streamable HTTP requires
+ * the negotiated protocol version on every request after initialize, not just the session id.
+ * https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#protocol-version-header
+ */
+internal fun rpcHeaders(sessionId: String?, protocolVersion: String?): Map<String, String> = buildMap {
+    sessionId?.let { put("Mcp-Session-Id", it) }
+    protocolVersion?.let { put("MCP-Protocol-Version", it) }
+}
+
+/**
  * JSON-RPC client for Zepto's MCP (Streamable HTTP transport). Methods here are typed against
  * the real schemas and real responses observed on 2026-10-09 (see zepto_tools.json dump), not
  * guessed. Order placement (create_order / payment tools) is intentionally not wired up: that's
@@ -38,6 +48,10 @@ class ZeptoMcpClient(private val auth: ZeptoAuth) {
     private val nextId = AtomicInteger(1)
     private var initialized = false
     private var sessionId: String? = null
+    // The version initialize() actually negotiated. Streamable HTTP requires every request after
+    // initialization to carry it, so servers that key behavior off this header don't silently fall
+    // back to 2025-03-26. https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#protocol-version-header
+    private var protocolVersion: String? = null
 
     private fun rpc(method: String, params: JSONObject = JSONObject()): JSONObject {
         val token = auth.accessToken
@@ -47,8 +61,7 @@ class ZeptoMcpClient(private val auth: ZeptoAuth) {
             .put("id", nextId.getAndIncrement())
             .put("method", method)
             .put("params", params)
-        val extraHeaders = sessionId?.let { mapOf("Mcp-Session-Id" to it) } ?: emptyMap()
-        val result = httpPostRaw(ZeptoConfig.MCP_URL, request.toString(), "application/json", token, extraHeaders)
+        val result = httpPostRaw(ZeptoConfig.MCP_URL, request.toString(), "application/json", token, rpcHeaders(sessionId, protocolVersion))
         result.headers.entries.firstOrNull { it.key.equals("Mcp-Session-Id", ignoreCase = true) }
             ?.let { sessionId = it.value }
         val response = JSONObject(sseDataOrRaw(result.body))
@@ -58,13 +71,14 @@ class ZeptoMcpClient(private val auth: ZeptoAuth) {
 
     private fun ensureInitialized() {
         if (initialized) return
-        rpc(
+        val result = rpc(
             "initialize",
             JSONObject()
                 .put("protocolVersion", "2025-06-18")
                 .put("capabilities", JSONObject())
                 .put("clientInfo", JSONObject().put("name", "nila-launcher").put("version", "0.1.0")),
         )
+        protocolVersion = result.optString("protocolVersion").takeIf { it.isNotBlank() }
         initialized = true
     }
 

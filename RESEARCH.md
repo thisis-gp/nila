@@ -86,18 +86,6 @@ Sources:
 
 Zomato has an official MCP endpoint but its repository restricts third-party use without permission. Do not include it in the finale build unless written approval is received: https://github.com/Zomato/mcp-server-manifest
 
-### Zepto
-
-Zepto has an official MCP endpoint at `https://mcp.zepto.co.in/mcp` for quick-commerce product search, cart management, order placement and order history. Authentication is OAuth: the user enters an Indian mobile number and verifies by OTP in a browser redirect, no sandbox, real consumer orders only.
-
-Zepto overlaps Swiggy Instamart's grocery surface, so it is not part of the locked finale stack. It is a documented Phase 2 option if the team wants a second quick-commerce provider to prove the capability registry and MCP client generalize across companies, not only across Swiggy's own three surfaces. Confirm third-party app embedding terms in Zepto's own repository before building against it, since the published setup examples target AI chat clients, not a native Android MCP client.
-
-Correction confirmed 2026-10-09 by an actual registration attempt: dynamic client registration at `https://auth.zepto.co.in/register` only accepts `localhost` redirect URIs. Any production redirect, including an Android app's custom URI scheme, is rejected with `invalid_redirect_uri` and requires a written allowlist request filed as a GitHub issue on `zeptonow/mcp`, same approval gate as Zomato, just a different channel, response time unknown (multiple other apps have open allowlist requests pending). Zepto also expects the redirect URI to be a real HTTPS URL on a domain the requester controls, not a bare custom scheme. **Zepto is not a faster path than Swiggy** for this reason; both are blocked on an external response.
-
-Sources:
-
-- Repository: https://github.com/zeptonow/mcp
-
 ### Maps and device actions
 
 Google Maps Grounding Lite MCP provides place search and routes: https://developers.google.com/maps/architecture/grounding-with-maps-mcp
