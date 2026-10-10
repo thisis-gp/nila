@@ -31,7 +31,12 @@ class TavilyAuth(context: Context) {
         set(value) = prefs.edit().putString("api_key", value).apply()
 
     val isConnected: Boolean get() = !apiKey.isNullOrBlank()
+
+    fun disconnect() = prefs.edit().remove("api_key").apply()
 }
+
+/** A pasted Tavily key, trimmed; null when it is not one, so a typo never shows as "connected". */
+fun tavilyKey(pasted: String): String? = pasted.trim().takeIf { Regex("""tvly-[A-Za-z0-9_-]{8,}""").matches(it) }
 
 /** Confirmed 2026-10-10 against Tavily's published API reference: Bearer auth, results[].{title,url,content}. */
 object TavilySearch {

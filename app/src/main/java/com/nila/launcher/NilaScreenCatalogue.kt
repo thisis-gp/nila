@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
@@ -19,7 +20,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -31,9 +34,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -218,13 +224,18 @@ private fun ActivityScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = P
     SectionCard("Message to Arjun", "Stopped before sending", "MOCK · CANCELLED")
 }
 
-/** A signed-in service shown in Settings: Swiggy for ordering, Zomato for comparing. */
+/**
+ * A service NILA can act on, shown in Settings. Sign-in services use [onConnect]; key services (web search)
+ * take the key in a hidden field through [saveKey], which returns false for something that is not a key.
+ */
 internal data class ServiceAccount(
     val name: String,
     val detail: String,
     val connected: Boolean,
     val onConnect: () -> Unit,
     val onDisconnect: () -> Unit,
+    val saveKey: ((String) -> Boolean)? = null,
+    val keyUrl: String? = null,
 )
 
 @Composable
@@ -239,14 +250,8 @@ private fun SettingsScreen(
     PrimaryButton("Choose default Home app") { onChooseDefaultHome() }
     PrimaryButton("Voice languages · English · हिंदी · മലയാളം") { onOpen(NilaScreen.Languages) }
     SectionLabel("Accounts", Modifier.padding(top = 8.dp))
-    accounts.forEach { account ->
-        SectionCard("${account.name} account", account.detail, if (account.connected) "CONNECTED" else "NOT CONNECTED")
-        if (account.connected) {
-            SecondaryButton("Disconnect ${account.name}") { account.onDisconnect() }
-        } else {
-            PrimaryButton("Connect ${account.name}") { account.onConnect() }
-        }
-    }
+    BodyText("The services NILA can act on for you. Sign-ins and keys stay encrypted on this phone.")
+    accounts.forEach { AccountCard(it) }
     SectionLabel("Voice, memory and consent", Modifier.padding(top = 8.dp))
     SectionCard("Lakshmi voice", "Android on-device voice candidate", "NOT CONNECTED")
     SectionCard("Memory", "Typed demo fact stays in app storage", "LOCAL")
@@ -258,6 +263,57 @@ private fun SettingsScreen(
     SecondaryButton("Memory") { onOpen(NilaScreen.Memory) }
     SecondaryButton("People & messages") { onOpen(NilaScreen.People) }
     SecondaryButton("Activity & approvals") { onOpen(NilaScreen.Activity) }
+}
+
+@Composable
+private fun AccountCard(account: ServiceAccount) {
+    var key by remember(account.name) { mutableStateOf("") }
+    var keyError by remember(account.name) { mutableStateOf(false) }
+    val uriHandler = LocalUriHandler.current
+    NilaCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(account.name, color = Paper, fontWeight = FontWeight.Bold, fontSize = 17.sp, modifier = Modifier.weight(1f))
+            StatusPill(account.connected)
+        }
+        Text(account.detail, color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+        when {
+            account.connected -> TextAction("Disconnect", onClick = account.onDisconnect, color = Muted)
+            account.saveKey != null -> {
+                OutlinedTextField(
+                    value = key,
+                    onValueChange = { key = it; keyError = false },
+                    placeholder = { Text("tvly-…", color = Muted) },
+                    singleLine = true,
+                    // The key is a password: hidden on screen, and never suggested or learned by the keyboard.
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
+                    isError = keyError,
+                    supportingText = if (keyError) ({ Text("That doesn't look like a Tavily key. It starts with tvly-.") }) else null,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                PrimaryAction("Save key", onClick = {
+                    if (account.saveKey.invoke(key)) key = "" else keyError = true
+                }, enabled = key.isNotBlank())
+                account.keyUrl?.let { url -> TextAction("Get a free key", onClick = { uriHandler.openUri(url) }) }
+            }
+            else -> PrimaryAction("Connect ${account.name}", onClick = account.onConnect)
+        }
+    }
+}
+
+/** "● CONNECTED" in lime, or a muted "NOT CONNECTED". */
+@Composable
+private fun StatusPill(connected: Boolean) {
+    val color = if (connected) Lime else Muted
+    Row(
+        Modifier.border(1.dp, color.copy(alpha = 0.4f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(Modifier.size(6.dp).background(color, CircleShape))
+        SectionLabel(if (connected) "Connected" else "Not connected", color = color)
+    }
 }
 
 @Composable
