@@ -32,25 +32,31 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 // Zepto as the same step-by-step sheet as Swiggy food: address, products (Zepto beside Instamart), cart,
 // review with the real Cash on Delivery preview, then the placed order. One card is updated in place.
 
 sealed interface GroceryCard {
-    /** [item] is null when the address is picked on the way to checkout rather than for a search. */
-    data class Addresses(val item: String?, val addresses: List<SavedAddress>) : GroceryCard
+    /** [item] is null when the address is picked on the way to checkout. [note] says why NILA is asking. */
+    data class Addresses(val item: String?, val addresses: List<SavedAddress>, val note: String? = null) : GroceryCard
     data class Products(val address: SavedAddress, val item: String, val groups: List<ProductProviderGroup>, val cheapest: String?) : GroceryCard
-    /** Both carts: Zepto's and, when Swiggy is connected, Instamart's. Each is ordered on its own. */
-    data class Cart(val address: SavedAddress?, val items: List<CartItem>, val instamart: InstamartCart?) : GroceryCard
-    /** [preview] is Zepto's own order preview text: items, fees and the final total. */
-    data class Review(val address: SavedAddress, val items: List<CartItem>, val preview: String) : GroceryCard
+    /**
+     * Both carts: Zepto's and, when Swiggy is connected, Instamart's. Each is ordered on its own. [sameAddress]
+     * is true when both deliver to the address chosen in NILA.
+     */
+    data class Cart(val address: SavedAddress?, val items: List<CartItem>, val instamart: InstamartCart?, val sameAddress: Boolean) : GroceryCard
+    /** [preview] is Zepto's own order preview text. [note] says the cart changed since the last review. */
+    data class Review(val address: SavedAddress, val items: List<CartItem>, val preview: String, val note: String? = null) : GroceryCard
     /** Instamart's live bill and the cash method it offers, before checkout. */
-    data class InstamartReview(val cart: InstamartCart, val method: String, val addressId: String) : GroceryCard
+    data class InstamartReview(val cart: InstamartCart, val method: String, val addressId: String, val note: String? = null) : GroceryCard
     data class Placed(val provider: String, val addressLabel: String, val result: String) : GroceryCard
     data class Problem(val message: String) : GroceryCard
 }
@@ -63,9 +69,10 @@ internal interface GroceryActions {
     fun changeLine(item: CartItem, quantity: Int)
     fun changeInstamartLine(item: InstamartItem, quantity: Int)
     fun review()
-    fun place()
     fun reviewInstamart()
-    fun placeInstamart(review: GroceryCard.InstamartReview)
+    /** False when another step was running and nothing was sent. */
+    fun place(review: GroceryCard.Review): Boolean
+    fun placeInstamart(review: GroceryCard.InstamartReview): Boolean
     fun back(card: GroceryCard)
     fun lastProducts(): GroceryCard.Products?
     fun lastCart(): GroceryCard.Cart?
@@ -76,6 +83,39 @@ internal fun paiseText(paise: Long) = if (paise % 100 == 0L) "₹${paise / 100}"
 
 /** Sum of a Zepto cart in paise. */
 internal fun cartTotalPaise(items: List<CartItem>) = items.sumOf { it.priceInPaisa.toLong() * it.quantity }
+
+/** The same Zepto order: every line and quantity unchanged. */
+internal fun sameZeptoCart(a: List<CartItem>, b: List<CartItem>) =
+    a.associate { it.productVariantId to it.quantity } == b.associate { it.productVariantId to it.quantity }
+
+private val pincode = Regex("""\b\d{6}\b""")
+private fun words(line: String) = line.lowercase().split(Regex("""[^\p{L}\p{N}]+""")).filter { it.length > 1 }.toSet()
+
+/**
+ * The Zepto saved address that is the address chosen in NILA: the same pincode, then the most shared words
+ * (at least half of NILA's). Null when none is, so NILA asks instead of delivering somewhere else.
+ */
+internal fun matchAddress(nila: FoodAddress, zepto: List<SavedAddress>): SavedAddress? {
+    val pin = pincode.find(nila.line)?.value
+    val nilaWords = words(nila.line)
+    return zepto
+        .filter { saved -> pin == null || pincode.find(saved.addressLine)?.value.let { it == null || it == pin } }
+        .map { saved -> saved to (words(saved.addressLine) intersect nilaWords).size }
+        .filter { (_, shared) -> nilaWords.isNotEmpty() && shared * 2 >= nilaWords.size }
+        .maxByOrNull { (_, shared) -> shared }
+        ?.first
+}
+
+/** The two-tap Commit gate: the first tap arms it, the second places, once. */
+internal data class GateState(val armed: Boolean = false, val placed: Boolean = false)
+
+/** [place] returns false when nothing was sent (another step was running): the gate closes, ready again. */
+internal fun GateState.tap(place: () -> Boolean): GateState = when {
+    placed -> this
+    !armed -> copy(armed = true)
+    place() -> GateState(placed = true)
+    else -> GateState()
+}
 
 /**
  * Zepto steps. Every function returns the card to show; failures become a [GroceryCard.Problem] instead of
@@ -90,10 +130,14 @@ internal class GroceryFlow(
 ) {
     private var client: ZeptoMcpClient? = null
     private val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "nila-device"
+    // Quantities are absolute, so updates run one at a time, in the order they were tapped.
+    private val zeptoCartLock = Mutex()
 
     /** The saved address whose store holds the cart. Zepto is hyperlocal, so it is chosen once per session. */
     var address by mutableStateOf<SavedAddress?>(null)
         private set
+    /** The address chosen in NILA (Swiggy's), which Instamart delivers to. Null without Swiggy. */
+    private var nilaAddress: FoodAddress? = null
     var lastProducts: GroceryCard.Products? = null
         private set
     var lastCart: GroceryCard.Cart? = null
@@ -103,16 +147,34 @@ internal class GroceryFlow(
         withContext(Dispatchers.IO) { block(client ?: ZeptoMcpClient(zeptoAuth).also { client = it }) }
 
     private suspend fun step(block: suspend () -> GroceryCard): NilaResponse =
-        NilaResponse.Grocery(runCatching { block() }.getOrElse { GroceryCard.Problem("Zepto: ${it.message ?: "something went wrong"}") })
+        NilaResponse.Grocery(
+            runCatching { block() }.getOrElse {
+                if (it is CancellationException) throw it
+                GroceryCard.Problem("Zepto: ${it.message ?: "something went wrong"}")
+            },
+        )
 
-    /** A search: straight to products when the address is known or there is only one, else ask where to deliver. */
+    private suspend fun setZeptoQuantity(variantId: String, storeProductId: String, name: String, quantity: Int) =
+        zeptoCartLock.withLock { zepto { it.setCartQuantity(deviceId, variantId, storeProductId, name, quantity) } }
+
+    /**
+     * A search. Zepto delivers to the address chosen in NILA when it is saved in Zepto, so both carts go to
+     * one place; otherwise NILA asks. Without Swiggy, a single saved Zepto address is used as is.
+     */
     suspend fun start(item: String): NilaResponse = step {
         address?.let { return@step products(it, item) }
         val saved = zepto { it.listSavedAddresses() }
-        when (saved.size) {
-            0 -> GroceryCard.Problem("No saved Zepto address yet. Add one in the Zepto app, then ask again.")
-            1 -> select(saved.single(), item)
-            else -> GroceryCard.Addresses(item, saved)
+        val nila = instamart.nilaAddress().also { nilaAddress = it }
+        val match = nila?.let { matchAddress(it, saved) }
+        when {
+            saved.isEmpty() -> GroceryCard.Problem("No saved Zepto address yet. Add one in the Zepto app, then ask again.")
+            match != null -> select(match, item)
+            nila == null && saved.size == 1 -> select(saved.single(), item)
+            else -> GroceryCard.Addresses(
+                item,
+                saved,
+                nila?.let { "Your NILA address (${it.label}) isn't saved in Zepto. Pick a Zepto address, or add it in the Zepto app so both carts go to one place." },
+            )
         }
     }
 
@@ -143,8 +205,13 @@ internal class GroceryFlow(
             picks.map { product ->
                 PickableProduct(product.name, product.packSize, paiseText(product.priceInPaisa.toLong()), product.imageUrl, inCart[product.productVariantId] ?: 0) { quantity ->
                     scope.launch {
-                        runCatching { zepto { it.setCartQuantity(deviceId, product.productVariantId, product.storeProductId, product.name, quantity) } }
-                            .onFailure { onProblem("Zepto couldn't update the cart right now.") }
+                        try {
+                            setZeptoQuantity(product.productVariantId, product.storeProductId, product.name, quantity)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            onProblem("Zepto couldn't update the cart right now.")
+                        }
                     }
                 }
             },
@@ -159,11 +226,25 @@ internal class GroceryFlow(
 
     suspend fun cart(): NilaResponse = step { loadCart() }
 
-    private suspend fun loadCart(): GroceryCard =
-        GroceryCard.Cart(address, zepto { it.viewCartItems() }, instamart.cart()).also { lastCart = it }
+    private suspend fun loadCart(): GroceryCard {
+        val nila = nilaAddress ?: instamart.nilaAddress().also { nilaAddress = it }
+        val at = address
+        val same = nila != null && at != null && matchAddress(nila, listOf(at)) != null
+        return GroceryCard.Cart(at, zepto { it.viewCartItems() }, instamart.cart(), same).also { lastCart = it }
+    }
+
+    /**
+     * Back to an earlier card, read again from the live carts: a replayed card's steppers would hold old
+     * quantities, and the next + would overwrite the real cart with a wrong absolute number.
+     */
+    suspend fun reload(card: GroceryCard): NilaResponse = when (card) {
+        is GroceryCard.Products -> step { products(card.address, card.item) }
+        is GroceryCard.Cart -> cart()
+        else -> NilaResponse.Grocery(card)
+    }
 
     suspend fun changeLine(line: CartItem, quantity: Int): NilaResponse = step {
-        zepto { it.setCartQuantity(deviceId, line.productVariantId, line.storeProductId, line.name, quantity) }
+        setZeptoQuantity(line.productVariantId, line.storeProductId, line.name, quantity)
         loadCart()
     }
 
@@ -173,35 +254,49 @@ internal class GroceryFlow(
     }
 
     /** Instamart's live bill, read again right before ordering because the cart may have changed in the Swiggy app. */
-    suspend fun reviewInstamart(): NilaResponse = step {
-        val cart = instamart.cart() ?: return@step GroceryCard.Problem("Connect Swiggy in Settings to order from Instamart.")
+    suspend fun reviewInstamart(note: String? = null): NilaResponse = step { instamartReview(note) }
+
+    private suspend fun instamartReview(note: String?): GroceryCard {
+        val cart = instamart.cart() ?: return GroceryCard.Problem("Connect Swiggy in Settings to order from Instamart.")
         val addressId = cart.addressId
         val method = cart.cashMethod
-        when {
+        return when {
             cart.lines.isEmpty() -> GroceryCard.Problem("Your Instamart cart is empty. Add something first.")
             addressId == null -> GroceryCard.Problem("Instamart has no delivery address. Choose one in the Swiggy app.")
             method == null -> GroceryCard.Problem("Instamart isn't offering cash on delivery for this cart. Finish it in the Swiggy app.")
-            else -> GroceryCard.InstamartReview(cart, method, addressId)
+            else -> GroceryCard.InstamartReview(cart, method, addressId, note)
         }
     }
 
-    /** Places a real Instamart Cash on Delivery order. Only reached from the Instamart review's confirm. */
+    /**
+     * Places a real Instamart Cash on Delivery order, but only the order the user confirmed: checkout sends
+     * Swiggy's current cart, so it is read again first, and any change goes back to review.
+     */
     suspend fun placeInstamart(review: GroceryCard.InstamartReview): NilaResponse = step {
+        val now = instamart.cart()
+        if (now == null || !now.sameOrderAs(review.cart) || now.cashMethod != review.method) {
+            return@step instamartReview("Your Instamart cart changed since you reviewed it. Check it and confirm again.")
+        }
         GroceryCard.Placed("Swiggy Instamart", review.cart.addressLabel ?: "your Swiggy address", instamart.checkout(review.addressId, review.method))
             .also { lastCart = null }
     }
 
     /** Zepto's real preview: no order exists yet. Without a chosen address the store is unknown, so ask first. */
-    suspend fun review(): NilaResponse = step {
-        val at = address ?: return@step GroceryCard.Addresses(null, zepto { it.listSavedAddresses() })
+    suspend fun review(): NilaResponse = step { zeptoReview(null) }
+
+    private suspend fun zeptoReview(note: String?): GroceryCard {
+        val at = address ?: return GroceryCard.Addresses(null, zepto { it.listSavedAddresses() })
         val items = zepto { it.viewCartItems() }
-        if (items.isEmpty()) return@step GroceryCard.Problem("Your Zepto cart is empty. Add something first.")
-        GroceryCard.Review(at, items, zepto { it.previewCodOrder(at.id) })
+        if (items.isEmpty()) return GroceryCard.Problem("Your Zepto cart is empty. Add something first.")
+        return GroceryCard.Review(at, items, zepto { it.previewCodOrder(at.id) }, note)
     }
 
-    /** Places a real Cash on Delivery order. Only reached from the Review card's confirm. */
-    suspend fun place(): NilaResponse = step {
+    /** Places a real Cash on Delivery order, after checking the Zepto cart is still the one reviewed. */
+    suspend fun place(review: GroceryCard.Review): NilaResponse = step {
         val at = address ?: error("no delivery address chosen")
+        if (at.id != review.address.id || !sameZeptoCart(zepto { it.viewCartItems() }, review.items)) {
+            return@step zeptoReview("Your Zepto cart changed since you reviewed it. Check it and confirm again.")
+        }
         GroceryCard.Placed("Zepto", at.label.ifBlank { "saved address" }, zepto { it.placeCodOrder(at.id) }).also { lastCart = null }
     }
 
@@ -231,10 +326,10 @@ internal fun GroceryCardView(card: GroceryCard, actions: GroceryActions) {
 private fun SavedAddress.asFood() = FoodAddress(id, label.ifBlank { "Saved address" }, addressLine)
 
 @Composable
-private fun DeliverTo(address: SavedAddress?, onChange: () -> Unit) {
+private fun DeliverTo(address: SavedAddress?, prefix: String = "To", onChange: () -> Unit) {
     Row(Modifier.clickable(onClick = onChange).padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
-            address?.let { "To ${it.label.ifBlank { "saved address" }} · ${it.addressLine}" } ?: "Delivery address: choose at checkout",
+            address?.let { "$prefix ${it.label.ifBlank { "saved address" }} · ${it.addressLine}" } ?: "Delivery address: choose at checkout",
             color = Muted,
             fontSize = 12.sp,
             maxLines = 1,
@@ -251,7 +346,7 @@ private fun DeliverTo(address: SavedAddress?, onChange: () -> Unit) {
 private fun GroceryAddressesCard(card: GroceryCard.Addresses, actions: GroceryActions) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         StepHeader(1, "Where should Zepto deliver?", ZEPTO_SOURCE)
-        Text("Zepto prices and stock depend on the nearest store, so the cart stays with this address.", color = Muted, fontSize = 13.sp)
+        Text(card.note ?: "Zepto prices and stock depend on the nearest store, so the cart stays with this address.", color = if (card.note != null) Orange else Muted, fontSize = 13.sp)
         if (card.addresses.isEmpty()) {
             NilaCard { Text("No saved Zepto address yet. Add one in the Zepto app, then ask again.", color = Paper) }
         } else Surface(color = CardInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
@@ -287,6 +382,11 @@ private fun GroceryCartCard(card: GroceryCard.Cart, actions: GroceryActions) {
         actions.lastProducts()?.let { products -> BackLink("Add more") { actions.back(products) } }
         StepHeader(3, "Your carts", "Zepto · Instamart · live")
         Text("Each app delivers its own cart, so each is ordered on its own.", color = Muted, fontSize = 13.sp)
+        when {
+            card.sameAddress -> DeliverTo(card.address, prefix = "Both deliver to") { actions.changeAddress(null) }
+            card.instamart != null && card.instamart.lines.isNotEmpty() && card.address != null ->
+                Text("Zepto and Instamart deliver to different addresses. Check each below.", color = Orange, fontSize = 13.sp)
+        }
 
         SectionLabel("Zepto · ${if (card.items.isEmpty()) "empty" else paiseText(total)}", Modifier.padding(top = 6.dp), color = Paper)
         CartBox {
@@ -303,7 +403,7 @@ private fun GroceryCartCard(card: GroceryCard.Cart, actions: GroceryActions) {
                 TotalRow("Items total", paiseText(total))
                 Text("Delivery fee and taxes come from Zepto on the next step.", color = Muted, fontSize = 11.sp)
             }
-            DeliverTo(card.address) { actions.changeAddress(null) }
+            if (!card.sameAddress) DeliverTo(card.address) { actions.changeAddress(null) }
             if (card.items.isNotEmpty()) PrimaryAction("Review Zepto order · ${paiseText(total)}", onClick = actions::review)
         }
 
@@ -329,7 +429,7 @@ private fun GroceryCartCard(card: GroceryCard.Cart, actions: GroceryActions) {
                     HorizontalDivider(color = Panel)
                     instamart.bill.forEach { (label, value) -> BillRow(label, value) }
                     instamart.toPay?.let { TotalRow("To pay", it) }
-                    instamart.addressLabel?.let { Text("To $it", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    if (!card.sameAddress) instamart.addressLabel?.let { Text("To $it", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                     instamart.warning?.let { Text(it, color = Orange, fontSize = 12.sp) }
                     PrimaryAction("Review Instamart order${instamart.toPay?.let { " · $it" }.orEmpty()}", onClick = actions::reviewInstamart)
                 }
@@ -375,28 +475,26 @@ private fun TotalRow(label: String, value: String) {
 
 /** The Commit gate both apps share: a real order, two taps within five seconds, then it locks. */
 @Composable
-private fun CommitGate(heading: String, lines: List<String>, address: String, warning: String, onPlace: () -> Unit) {
-    var armed by remember { mutableStateOf(false) }
-    var placed by remember { mutableStateOf(false) }
-    LaunchedEffect(armed) {
-        if (armed) {
+private fun CommitGate(key: Any, heading: String, lines: List<String>, address: String, warning: String, note: String?, onPlace: () -> Boolean) {
+    // Keyed on the review: a fresh review after a change starts with a fresh gate.
+    var gate by remember(key) { mutableStateOf(GateState()) }
+    LaunchedEffect(gate.armed) {
+        if (gate.armed) {
             delay(5_000)
-            armed = false
+            if (!gate.placed) gate = GateState()
         }
     }
+    val armed = gate.armed
+    val placed = gate.placed
     Surface(color = CommitInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            note?.let { Text(it, color = Paper, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
             Text(heading, color = Orange, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
             lines.forEach { Text(it, color = Paper, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
             Text(address, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(4.dp))
             Button(
-                onClick = {
-                    if (!armed) armed = true else {
-                        placed = true
-                        onPlace()
-                    }
-                },
+                onClick = { gate = gate.tap(onPlace) },
                 enabled = !placed,
                 colors = ButtonDefaults.buttonColors(containerColor = if (armed) Orange else Lime, contentColor = Ink),
                 modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -426,11 +524,13 @@ private fun GroceryReviewCard(card: GroceryCard.Review, actions: GroceryActions)
             Text(card.preview, color = Paper, fontSize = 13.sp, lineHeight = 19.sp)
         }
         CommitGate(
+            key = card,
+            note = card.note,
             heading = "REAL ZEPTO ORDER · CASH ON DELIVERY",
             lines = card.items.map { "${it.quantity} × ${it.name}" },
             address = "To ${card.address.label.ifBlank { "saved address" }} · ${card.address.addressLine}",
             warning = "This places a real Zepto order. You pay the rider in cash when it arrives.",
-            onPlace = actions::place,
+            onPlace = { actions.place(card) },
         )
     }
 }
@@ -447,6 +547,8 @@ private fun InstamartReviewCard(card: GroceryCard.InstamartReview, actions: Groc
             card.cart.warning?.let { Text(it, color = Orange, fontSize = 12.sp) }
         }
         CommitGate(
+            key = card,
+            note = card.note,
             heading = "REAL INSTAMART ORDER · ${card.method.uppercase()}",
             lines = card.cart.lines.map { (item, quantity) -> "$quantity × ${item.name}" },
             address = "To ${card.cart.addressLabel ?: "your Swiggy address"}",

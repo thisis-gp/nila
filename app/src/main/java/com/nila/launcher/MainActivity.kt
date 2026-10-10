@@ -210,8 +210,9 @@ private fun NilaApp(resumeVersion: Int) {
      * Swiggy steps update the booking card in place: one sheet for one intent, like the prototype's
      * temporary layer, instead of a new chat turn and a new card for every tap.
      */
-    fun runFood(label: String, step: suspend () -> NilaResponse) {
-        if (isThinking) return
+    /** Runs one step in place and says whether it ran: false while another step is still working. */
+    fun tryRunFood(label: String, step: suspend () -> NilaResponse): Boolean {
+        if (isThinking) return false
         val index = if (turns.lastOrNull()?.response.let { it is NilaResponse.Food || it is NilaResponse.Grocery }) turns.lastIndex else {
             turns += Turn(label, NilaResponse.Text(""))
             turns.lastIndex
@@ -221,6 +222,11 @@ private fun NilaApp(resumeVersion: Int) {
             turns[index] = turns[index].copy(response = step())
             isThinking = false
         }
+        return true
+    }
+
+    fun runFood(label: String, step: suspend () -> NilaResponse) {
+        tryRunFood(label, step)
     }
 
     val foodActions = remember {
@@ -287,12 +293,12 @@ private fun NilaApp(resumeVersion: Int) {
             override fun changeLine(item: CartItem, quantity: Int) =
                 runFood(if (quantity > item.quantity) "One more" else "One less") { groceryFlow.changeLine(item, quantity) }
             override fun review() = runFood("Review order") { groceryFlow.review() }
-            override fun place() = runFood("Place order") { groceryFlow.place() }
+            override fun place(review: GroceryCard.Review) = tryRunFood("Place order") { groceryFlow.place(review) }
             override fun changeInstamartLine(item: InstamartItem, quantity: Int) =
                 runFood(if (quantity > 0) "Update Instamart cart" else "Remove ${item.name}") { groceryFlow.changeInstamartLine(item, quantity) }
             override fun reviewInstamart() = runFood("Review Instamart order") { groceryFlow.reviewInstamart() }
-            override fun placeInstamart(review: GroceryCard.InstamartReview) = runFood("Place Instamart order") { groceryFlow.placeInstamart(review) }
-            override fun back(card: GroceryCard) = runFood("Back") { NilaResponse.Grocery(card) }
+            override fun placeInstamart(review: GroceryCard.InstamartReview) = tryRunFood("Place Instamart order") { groceryFlow.placeInstamart(review) }
+            override fun back(card: GroceryCard) = runFood("Back") { groceryFlow.reload(card) }
             override fun lastProducts() = groceryFlow.lastProducts
             override fun lastCart() = groceryFlow.lastCart
         }

@@ -490,7 +490,7 @@ private fun listText(o: JSONObject, key: String): String? = when (val v = o.opt(
     else -> null
 }?.takeIf { it.isNotBlank() }
 
-private fun parseAddresses(result: JSONObject): List<FoodAddress> =
+internal fun parseAddresses(result: JSONObject): List<FoodAddress> =
     allObjects(result)
         .filter { o -> o.pick("id", "addressId", "address_id") != null && o.pick("address", "fullAddress", "formattedAddress", "addressLine", "displayAddress", "annotation") != null }
         .mapNotNull { o ->
