@@ -254,7 +254,7 @@ private fun NilaApp(resumeVersion: Int) {
                                 confirm = { token ->
                                     // Replace the card with its result so the Confirm button cannot be tapped again.
                                     val index = turns.indexOfFirst { (it.response as? NilaResponse.NeedsConfirmation)?.token == token }
-                                    val result = engine.confirm(token)
+                                    val result = engine.confirm(token).let { if (it is NilaResponse.DismissAlarm) dismissAlarm(context, it) else it }
                                     if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
                                 },
                             ) { label, next -> turns += Turn(label, next) }
@@ -450,6 +450,8 @@ private fun ResponseView(
         ) { confirm(response.token) }
         is NilaResponse.Text -> Text(response.value)
         is NilaResponse.Remember -> Text("I'll remember: ${response.fact}")
+        // Only reached if a dismissal was not confirmed through the card; it is never sent without confirmation.
+        is NilaResponse.DismissAlarm -> Text("This alarm was not turned off.")
         is NilaResponse.Alarm -> ActionCard(
             title = "Alarm ${"%02d:%02d".format(response.hour, response.minute)}",
             detail = "Ready to ask Android to set this alarm.",
@@ -536,3 +538,23 @@ private fun ActionCard(title: String, detail: String, action: String, onClick: (
     }
 }
 
+/**
+ * Asks the Clock app to turn off an alarm after the user confirmed. Android does not let other apps read
+ * or delete alarms directly, so this is a request: the Clock app may show its own screen to pick one.
+ */
+private fun dismissAlarm(context: Context, alarm: NilaResponse.DismissAlarm): NilaResponse.Text {
+    val intent = Intent(AlarmClock.ACTION_DISMISS_ALARM).apply {
+        if (alarm.hour == null) {
+            putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_NEXT)
+        } else {
+            putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_TIME)
+            putExtra(AlarmClock.EXTRA_HOUR, alarm.hour)
+            putExtra(AlarmClock.EXTRA_MINUTES, alarm.minute)
+        }
+    }
+    val which = alarm.hour?.let { "the %02d:%02d alarm".format(it, alarm.minute) } ?: "your next alarm"
+    return runCatching { context.startActivity(intent) }.fold(
+        onSuccess = { NilaResponse.Text("Asked the Clock app to turn off $which. Check Clock if it asks you to pick one.") },
+        onFailure = { NilaResponse.Text("The Clock app on this phone can't turn off alarms for NILA. Nothing was changed.") },
+    )
+}

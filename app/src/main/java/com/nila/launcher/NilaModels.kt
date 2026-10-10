@@ -221,7 +221,12 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         if (proposed == null) return null
         val capability = engine.capabilities[proposed.name] ?: return null
         // The model picks the action; exact values come from the user's own words where NILA can read them.
-        val args = (if (capability.id == "create_alarm") engine.alarmArgs(input) else null) ?: coerceArgs(proposed.arguments, capability)
+        val args = when (capability.id) {
+            "create_alarm" -> engine.alarmArgs(input)
+            // "Cancel my alarm" with no time means the next alarm; never trust a time the user did not say.
+            "remove_alarm" -> engine.alarmArgs(input).orEmpty()
+            else -> null
+        } ?: coerceArgs(proposed.arguments, capability)
         val call = ToolCall(capability.id, args)
         if (!numbersGrounded(call.args, input)) return null.also { Log.i(TAG, "rejected ungrounded numbers for ${call.capabilityId}") }
         return when (checkCall(call, engine.capabilities)) {
