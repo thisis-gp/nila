@@ -1181,9 +1181,10 @@ private fun ResponseView(
         is NilaResponse.RouteCard -> NilaCard {
             SourceLabel(response.source)
             SerifTitle(response.destination)
-            Text("%.1f km · about %.0f min by road".format(response.distanceKm, response.durationMin), color = Paper, fontSize = 14.sp)
-            Text("© OpenStreetMap contributors", color = Muted, fontSize = 10.sp)
-            PrimaryAction("Open Maps for navigation", { openGoogleMaps(context, response.destination, addTurn) }, Modifier.padding(top = 4.dp))
+            // OSRM has no live traffic: Bengaluru drives took far longer in Google Maps, so say so plainly.
+            Text("%.1f km · about %.0f min without traffic".format(response.distanceKm, response.durationMin), color = Paper, fontSize = 14.sp)
+            Text("Live traffic time is in Maps · © OpenStreetMap contributors", color = Muted, fontSize = 10.sp)
+            PrimaryAction("Open Maps for live traffic", { openGoogleMaps(context, response.destination, addTurn) }, Modifier.padding(top = 4.dp))
         }
         is NilaResponse.Choices -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             SourceLabel(response.source, color = if (response.source.startsWith("LIVE")) Lime else Orange)
