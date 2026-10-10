@@ -73,6 +73,26 @@ class NilaEngineTest {
     }
 
     @Test
+    fun confirmationKeepsTheValuesTheUserSaw() {
+        val order = CapabilityDescriptor(
+            id = "place_order",
+            description = "Place the order",
+            params = listOf(Param("merchant", ParamType.STRING, label = "Merchant"), Param("total_paise", ParamType.PAISE, label = "Total")),
+            permission = PermissionClass.COMMIT,
+        )
+        val engine = NilaEngine(listOf(order))
+        val args = mutableMapOf<String, Any>("merchant" to "Meghana Foods", "total_paise" to 23900)
+
+        val pending = engine.execute(NilaIntent.Call(ToolCall("place_order", args))) as NilaResponse.NeedsConfirmation
+        // The caller changes its map after the card is shown.
+        args["merchant"] = "Someone Else"
+        args["total_paise"] = 9_999_900
+
+        assertEquals(mapOf("merchant" to "Meghana Foods", "total_paise" to 23900), pending.call.args)
+        assertEquals(listOf("Merchant" to "Meghana Foods", "Total" to "₹239.00"), pending.lines)
+    }
+
+    @Test
     fun rejectsInvalidAlarmTime() {
         assertEquals(NilaResponse.Text("That alarm time is not valid."), engine.respond("Set an alarm for 25:00"))
     }
