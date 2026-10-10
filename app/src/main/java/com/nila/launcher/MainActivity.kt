@@ -315,7 +315,7 @@ private fun AgentSpace(
     input: String,
     isThinking: Boolean,
     modelStatus: String,
-    transcribe: suspend (wav: ByteArray, languageName: String) -> String?,
+    transcribe: suspend (wav: ByteArray, languageName: String?) -> String?,
     onInput: (String) -> Unit,
     onSubmit: (String) -> Unit,
     onVoiceRequest: (String) -> Unit,

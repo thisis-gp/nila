@@ -116,9 +116,15 @@ fun claimsAction(reply: String): Boolean = Regex(
 ).containsMatchIn(reply)
 
 /** Asks Gemma for a transcript only, in the language's own script, never an answer to the request. */
-fun transcriptionPrompt(languageName: String) =
+fun transcriptionPrompt(languageName: String?) = if (languageName == null) {
+    // Auto: the speaker may use any of NILA's languages, or mix them in one sentence.
+    "Transcribe this speech exactly as spoken. The speaker uses English, Hindi or Malayalam, and may mix them. " +
+        "Write each language in its own script: Malayalam in Malayalam script, Hindi in Devanagari, English in Latin letters. " +
+        "Output only the transcript, with no answer, translation or notes."
+} else {
     "Transcribe this speech exactly as spoken. The speaker most likely uses $languageName. " +
         "Write it in that language's own script. Output only the transcript, with no answer, translation or notes."
+}
 
 /** Exposes a capability's schema to LiteRT-LM. Execution stays in NilaEngine, never inside the model runtime. */
 private class CapabilityTool(private val capability: CapabilityDescriptor) : OpenApiTool {
@@ -247,7 +253,7 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
      * Turns a spoken WAV clip into text with Gemma 4 E2B on the phone. The text then takes the same path
      * as typing, so voice never skips the rules, checks or confirmations.
      */
-    suspend fun transcribe(wav: ByteArray, languageName: String): String? = withContext(llm) {
+    suspend fun transcribe(wav: ByteArray, languageName: String?): String? = withContext(llm) {
         val model = assistant ?: return@withContext null
         val start = SystemClock.elapsedRealtime()
         runCatching {
