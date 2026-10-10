@@ -13,6 +13,7 @@ Usage: python make_dataset.py [--seed 7]
 import argparse
 import json
 import random
+import re
 from pathlib import Path
 
 DEVELOPER = "You are a model that can do function calling with the following functions"
@@ -190,8 +191,49 @@ EVENTS = [("team meeting", "tomorrow", 4, "pm"), ("dentist", "friday", 11, "am")
           ("hackathon finale", "saturday", 9, "am"), ("movie", "sunday", 7, "pm")]
 NOTES = ["the gate code is 4521", "buy milk and eggs", "the car is on level B2", "send the deck to Deva",
          "pay the electricity bill", "the wifi password is on the fridge", "call the plumber on Monday"]
+GROCERIES = ["milk 1 litre", "eggs", "bread", "atta 5 kg", "detergent", "curd 400 g", "bananas", "onions 1 kg",
+             "toothpaste", "maggi", "coffee powder", "sugar 1 kg", "paneer 200 g", "dishwash liquid"]
 TASTES = [("light", "dinner"), ("spicy", "biryani"), ("veg", "pizza"), ("healthy", "lunch"), ("cheesy", "pasta")]
 PARTY = ["for 2", "for three", "for 4 people", "under 500", "under ₹800", "for two under 600"]
+
+
+def prompt_family(prompt):
+    """Normalize generated entity/number values so wording variants share one split group."""
+    values = [*FOODS, *PLACES, *APPS, *APPS.values(), *FACTS, *NOTES, *GROCERIES, *NAMES]
+    values.extend(value for event in EVENTS for value in event[:2])
+    values.extend(value for pair in TASTES for value in pair)
+    values.extend(PARTY)
+    values.extend(query for _, query in MEAL_ONLY)
+    normalized = prompt.casefold()
+    for value in sorted(set(values), key=len, reverse=True):
+        normalized = re.sub(rf"(?<!\w){re.escape(value.casefold())}(?!\w)", "{x}", normalized)
+    normalized = re.sub(r"\d+(?::\d+)?", "{n}", normalized)
+    normalized = re.sub(r"[^\w{}]+", " ", normalized, flags=re.UNICODE)
+    return " ".join(normalized.split())
+
+
+def split_by_template(examples, eval_share, rng):
+    """Hold out whole normalized prompt families; never split near-duplicate rows across train/eval."""
+    groups = {}
+    for user, answer in examples:
+        groups.setdefault(prompt_family(user), []).append((user, answer))
+
+    families = list(groups)
+    rng.shuffle(families)
+    eval_families = set()
+    eval_count = 0
+    target = int(len(examples) * eval_share)
+    for family in families[:-1]:
+        if eval_count >= target and eval_families:
+            break
+        eval_families.add(family)
+        eval_count += len(groups[family])
+
+    return [
+        ("eval" if family in eval_families else "train", user, answer)
+        for family, items in groups.items()
+        for user, answer in items
+    ]
 
 
 def alarm_text(hour, minute, meridiem):
@@ -258,9 +300,7 @@ def rows(rng):
     for taste, dish in TASTES:
         for extra in rng.sample(PARTY, 3):
             out.append((f"find a {taste} {dish} {extra}", call("search_food", {"query": dish, "preference": taste})))
-    groceries = ["milk 1 litre", "eggs", "bread", "atta 5 kg", "detergent", "curd 400 g", "bananas", "onions 1 kg",
-                 "toothpaste", "maggi", "coffee powder", "sugar 1 kg", "paneer 200 g", "dishwash liquid"]
-    for x in groceries:
+    for x in GROCERIES:
         for t in rng.sample(["buy {x}", "get me {x}", "order {x} from zepto", "add {x} to my cart", "I need {x}",
                              "{x} from instamart", "we're out of {x}", "can you get {x}", "{x} chahiye"], 3):
             out.append((t.format(x=x), call("search_groceries", {"query": x})))
@@ -277,18 +317,17 @@ def main():
     args = parser.parse_args()
     rng = random.Random(args.seed)
 
-    examples = rows(rng)
-    rng.shuffle(examples)
-    eval_count = int(len(examples) * args.eval_share)
+    examples = split_by_template(rows(rng), args.eval_share, rng)
+    eval_count = sum(metadata == "eval" for metadata, _, _ in examples)
     out = Path(__file__).parent / "data" / "nila_router.jsonl"
     out.parent.mkdir(exist_ok=True)
     counts = {}
     with out.open("w", encoding="utf-8") as f:
-        for i, (user, answer) in enumerate(examples):
+        for metadata, user, answer in examples:
             name = answer["tool_calls"][0]["function"]["name"]
             counts[name] = counts.get(name, 0) + 1
             row = {
-                "metadata": "eval" if i < eval_count else "train",
+                "metadata": metadata,
                 "tools": TOOLS,
                 "messages": [{"role": "developer", "content": DEVELOPER}, {"role": "user", "content": user}, answer],
             }
