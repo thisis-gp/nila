@@ -131,4 +131,7 @@ class ZeptoMcpClient(private val auth: ZeptoAuth) {
         val arguments = JSONObject().put("deviceId", deviceId).put("cartItems", JSONArray().put(item))
         return resultText(callTool("update_cart", arguments))
     }
+
+    /** Human-readable cart summary. No outputSchema declared for this tool, so the content text is the reliable part. */
+    fun viewCart(): String = resultText(callTool("view_cart", JSONObject()))
 }

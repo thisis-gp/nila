@@ -125,11 +125,16 @@ private fun zeptoProductTurn(
             imageUrl = product.imageUrl,
         ) {
             coroutineScope.launch(Dispatchers.IO) {
-                val message = runCatching {
-                    client.addToCart(deviceId, product)
-                    "Added ${product.name} to your Zepto cart. Demo only: nothing was ordered."
-                }.getOrElse { "Could not add to cart: ${it.message}" }
-                withContext(Dispatchers.Main) { appendTurn(Turn("Zepto", NilaResponse.Text(message))) }
+                val outcome = runCatching { client.addToCart(deviceId, product) }
+                withContext(Dispatchers.Main) {
+                    outcome.fold(
+                        onSuccess = {
+                            appendTurn(Turn("Zepto", NilaResponse.Text("Added ${product.name} to your real Zepto cart. NILA stops here — open Zepto to pay and finish the order:")))
+                            appendTurn(Turn("Zepto", NilaResponse.OpenApp("Zepto", "com.zeptoconsumerapp", "https://www.zeptonow.com")))
+                        },
+                        onFailure = { appendTurn(Turn("Zepto", NilaResponse.Text("Could not add to cart: ${it.message}"))) },
+                    )
+                }
             }
         }
     }
@@ -205,6 +210,25 @@ private fun NilaApp(resumeVersion: Int) {
                     .onSuccess { Log.i("ZeptoAuth", "Zepto authorization completed.") }
                     .onFailure { Log.w("ZeptoAuth", "Zepto authorization failed: ${it.message}") }
             }
+            return
+        }
+        if (prompt.lowercase().contains("zepto cart")) {
+            input = ""
+            if (!zeptoAuth.isConnected) {
+                turns += Turn(prompt, NilaResponse.GroupedChoices("Options:", listOf(zeptoNotConnectedGroup(zeptoAuth, context, scope) { t -> turns += t })))
+                return
+            }
+            turns += Turn(prompt, NilaResponse.Text("Checking your Zepto cart..."))
+            scope.launch(Dispatchers.IO) {
+                val message = runCatching { ZeptoMcpClient(zeptoAuth).viewCart() }
+                    .getOrElse { "Zepto error: ${it.message}" }
+                withContext(Dispatchers.Main) { turns += Turn("Zepto", NilaResponse.Text(message)) }
+            }
+            return
+        }
+        if (prompt.lowercase().contains("open zepto")) {
+            turns += Turn(prompt, NilaResponse.OpenApp("Zepto", "com.zeptoconsumerapp", "https://www.zeptonow.com"))
+            input = ""
             return
         }
         if (prompt.lowercase().contains("zepto tools")) {
