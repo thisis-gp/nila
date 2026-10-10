@@ -780,7 +780,7 @@ private fun ResponseView(
         is NilaResponse.DismissAlarm -> Text("This alarm was not turned off.")
         // Torch, Camera and Note are done in performNow before they reach the chat.
         is Torch, is Camera, is Note, is Directions, is MapSearch, is WebSearch, is PlayMusic, is MediaKey, is SoundChange,
-        is SettingsPage, is LaunchApp, ShowAlarms, BatteryLevel -> Text("Done.")
+        is SettingsPage, is LaunchApp, ShowAlarms, BatteryLevel, ShowNotes -> Text("Done.")
         is Message -> MessageCard(response, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is Timer -> ActionCard(
             title = "Timer %d:%02d".format(response.seconds / 60, response.seconds % 60),
@@ -1098,6 +1098,7 @@ private fun performNow(context: Context, response: NilaResponse): NilaResponse =
     is LaunchApp -> NilaResponse.Text(launchByName(context, response.name))
     ShowAlarms -> start(context, Intent(AlarmClock.ACTION_SHOW_ALARMS), "Opening your alarms.", "No clock app is available.")
     BatteryLevel -> NilaResponse.Text(batteryStatus(context))
+    ShowNotes -> NilaResponse.Text(notesSummary(context))
     else -> response
 }
 

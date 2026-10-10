@@ -1,0 +1,46 @@
+package com.nila.launcher
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class RewriteTest {
+    private val engine = NilaEngine()
+
+    @Test
+    fun cleansGemmasCommand() {
+        assertEquals("turn off the flashlight", cleanCommand("turn off the flashlight."))
+        assertEquals("take a note that 2 apples", cleanCommand("Command: \"take a note that 2 apples\"\n(explanation)"))
+        assertNull(cleanCommand("CHAT"))
+        assertNull(cleanCommand("  chat \n"))
+        assertNull(cleanCommand("   "))
+    }
+
+    @Test
+    fun rewrittenCommandsNeverInventNumbers() {
+        // "yes" after NILA asked about 6:30: the numbers come from the conversation.
+        assertTrue(numbersSaid("set an alarm for 6:30 pm", "yes Do you want an alarm at 6:30 pm?"))
+        assertTrue(numbersSaid("take a note that 2 apples", "i need 2 apples put in the notes"))
+        assertFalse(numbersSaid("set an alarm for 7 am", "wake me up early"))
+        assertTrue(numbersSaid("turn off the flashlight", "yes"))
+    }
+
+    @Test
+    fun aNoteIsNeverAZeptoOrder() {
+        // "i need" is a Zepto trigger; with "notes" in it, it is a note.
+        assertNull(extractOrderItem("i need 2 apples put in the notes"))
+        assertEquals("milk 1L", extractOrderItem("i need milk 1L"))
+    }
+
+    @Test
+    fun rewrittenCommandsReachTheRules() {
+        // What Gemma is asked to produce must route exactly like typed text.
+        assertEquals(Torch(false), engine.respond("turn off the flashlight"))
+        assertEquals(Note("2 apples"), engine.respond("take a note that 2 apples"))
+        assertEquals(ShowNotes, engine.respond("show my notes"))
+        assertEquals(ShowNotes, engine.respond("what's in my notes"))
+        assertEquals(SoundChange("ring"), engine.respond("ring mode"))
+    }
+}

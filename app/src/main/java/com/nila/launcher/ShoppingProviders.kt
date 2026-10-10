@@ -24,6 +24,8 @@ private val ORDER_TRIGGERS = listOf("buy ", "order ", "get me ", "i need ", "pur
 /** Strips a leading ordering phrase and returns the item, or null if the prompt doesn't start with one. Still pattern matching, not real language understanding — see classifyShoppingIntent. */
 fun extractOrderItem(prompt: String): String? {
     val lower = prompt.lowercase()
+    // "i need 2 apples put in the notes" is a note, not a Zepto order (seen on the iQOO 15).
+    if (Regex("""\b(notes?|alarms?|timer|remind|reminder|calendar|meeting)\b""").containsMatchIn(lower)) return null
     val trigger = ORDER_TRIGGERS.firstOrNull { lower.startsWith(it) } ?: return null
     return prompt.substring(trigger.length).trim().takeIf { it.isNotBlank() }
 }

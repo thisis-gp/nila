@@ -115,6 +115,19 @@ fun claimsAction(reply: String): Boolean = Regex(
         """|(?i)^\s*(alarm|reminder) (set|scheduled)\b""",
 ).containsMatchIn(reply)
 
+/** Cleans Gemma's rewrite: first line, no quotes, labels or final full stop. Null for CHAT or nothing. */
+fun cleanCommand(raw: String): String? {
+    val line = raw.lineSequence().map { it.trim() }.firstOrNull { it.isNotBlank() } ?: return null
+    val command = line.removePrefix("Command:").removePrefix("command:").trim().trim('"', '\'', '`', '*').trim().trimEnd('.')
+    return command.takeUnless { it.isBlank() || it.equals("chat", ignoreCase = true) }
+}
+
+/** True when every number in [command] appears in what was said, so a rewrite never invents a time or amount. */
+fun numbersSaid(command: String, said: String): Boolean {
+    val heard = Regex("""\d+""").findAll(said).map { it.value.toLong() }.toSet()
+    return Regex("""\d+""").findAll(command).all { it.value.toLong() in heard }
+}
+
 /** Asks Gemma for a transcript only, in the language's own script, never an answer to the request. */
 fun transcriptionPrompt(languageName: String?) = if (languageName == null) {
     // Auto: the speaker may use any of NILA's languages, or mix them in one sentence.
@@ -197,11 +210,49 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
         fun done(path: String, response: NilaResponse) = response.also {
             Log.i(TAG, "path=$path ms=${SystemClock.elapsedRealtime() - start} response=${it::class.simpleName}")
         }
-        engine.calculate(input)?.let { return@withContext done("calculator", it) }
+        fun answer(path: String, response: NilaResponse) = done(path, response).also { remember(input, it) }
+        engine.calculate(input)?.let { return@withContext answer("calculator", it) }
         val keyword = engine.route(input)
-        if (keyword is NilaIntent.Call) return@withContext done("rules:${keyword.call.capabilityId}", engine.execute(keyword))
-        if (!engine.isSmallTalk(input)) modelRoute(input)?.let { return@withContext done("functiongemma", it) }
-        chat(input)?.let { done("gemma", NilaResponse.Text(it)) } ?: done("fallback", engine.execute(NilaIntent.Converse(input)))
+        if (keyword is NilaIntent.Call) return@withContext answer("rules:${keyword.call.capabilityId}", engine.execute(keyword))
+        if (!engine.isSmallTalk(input)) {
+            // Any wording, follow-up or language: Gemma restates it as one plain command the rules understand.
+            rewrite(input)?.let { command ->
+                engine.calculate(command)?.let { return@withContext answer("rewrite:calculator", it) }
+                val routed = engine.route(command)
+                if (routed is NilaIntent.Call) return@withContext answer("rewrite:${routed.call.capabilityId}", engine.execute(routed))
+            }
+            modelRoute(input)?.let { return@withContext answer("functiongemma", it) }
+        }
+        chat(input)?.let { answer("gemma", NilaResponse.Text(it)) } ?: answer("fallback", engine.execute(NilaIntent.Converse(input)))
+    }
+
+    private fun remember(input: String, response: NilaResponse) {
+        history.addLast(input to (spokenText(response) ?: response::class.simpleName.orEmpty()))
+        while (history.size > HISTORY_TURNS) history.removeFirst()
+    }
+
+    /**
+     * Restates the user's message as one command from NILA's own phrasebook, using the last few turns, or
+     * null for conversation. A command whose numbers nobody said is dropped: the model may not invent a time.
+     */
+    private fun rewrite(input: String): String? {
+        val model = assistant ?: return null
+        val transcript = history.joinToString("\n") { (user, nila) -> "User: $user\nNILA: $nila" }
+        val raw = runCatching {
+            model.createConversation(
+                ConversationConfig(
+                    systemInstruction = Contents.of(REWRITE),
+                    samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0),
+                ),
+            ).use { conversation ->
+                conversation.sendMessage("Conversation so far:\n${transcript.ifBlank { "(none)" }}\n\nNew message: $input")
+                    .contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
+            }
+        }.getOrNull() ?: return null
+        val command = cleanCommand(raw) ?: return null
+        val said = input + " " + history.joinToString(" ") { "${it.first} ${it.second}" }
+        return command.takeIf { numbersSaid(it, said) }
+            .also { Log.i(TAG, if (it == null) "rewrite dropped: unsaid numbers" else "rewrite -> command (${it.length} chars)") }
     }
 
     /**
@@ -284,8 +335,6 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             }
         }.getOrNull()?.takeIf { it.isNotBlank() }?.let { if (claimsAction(it)) NO_ACTION_TAKEN.also { Log.i(TAG, "replaced a reply that claimed an action") } else it }
             ?: return null
-        history.addLast(input to reply)
-        while (history.size > HISTORY_TURNS) history.removeFirst()
         return reply
     }
 
@@ -305,6 +354,26 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             params = listOf(Param("message", ParamType.STRING)),
             permission = PermissionClass.READ,
         )
+        /** NILA's phrasebook: every command the keyword rules understand. Gemma maps any wording onto one. */
+        val REWRITE = """
+            You turn the user's new message into ONE command for NILA, a phone assistant, using the conversation for context.
+            Pick from these commands and fill the <parts> with the user's own words, names and numbers, in English:
+            set an alarm for <time> | cancel the alarm for <time> | turn off my alarm | show my alarms
+            set a timer for <n> minutes | turn on the flashlight | turn off the flashlight
+            open the camera | take a selfie | record a video
+            schedule <title> <day> at <time> | take a note that <text> | show my notes
+            call <name or number> | tell <name> <message>
+            take me to <place> | <things> near me | search for <query>
+            play <song or artist> | pause the music | next song | previous song
+            volume up | volume down | mute | vibrate mode | silent mode | ring mode
+            open <wifi, bluetooth, battery, display, sound, location> settings | open <app name>
+            how much battery is left | what is <n>% of <n> | remember that <fact>
+            A short reply such as "yes", "do it" or "turn it off" means the action just discussed; restate it in full.
+            Translate Hindi or Malayalam into the English command. Never invent a time, number, name or place.
+            If the message is not a request for one of these commands, reply exactly: CHAT
+            Reply with the command only, on one line.
+        """.trimIndent()
+
         val PERSONA = """
             You are NILA, a friendly assistant that lives on the user's Android phone and runs fully on the device.
             Reply in one to three short, warm sentences, in the same language the user writes in (English, Hindi or Malayalam).
@@ -314,7 +383,8 @@ class NilaBrain(private val context: Context, private val engine: NilaEngine) {
             open settings pages or any installed app, show alarms, tell the battery level,
             open YouTube, Netflix, Instagram or BGMI, show sample food options, remember one fact, and calculate percentages.
             For anything else, such as messages, payments, settings or other apps, say plainly that NILA cannot do that yet and name something it can do.
-            Never offer to do it, never ask for confirmation, and never say you ordered, paid, booked, sent or shared anything.
+            Never offer to do it, never ask "do you want me to…", never ask for confirmation, and never say you ordered, paid, booked, sent or shared anything.
+            If the user seems to want one of NILA's actions, tell them the words to say, for example "say: turn off the flashlight".
         """.trimIndent()
     }
 }
