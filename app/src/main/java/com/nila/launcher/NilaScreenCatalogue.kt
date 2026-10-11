@@ -57,10 +57,7 @@ internal fun NilaScreenCatalogue(
     screen: NilaScreen,
     onOpen: (NilaScreen) -> Unit,
     onBack: () -> Unit,
-    facts: List<MemoryFact>,
     onChooseDefaultHome: () -> Unit,
-    onForgetFact: (String) -> Unit,
-    onForgetAll: () -> Unit,
     accounts: List<ServiceAccount>,
 ) {
     when (screen) {
@@ -72,7 +69,7 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Food -> FoodScreen(onOpen, onBack)
         NilaScreen.PreparedOrder -> PreparedOrderScreen(onOpen, onBack)
         NilaScreen.ActionResult -> ActionResultScreen(onOpen)
-        NilaScreen.Memory -> MemoryScreen(onOpen, onBack, facts, onForgetFact, onForgetAll)
+        NilaScreen.People -> PeopleScreen(onOpen, onBack)
         NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
         NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, accounts)
@@ -177,31 +174,16 @@ private fun ActionResultScreen(onOpen: (NilaScreen) -> Unit) = Page("ACTION RESU
 }
 
 @Composable
-private fun MemoryScreen(
-    onOpen: (NilaScreen) -> Unit,
-    onBack: () -> Unit,
-    facts: List<MemoryFact>,
-    onForgetFact: (String) -> Unit,
-    onForgetAll: () -> Unit,
-) = Page("MY NILA · ON THIS PHONE", onOpen, onBack) {
-    ScreenTitle("My NILA")
-    BodyText("What NILA has learned about you and your people from your chats. It stays on this phone, and you can forget any of it here.")
-    if (facts.isEmpty()) {
-        SectionCard("Nothing yet", "Just chat: \"my wife loves butter chicken\" or \"I'm vegetarian on Tuesdays\".", "EMPTY")
-    } else {
-        factsByPerson(facts).forEach { (about, known) ->
-            SectionLabel(aboutLabel(about), Modifier.padding(top = 8.dp))
-            known.forEach { fact ->
-                NilaCard {
-                    SectionLabel(fact.kind.label.uppercase(), color = Lime)
-                    Text(fact.text, color = Paper, fontWeight = FontWeight.Bold)
-                    TextAction("Forget", onClick = { onForgetFact(fact.id) })
-                }
-            }
-        }
-        SecondaryButton("Forget everything") { onForgetAll() }
+private fun PeopleScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("PEOPLE & MESSAGES", onOpen, onBack) {
+    ScreenTitle("Messages, grouped\nby person.")
+    BodyText("Demo content only. NILA has not read notifications, contacts or messages on this device.")
+    SectionCard("Arjun Menon", "“Are we still meeting at the studio?” · mock WhatsApp", "MOCK · 4 MIN")
+    SectionCard("Devananda", "Sent 3 launcher references · mock Messages", "MOCK · 21 MIN")
+    NilaCard {
+        SectionLabel("Draft · not sent", color = Lime)
+        BodyText("Running a little late. I’ll be at the studio by 6:30.", Paper)
     }
-    SecondaryButton("Back to chat") { onOpen(NilaScreen.Home) }
+    SecondaryButton("Continue in NILA") { onOpen(NilaScreen.Home) }
 }
 
 @Composable

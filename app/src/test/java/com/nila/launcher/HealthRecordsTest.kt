@@ -17,6 +17,10 @@ class HealthRecordsTest {
         assertTrue(isHealthMention("open my health tracker"))
         assertFalse(isHealthMention("order biryani"))
         assertFalse(isHealthMention("take me to Indiranagar"))
+        // A health word inside another request is that request.
+        assertFalse(isHealthMention("remind me to go to the doctor tomorrow"))
+        assertFalse(isHealthMention("call the hospital"))
+        assertFalse(isHealthMention("book a doctor appointment"))
     }
 
     @Test

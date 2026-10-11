@@ -134,6 +134,7 @@ private fun NilaApp(resumeVersion: Int) {
     val memory = remember { NilaMemory(context.applicationContext) }
     var facts by remember { mutableStateOf(memory.facts()) }
     val health = remember { HealthStore(context.applicationContext) }
+    LaunchedEffect(health) { withContext(Dispatchers.IO) { health.sweep() } }
     val brain = remember { NilaBrain(context.applicationContext, engine) { memory.facts() } }
     // Lakshmi speaks replies to spoken requests; typed requests stay silent.
     val lakshmi = remember { Lakshmi(context) }
@@ -576,6 +577,7 @@ private fun NilaApp(resumeVersion: Int) {
                             NilaScreen.MyNila -> MyNilaScreen(
                                 facts = facts,
                                 onForgetFact = { id -> facts = memory.delete(id) },
+                                onForgetAll = { facts = memory.clear() },
                                 health = health,
                                 draft = MyNilaRequests.pending,
                                 onDraftUsed = { MyNilaRequests.pending = null },
@@ -585,10 +587,7 @@ private fun NilaApp(resumeVersion: Int) {
                                 screen = overlayScreen,
                                 onOpen = ::open,
                                 onBack = ::closeOverlay,
-                                facts = facts,
                                 onChooseDefaultHome = ::chooseDefaultHome,
-                                onForgetFact = { id -> facts = memory.delete(id) },
-                                onForgetAll = { facts = memory.clear() },
                                 accounts = accountsRevision.let { listOf(
                                     ServiceAccount(
                                         name = "Swiggy",

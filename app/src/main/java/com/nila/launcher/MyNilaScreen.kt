@@ -35,6 +35,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -60,7 +62,9 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.UUID
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.composables.icons.lucide.R as LucideR
 
@@ -83,13 +87,17 @@ internal enum class MyNilaTab(val label: String) { People("People"), Health("Hea
 internal fun MyNilaScreen(
     facts: List<MemoryFact>,
     onForgetFact: (String) -> Unit,
+    onForgetAll: () -> Unit,
     health: HealthStore,
     draft: HealthPrompt?,
     onDraftUsed: () -> Unit,
     onBack: () -> Unit,
 ) {
     var tab by remember { mutableStateOf(if (draft != null) MyNilaTab.Health else MyNilaTab.People) }
-    var records by remember { mutableStateOf(health.records()) }
+    val scope = rememberCoroutineScope()
+    // The first read builds the Keystore key and decrypts: never on the main thread.
+    var records by remember { mutableStateOf<List<HealthRecord>>(emptyList()) }
+    LaunchedEffect(Unit) { records = withContext(Dispatchers.IO) { health.records() } }
     var editing by remember { mutableStateOf(draft) }
     var open by remember { mutableStateOf<HealthRecord?>(null) }
     LaunchedEffect(draft) { if (draft != null) onDraftUsed() }
@@ -123,13 +131,13 @@ internal fun MyNilaScreen(
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             when {
-                tab == MyNilaTab.People -> PeopleTab(facts, onForgetFact)
+                tab == MyNilaTab.People -> PeopleTab(facts, onForgetFact, onForgetAll)
                 editing != null -> HealthForm(health, editing!!) { saved ->
-                    if (saved != null) records = health.save(saved)
+                    if (saved != null) scope.launch { records = withContext(Dispatchers.IO) { health.save(saved) } }
                     editing = null
                 }
                 open != null -> HealthDetail(health, open!!) {
-                    records = health.delete(it.id)
+                    scope.launch { records = withContext(Dispatchers.IO) { health.delete(it.id) } }
                     open = null
                 }
                 else -> HealthTab(records, onAdd = { editing = HealthPrompt(HealthKind.Visit, "", LocalDate.now()) }, onOpen = { open = it })
@@ -141,7 +149,7 @@ internal fun MyNilaScreen(
 // ---- People ------------------------------------------------------------------
 
 @Composable
-private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit) {
+private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit, onForgetAll: () -> Unit) {
     if (facts.isEmpty()) {
         NilaCard {
             Text("Nothing yet", color = Paper, fontWeight = FontWeight.Bold)
@@ -170,6 +178,10 @@ private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit) {
             }
         }
     }
+    var armed by remember { mutableStateOf(false) }
+    TextAction(if (armed) "Tap again to forget everything about you and your people" else "Forget everything", onClick = {
+        if (armed) onForgetAll() else armed = true
+    }, color = Orange)
 }
 
 // ---- Health ------------------------------------------------------------------
@@ -217,14 +229,25 @@ private fun HealthForm(health: HealthStore, draft: HealthPrompt, onDone: (Health
     var problem by remember { mutableStateOf<String?>(null) }
     var picking by remember { mutableStateOf(false) }
     var photo by remember { mutableStateOf<File?>(null) }
+    var saved by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    // Back, a tab change or a rotation ends the draft: its encrypted files go with it unless it was saved.
+    DisposableEffect(Unit) { onDispose { if (!saved) files.toList().forEach(health::discard) } }
+
+    // Reading and encrypting a whole PDF or photo runs off the main thread.
+    fun attach(uri: Uri, failed: String, after: () -> Unit = {}) = scope.launch {
+        val name = withContext(Dispatchers.IO) { health.attach(uri).also { after() } }
+        if (name != null) files.add(name) else problem = failed
+    }
 
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        uri?.let { health.attach(it) }?.let(files::add) ?: run { if (uri != null) problem = "Couldn't read that file." }
+        if (uri != null) attach(uri, "Couldn't read that file.")
     }
     val shoot = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { taken ->
-        val shot = photo
-        if (taken && shot != null) health.attach(Uri.fromFile(shot))?.let(files::add) ?: run { problem = "Couldn't keep that photo." }
-        shot?.delete() // the unencrypted capture never stays on the phone
+        val shot = photo ?: return@rememberLauncherForActivityResult
+        // The unencrypted capture never stays on the phone; one that can't be deleted now is swept on the next start.
+        val removeShot = { if (!shot.delete() && shot.exists()) Log.w("MyNila", "capture not deleted; swept on next start") }
+        if (taken) attach(Uri.fromFile(shot), "Couldn't keep that photo.", removeShot) else removeShot()
     }
 
     SectionLabel("What is it")
@@ -258,20 +281,23 @@ private fun HealthForm(health: HealthStore, draft: HealthPrompt, onDone: (Health
     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         TextAction("Add photo or PDF", onClick = { pick.launch(arrayOf("image/*", HealthStore.PDF)) })
         TextAction("Take a photo", onClick = {
-            val shot = File(File(context.cacheDir, "captures").apply { mkdirs() }, "${UUID.randomUUID()}.jpg")
-            photo = shot
-            shoot.launch(FileProvider.getUriForFile(context, "${context.packageName}.files", shot))
+            val captures = HealthStore.captures(context)
+            if (!captures.isDirectory && !captures.mkdirs()) {
+                problem = "Couldn't open the camera: no space to keep the photo."
+            } else {
+                val shot = File(captures, "${UUID.randomUUID()}.jpg")
+                photo = shot
+                shoot.launch(FileProvider.getUriForFile(context, "${context.packageName}.files", shot))
+            }
         })
     }
     if (files.isNotEmpty()) Text("${files.size} attached, encrypted on this phone", color = Lime, fontSize = 13.sp)
     problem?.let { Text(it, color = Orange, fontSize = 13.sp) }
     PrimaryAction("Save to My NILA", onClick = {
+        saved = true
         onDone(HealthRecord(UUID.randomUUID().toString(), kind, title.trim(), date, place.trim(), notes.trim(), files.toList()))
     }, enabled = title.isNotBlank())
-    TextAction("Cancel", onClick = {
-        files.forEach { health.discard(it) }
-        onDone(null)
-    }, color = Muted)
+    TextAction("Cancel", onClick = { onDone(null) }, color = Muted)
 
     if (picking) {
         val state = rememberDatePickerState(initialSelectedDateMillis = date.atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli())
@@ -343,14 +369,18 @@ private fun scaled(bytes: ByteArray): Bitmap? {
 
 /** PdfRenderer needs a file: the PDF is written to cache only while its first page is drawn, then deleted. */
 private fun pdfFirstPage(bytes: ByteArray, cache: File): Bitmap? {
-    val temp = File(cache, "${UUID.randomUUID()}.pdf")
+    val temp = File(cache, "${UUID.randomUUID()}${HealthStore.TEMP_PDF}")
     return try {
         temp.writeBytes(bytes)
         ParcelFileDescriptor.open(temp, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
             PdfRenderer(fd).use { pdf ->
                 if (pdf.pageCount == 0) return null
                 pdf.openPage(0).use { page ->
-                    Bitmap.createBitmap(page.width * 2, page.height * 2, Bitmap.Config.ARGB_8888).also {
+                    // Twice the page size for sharp text, but never over MAX_SIDE: a poster-size scan would run out of memory.
+                    val scale = minOf(2f, MAX_SIDE.toFloat() / maxOf(page.width, page.height, 1))
+                    val width = (page.width * scale).toInt().coerceAtLeast(1)
+                    val height = (page.height * scale).toInt().coerceAtLeast(1)
+                    Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also {
                         it.eraseColor(android.graphics.Color.WHITE)
                         page.render(it, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                     }
