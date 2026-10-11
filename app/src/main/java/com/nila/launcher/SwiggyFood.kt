@@ -140,7 +140,7 @@ sealed interface FoodCard {
  * Swiggy doesn't document response shapes, so parsers search the JSON tree by key
  * names instead of fixed paths, and every raw response is kept in files/probe/.
  */
-internal class FoodFlow(private val context: Context, private val quotes: FoodQuotes) {
+internal class FoodFlow(private val context: Context, private val quotes: FoodQuotes, private val dishQuotes: DishQuotes) {
     private var client: McpClient? = null
     private var cartRestaurantId: String? = null
     private val cartItems = linkedMapOf<String, Pair<FoodItem, Int>>()
@@ -258,6 +258,8 @@ internal class FoodFlow(private val context: Context, private val quotes: FoodQu
         val results = FoodCard.Restaurants(address, query, list, intent, bestFits(list, intent, remembered)).also { lastResults = it }
         val dishes = dishResult?.let { rankDishes(parseDishes(it, list), intent, remembered) }.orEmpty()
         if (dishes.isEmpty()) return card(results)
+        // The top dishes priced on the other signed-in apps; each result's line fills in as they answer.
+        dishQuotes.start(dishes.take(COMPARED_DISHES).map { dishRequest(SwiggyProvider.id, address, it) })
         return card(FoodCard.Dishes(address, query, intent, dishes).also { lastMenu = it })
     }
 

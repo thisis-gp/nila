@@ -39,6 +39,16 @@ sealed interface ProviderQuote {
     data class Failed(val reason: String) : ProviderQuote
 }
 
+/** One dish at one restaurant, for the price line under a search result. [known] is the price the results already show. */
+data class DishRequest(val restaurant: String, val line: CartLine, val address: DeliveryAddress, val known: Pair<String, Long>? = null)
+
+/** One app's price for a single dish, in paise, or why there is none. */
+sealed interface DishPrice {
+    data class Found(val paise: Long) : DishPrice
+    data object Missing : DishPrice
+    data class Failed(val reason: String) : DishPrice
+}
+
 /** A delivery app NILA can price a cart on. Adding an app is one class and one line in [foodProviders]. */
 internal interface FoodProvider {
     val id: String
@@ -53,6 +63,8 @@ internal interface FoodProvider {
     fun connected(context: Context): Boolean = auth.currentSession(context) != null
 
     suspend fun quoteCart(context: Context, cart: CartRequest): ProviderQuote
+
+    suspend fun quoteDish(context: Context, dish: DishRequest): DishPrice
 }
 
 internal object SwiggyProvider : FoodProvider {
@@ -68,6 +80,10 @@ internal object SwiggyProvider : FoodProvider {
     override suspend fun quoteCart(context: Context, cart: CartRequest): ProviderQuote =
         cart.priced?.takeIf { it.providerId == id }?.let { swiggyQuote(it.cart, it.eta, it.coupon) }
             ?: ProviderQuote.Failed("no Swiggy cart to price")
+
+    /** The search results came from Swiggy, so its dish price is already known. */
+    override suspend fun quoteDish(context: Context, dish: DishRequest): DishPrice =
+        dish.known?.takeIf { it.first == id }?.let { DishPrice.Found(it.second) } ?: DishPrice.Missing
 }
 
 /** Read-only: Zomato's MCP prices a cart but NILA never orders there. */
@@ -94,12 +110,27 @@ internal object ZomatoProvider : FoodProvider {
             is ZomatoQuote -> zomato.total(matched)
         }
     }
+
+    override suspend fun quoteDish(context: Context, dish: DishRequest): DishPrice =
+        compare(context).dishPrice(dish.restaurant, dish.line, dish.address)
 }
 
 internal val foodProviders: List<FoodProvider> = listOf(SwiggyProvider, ZomatoProvider)
 
 /** The app NILA places orders on; its name labels the booking cards. */
 internal val orderingProvider: FoodProvider get() = foodProviders.first { it.canOrder }
+
+/** The dish exactly as the results show it: the size picked by default, priced by the app the results came from. */
+internal fun dishRequest(providerId: String, address: FoodAddress, dish: FoodDish): DishRequest {
+    val line = address.line.substringAfter(": ")
+    val size = dish.item.chosenSize
+    return DishRequest(
+        restaurant = dish.restaurant.name,
+        line = CartLine(dish.item.name, size?.name, 1),
+        address = DeliveryAddress(address.label, line, PINCODE.find(line)?.value),
+        known = paiseOf(size?.price ?: dish.item.price)?.let { providerId to it },
+    )
+}
 
 /** Builds the request every app prices from the ordering app's live cart. */
 internal fun cartRequest(providerId: String, address: FoodAddress, restaurant: FoodRestaurant, cart: FoodCartView, coupon: String?): CartRequest {

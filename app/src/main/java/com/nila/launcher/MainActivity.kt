@@ -231,7 +231,8 @@ private fun NilaApp(resumeVersion: Int) {
     val swiggySession = remember(SignIns.revision) { SwiggyAuth.currentSession(context) }
     val zomatoSession = remember(SignIns.revision) { ZomatoAuth.currentSession(context) }
     val foodQuotes = remember { FoodQuotes(context.applicationContext, scope) }
-    val foodFlow = remember { FoodFlow(context.applicationContext, foodQuotes) }
+    val dishQuotes = remember { DishQuotes(context.applicationContext, scope) }
+    val foodFlow = remember { FoodFlow(context.applicationContext, foodQuotes, dishQuotes) }
     // A sign-in from the comparison's "Sign in" row prices that app on the open card.
     LaunchedEffect(SignIns.revision) { foodQuotes.refresh() }
     val instamart = remember { InstamartShop(context.applicationContext) }
@@ -271,6 +272,7 @@ private fun NilaApp(resumeVersion: Int) {
             override fun applyCoupon(payment: FoodCard.Payment, coupon: FoodCoupon) =
                 runFood("Apply ${coupon.code}") { foodFlow.applyCoupon(payment, coupon) }
             override fun quotes() = foodQuotes.state
+            override fun dishPrices() = dishQuotes.state
             override fun retryQuote(providerId: String) = foodQuotes.retry(providerId)
             override fun signIn(provider: FoodProvider) =
                 SignIns.start(provider.auth, context) {

@@ -74,20 +74,30 @@ internal suspend fun quoteAll(
     timeoutMillis: Long = QUOTE_TIMEOUT_MS,
     quote: suspend (FoodProvider) -> ProviderQuote,
     onResult: (FoodProvider, ProviderQuote) -> Unit,
+) = boundedAll(providers, permits, timeoutMillis, { ProviderQuote.Failed(it) }, quote, onResult)
+
+/** Runs [work] for every item, [permits] at a time, each bounded by [timeoutMillis]; failures become [failed]. */
+internal suspend fun <K, T> boundedAll(
+    items: List<K>,
+    permits: Int,
+    timeoutMillis: Long,
+    failed: (String) -> T,
+    work: suspend (K) -> T,
+    onResult: (K, T) -> Unit,
 ) = coroutineScope {
     val gate = Semaphore(permits)
-    providers.forEach { provider ->
-        launch { onResult(provider, gate.withPermit { quoteOne(provider, timeoutMillis, quote) }) }
+    items.forEach { item ->
+        launch { onResult(item, gate.withPermit { attempt(item, timeoutMillis, failed, work) }) }
     }
 }
 
-private suspend fun quoteOne(provider: FoodProvider, timeoutMillis: Long, quote: suspend (FoodProvider) -> ProviderQuote): ProviderQuote =
+private suspend fun <K, T> attempt(item: K, timeoutMillis: Long, failed: (String) -> T, work: suspend (K) -> T): T =
     try {
-        withTimeoutOrNull(timeoutMillis) { quote(provider) } ?: ProviderQuote.Failed("took too long")
+        withTimeoutOrNull(timeoutMillis) { work(item) } ?: failed("took too long")
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        ProviderQuote.Failed(e.message ?: "something went wrong")
+        failed(e.message ?: "something went wrong")
     }
 
 /** Every app's quote for one cart, by provider id. [key] names the cart, so a card never shows another cart's prices. */
@@ -112,7 +122,7 @@ internal class FoodQuotes(
 ) {
     private val board = MutableStateFlow(QuoteBoard())
     val state: StateFlow<QuoteBoard> = board
-    private var job: Job? = null
+    private val jobs = mutableListOf<Job>()
     private var request: CartRequest? = null
 
     /**
@@ -126,10 +136,11 @@ internal class FoodQuotes(
             run(key, cart, providers.filter { it.id == cart.priced?.providerId })
             return key
         }
-        job?.cancel()
+        jobs.forEach { it.cancel() }
+        jobs.clear()
         val signedIn = providers.filter { it.connected(context) }
         board.value = QuoteBoard(key, providers.associate { it.id to if (it in signedIn) ProviderQuote.Checking else ProviderQuote.SignIn })
-        job = run(key, cart, signedIn)
+        run(key, cart, signedIn)
         return key
     }
 
@@ -147,7 +158,7 @@ internal class FoodQuotes(
         board.value.quotes.filterValues { it == ProviderQuote.SignIn }.keys.forEach(::retry)
     }
 
-    private fun run(key: String, cart: CartRequest, list: List<FoodProvider>): Job = scope.launch {
+    private fun run(key: String, cart: CartRequest, list: List<FoodProvider>) = scope.launch {
         try {
             quoteAll(list, quote = { it.quoteCart(context, cart) }) { provider, quote -> put(key, provider.id, quote) }
         } finally {
@@ -158,11 +169,75 @@ internal class FoodQuotes(
                 }
             }
         }
+    }.also { job ->
+        jobs.removeAll { it.isCompleted }
+        jobs += job
     }
 
     private fun put(key: String, id: String, quote: ProviderQuote) =
         board.update { if (it.key == key) it.copy(quotes = it.quotes + (id to quote)) else it }
 }
 
+internal fun dishKey(dish: DishRequest): String =
+    listOf(dish.restaurant, dish.line.dish, dish.line.variant, dish.address.pincode ?: dish.address.line).joinToString("|")
+
+/**
+ * "S ₹249 · Z ₹259" under a search result: each app's initial and its price for the same dish and size.
+ * A missing dish says so; a price still loading shows "…"; a failed lookup is left out. Null with fewer than two apps.
+ */
+internal fun dishPriceLine(prices: List<Pair<FoodProvider, DishPrice?>>): String? {
+    val parts = prices.mapNotNull { (provider, price) ->
+        when (price) {
+            is DishPrice.Found -> "${provider.initial} ${paiseText(price.paise)}"
+            DishPrice.Missing -> "${provider.initial} not listed"
+            null -> "${provider.initial} …"
+            is DishPrice.Failed -> null
+        }
+    }
+    return parts.takeIf { it.size > 1 }?.joinToString(" · ")
+}
+
+/**
+ * Prices the top search results on every signed-in app, cached for the session by dish, size and pincode.
+ * A missing entry means "still checking"; a cancelled run marks its unfinished entries failed, and the next
+ * run asks again.
+ */
+internal class DishQuotes(
+    private val context: Context,
+    private val scope: CoroutineScope,
+    private val providers: List<FoodProvider> = foodProviders,
+) {
+    private val prices = MutableStateFlow<Map<String, Map<String, DishPrice>>>(emptyMap())
+    val state: StateFlow<Map<String, Map<String, DishPrice>>> = prices
+    private var job: Job? = null
+
+    fun start(dishes: List<DishRequest>) {
+        job?.cancel()
+        val signedIn = providers.filter { it.connected(context) }
+        if (signedIn.size < 2) return
+        val todo = dishes.flatMap { dish ->
+            signedIn.filter { p -> prices.value[dishKey(dish)]?.get(p.id).let { it == null || it is DishPrice.Failed } }.map { dish to it }
+        }
+        prices.update { all -> all + todo.groupBy { dishKey(it.first) }.mapValues { (key, _) -> all[key].orEmpty().filterValues { it !is DishPrice.Failed } } }
+        job = scope.launch {
+            try {
+                boundedAll(todo, QUOTE_PARALLEL, QUOTE_TIMEOUT_MS, { DishPrice.Failed(it) }, { (dish, provider) -> provider.quoteDish(context, dish) }) { (dish, provider), price ->
+                    put(dishKey(dish), provider.id, price)
+                }
+            } finally {
+                todo.forEach { (dish, provider) ->
+                    if (prices.value[dishKey(dish)]?.get(provider.id) == null) put(dishKey(dish), provider.id, DishPrice.Failed("stopped"))
+                }
+            }
+        }
+    }
+
+    private fun put(key: String, providerId: String, price: DishPrice) =
+        prices.update { all -> all + (key to (all[key].orEmpty() + (providerId to price))) }
+}
+
+/** How many of the top dish results get a price check on every app. */
+internal const val COMPARED_DISHES = 6
 internal const val QUOTE_PARALLEL = 3
-internal const val QUOTE_TIMEOUT_MS = 12_000L
+/** Zomato's cart quote is five MCP calls in a row; 12s cut healthy answers off. */
+internal const val QUOTE_TIMEOUT_MS = 20_000L

@@ -25,6 +25,7 @@ private class FakeProvider(override val id: String, override val canOrder: Boole
     override val auth: McpAuth get() = error("not used in tests")
     override fun connected(context: Context) = true
     override suspend fun quoteCart(context: Context, cart: CartRequest): ProviderQuote = error("not used in tests")
+    override suspend fun quoteDish(context: Context, dish: DishRequest): DishPrice = error("not used in tests")
 }
 
 class FoodComparisonTest {
@@ -244,5 +245,40 @@ class FoodComparisonTest {
         assertEquals(DeliveryAddress("Work", "43 Residency Road, Bengaluru 560025", "560025"), request.address)
         assertEquals("SWIGGYIT", request.priced?.coupon)
         assertEquals(cartKey(request), cartKey(request.copy(priced = null)))
+    }
+
+    @Test
+    fun restaurantsMatchOnTheWholeBrandName() {
+        assertTrue(sameRestaurant("Paradise Biryani", "Paradise Biryani - A Legend Since 1953"))
+        assertTrue(sameRestaurant("Meghana Foods", "Meghana Foods (Residency Road)"))
+        assertFalse(sameRestaurant("Biryani", "Biryani Blues"))
+        assertFalse(sameRestaurant("Biryani Blues", "Biryani"))
+        assertFalse(sameRestaurant("Biryani Blues", ""))
+    }
+
+    @Test
+    fun aVariantThatIsNotASizeMustBeNamedOnZomato() {
+        val plain = JSONObject().put("item_name", "Chicken Biryani").put("variant_id", "p")
+        val boneless = JSONObject().put("item_name", "Chicken Biryani").put("variant_name", "Boneless").put("variant_id", "b")
+        assertNull(pickVariant(CartLine("Chicken Biryani", "Boneless", 1), listOf(plain)))
+        assertEquals("b", pickVariant(CartLine("Chicken Biryani", "Boneless", 1), listOf(plain, boneless))?.pick("variant_id"))
+    }
+
+    @Test
+    fun aZomatoCartMissingADishIsNotPricedAsTheWholeOrder() {
+        val lines = listOf(ZomatoLine("Biryani", "v1", 2, 30_000), ZomatoLine("Raita", "v2", 1, 5_000))
+        val full = JSONObject().put("items", JSONArray().put(JSONObject().put("variant_id", "v1").put("quantity", 2)).put(JSONObject().put("variant_id", "v2").put("quantity", 1)))
+        val short = JSONObject().put("items", JSONArray().put(JSONObject().put("variant_id", "v1").put("quantity", 2)))
+        assertTrue(cartHolds(full, lines))
+        assertFalse(cartHolds(short, lines))
+        assertTrue(cartHolds(JSONObject().put("total_amount", "700"), lines))
+    }
+
+    @Test
+    fun dishLineShowsEachAppsPriceOrWhyNot() {
+        assertEquals("S ₹249 · Z ₹259", dishPriceLine(listOf(swiggy to DishPrice.Found(24_900), zomato to DishPrice.Found(25_900))))
+        assertEquals("S ₹249 · Z not listed", dishPriceLine(listOf(swiggy to DishPrice.Found(24_900), zomato to DishPrice.Missing)))
+        assertEquals("S ₹249 · Z …", dishPriceLine(listOf(swiggy to DishPrice.Found(24_900), zomato to null)))
+        assertNull(dishPriceLine(listOf(swiggy to DishPrice.Found(24_900), zomato to DishPrice.Failed("took too long"))))
     }
 }
