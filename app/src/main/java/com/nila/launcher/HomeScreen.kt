@@ -329,36 +329,28 @@ private fun GlanceRow(line: GlanceLine, onClick: () -> Unit) {
 
 private const val GLANCE_ICON_DP = 13
 
-/** One compact row above the dock: the suggestion, an Order pill, and a small x that hides it until the next meal window. */
+/** The suggestion as a small pill above the dock, right-aligned: tap orders it, long-press hides it until the next meal. */
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun HomeSuggestion(suggestion: MemorySuggestion, onYes: () -> Unit, onNotToday: () -> Unit) {
-    val photo = when (dishPhotoKey(suggestion.dish)) {
-        "biryani" -> R.drawable.food_biryani
-        "salad" -> R.drawable.food_salad
-        else -> null
-    }
-    Row(Modifier.fillMaxWidth().padding(bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-        photo?.let {
-            Image(painterResource(it), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.padding(end = 10.dp).size(SuggestionPhotoSize).clip(RoundedCornerShape(8.dp)))
+    Box(Modifier.fillMaxWidth().padding(bottom = 18.dp), contentAlignment = Alignment.CenterEnd) {
+        Row(
+            Modifier.clip(RoundedCornerShape(SuggestionPillRadius))
+                .combinedClickable(onClickLabel = "Order", onLongClickLabel = "Not today", onLongClick = onNotToday, onClick = onYes)
+                .background(SuggestionPillFill)
+                .border(1.dp, SuggestionPillStroke, RoundedCornerShape(SuggestionPillRadius))
+                .padding(horizontal = 16.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(7.dp).shadow(6.dp, CircleShape, ambientColor = Lime, spotColor = Lime).background(Lime, CircleShape))
+            Text(suggestion.label, color = ClockInk, fontSize = 15.sp, maxLines = 1, modifier = Modifier.padding(start = 10.dp))
         }
-        Text(suggestion.label, color = ClockInk, fontFamily = FontFamily.Serif, fontSize = 17.sp, maxLines = 2, modifier = Modifier.weight(1f))
-        Text(
-            "Order",
-            color = TileInk,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(start = 10.dp).clip(RoundedCornerShape(50)).background(TileFill).clickable(onClick = onYes).padding(horizontal = 14.dp, vertical = 7.dp),
-        )
-        Icon(
-            painterResource(LucideR.drawable.lucide_ic_x),
-            contentDescription = "Not today",
-            tint = ClockInk,
-            modifier = Modifier.clip(CircleShape).clickable(onClick = onNotToday).padding(8.dp).size(14.dp),
-        )
     }
 }
 
-private val SuggestionPhotoSize = 32.dp
+private val SuggestionPillRadius = 24.dp
+private val SuggestionPillFill = Color(0x5C0F110D)
+private val SuggestionPillStroke = Color.White.copy(alpha = 0.25f)
 
 private fun greetingFor(hour: Int) = when {
     hour < 12 -> "Good morning"
