@@ -654,6 +654,16 @@ private fun DishesCard(card: FoodCard.Dishes, actions: FoodActions) {
                 fontSize = 12.sp,
             )
         }
+        // An app that compares but isn't signed in (or whose sign-in expired) says so once, with the way back in.
+        foodProviders.filter { !it.canOrder && !it.connected(context) }.forEach { app ->
+            Text(
+                "Sign in to ${app.name} to compare prices",
+                color = Lime,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clickable { actions.signIn(app) }.padding(vertical = 2.dp),
+            )
+        }
         val shown = if (showAll) card.dishes else card.dishes.take(DISH_PREVIEW)
         shown.forEachIndexed { index, dish ->
             val compared = dishPrices[dishKey(dishRequest(orderingProvider.id, card.address, dish))]

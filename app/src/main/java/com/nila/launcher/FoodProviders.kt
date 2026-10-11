@@ -162,10 +162,12 @@ internal object ZomatoProvider : FoodProvider {
     override suspend fun quoteCart(context: Context, cart: CartRequest): ProviderQuote {
         addressQuote(ensureAddress(context, cart.address.toNila()))?.let { return it }
         val zomato = compare(context)
-        return when (val matched = zomato.quote(cart)) {
+        val quote = when (val matched = zomato.quote(cart)) {
             is ZomatoGap -> if (matched.failed) ProviderQuote.Failed(matched.reason) else ProviderQuote.NotAvailable(matched.reason)
             is ZomatoQuote -> zomato.total(matched)
         }
+        // An expired sign-in surfaces as "Sign in to compare", with the button, rather than as a failure.
+        return if (connected(context)) quote else ProviderQuote.SignIn
     }
 
     override suspend fun quoteDish(context: Context, dish: DishRequest): DishPrice =

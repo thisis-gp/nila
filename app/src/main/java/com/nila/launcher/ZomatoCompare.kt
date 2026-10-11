@@ -67,10 +67,25 @@ internal class ZomatoCompare(private val context: Context) {
     /** Interruptible, so a provider timeout really stops the blocking HTTP call. */
     private suspend fun call(tool: String, args: JSONObject = JSONObject()): JSONObject? = calls.withPermit {
         runInterruptible(Dispatchers.IO) {
-            val session = ZomatoAuth.currentSession(context) ?: return@runInterruptible null
-            client(session.accessToken).callTool(tool, args)
+            val session = ZomatoAuth.currentSession(context)
+            if (session == null) {
+                lastProblem = "not signed in"
+                return@runInterruptible null
+            }
+            val c = client(session.accessToken)
+            c.callTool(tool, args).also {
+                if (it != null) return@also
+                lastProblem = "$tool: ${c.lastError}"
+                // Zomato tokens expire and can't be refreshed: drop the dead session so the app shows "Sign in", not "didn't answer".
+                if (c.lastError.orEmpty().contains("HTTP 401")) SignIns.signOut(ZomatoAuth, context)
+            }
         }
     }
+
+    /** Why the last Zomato call came back empty, for the trace file and the card. */
+    @Volatile
+    var lastProblem: String? = null
+        private set
 
     /** A step that can't go on, carrying the reason the card shows. Never a CancellationException. */
     private class Stop(val gap: ZomatoGap) : Exception(gap.reason, null, false, false)
