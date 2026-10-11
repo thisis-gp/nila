@@ -101,6 +101,7 @@ class NilaEngine(
     private val today: () -> LocalDate = { LocalDate.now() },
 ) {
     private val percentage = Regex("""(\d+(?:\.\d+)?)\s*%\s*(?:of)?\s*(\d+(?:\.\d+)?)""")
+    private val percentFollowUp = Regex("""\s*(?:and|what about|how about|now)?\s*(?:with\s+)?(\d+(?:\.\d+)?)\s*(?:%|percent)\s*[?.!]*\s*""")
     private val alarm = Regex("""alarm\s+(?:(?:for|at|on)\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?""")
     private val remember = Regex("""remember(?: that)?\s+(.+)""")
     // "1:30", "1.30", "1 30" and "9 pm"; then compact "130" or "1330" as hours and minutes.
@@ -253,6 +254,13 @@ class NilaEngine(
             label = "Camera",
         ),
         CapabilityDescriptor(
+            id = "record_audio",
+            description = "Open the phone's voice recorder to record the user's voice or a voice note.",
+            params = emptyList(),
+            permission = PermissionClass.READ,
+            label = "Voice recorder",
+        ),
+        CapabilityDescriptor(
             id = "call_contact",
             description = "Call a person by name or a phone number. NILA opens the dialer; the user presses call.",
             params = listOf(Param("who", ParamType.STRING)),
@@ -293,9 +301,14 @@ class NilaEngine(
      * doing today"). "hey, wake me up at 7" starts like small talk but is a request, so it still reaches the
      * rewrite and FunctionGemma instead of chat only.
      */
+    // Only right after the greeting, and never "nila" alone: "hey nila play music" is a request.
+    private val GreetingTail = Regex("""^[\s,!.]*(how are you( doing)?( today)?|how('s| is) it going|what'?s up|good (morning|afternoon|evening|night))[\s,!.?]*$""")
+
     fun isSmallTalk(input: String): Boolean {
         val match = smallTalk.find(input.lowercase()) ?: return false
-        return input.substring(match.range.last + 1).split(Regex("""[^\p{L}\p{N}']+""")).count { it.isNotBlank() } <= 2
+        // "hello how are you" is all small talk: Gemma picked show_notes for it on the iQOO 15.
+        val rest = input.lowercase().substring(match.range.last + 1).let { if (GreetingTail.matches(it)) "" else it }
+        return rest.split(Regex("""[^\p{L}\p{N}']+""")).count { it.isNotBlank() } <= 2
     }
 
     /**
@@ -341,6 +354,17 @@ class NilaEngine(
         return NilaResponse.Text("${match.groupValues[1]}% of ${match.groupValues[2]} is ${result.stripTrailingZeros().toPlainString()}")
     }
 
+    /**
+     * "and 20%" or "what about 15%" after "18% of 4250": the same amount at the new rate, worked out
+     * here, never by a model (Gemma once answered "20% of 425 is 90.9" on the iQOO 15).
+     */
+    fun calculateFollowUp(input: String, earlier: List<String>): NilaResponse? {
+        val rate = percentFollowUp.matchEntire(normalize(input))?.groupValues?.get(1) ?: return null
+        // The latest amount in the conversation, newest first: after "and 20%" it is NILA's "20% of 4250 is 850".
+        val amount = earlier.firstNotNullOfOrNull { percentage.find(normalize(it))?.groupValues?.get(2) } ?: return null
+        return calculate("$rate% of $amount")
+    }
+
     // ponytail: keyword router standing in for FunctionGemma; swap in the model behind the same NilaIntent output.
     fun route(input: String): NilaIntent {
         val normalized = normalize(input)
@@ -358,6 +382,10 @@ class NilaEngine(
         timerControl(input)?.let { return NilaIntent.Call(ToolCall("timer_control", mapOf("action" to it))) }
         if (Regex("""\btimer\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("set_timer", timerArgs(input).orEmpty()))
         if (Regex("""\b(flash ?light|torch)\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("flashlight", mapOf("on" to torchOn(input))))
+        // Voice goes to the voice recorder, checked before the camera: "record my voice" is audio, not video.
+        if (Regex("""\brecord\b.*\b(voice|audio|sound)\b|\bvoice (note|recording|memo|recorder)\b|\b(audio|sound) recorder\b""").containsMatchIn(normalized)) {
+            return NilaIntent.Call(ToolCall("record_audio", emptyMap()))
+        }
         if (Regex("""\b(camera|selfie)\b|\btake an? (photo|picture|pic)\b|\brecord an? video\b""").containsMatchIn(normalized)) {
             return NilaIntent.Call(ToolCall("open_camera", mapOf("video" to wantsVideo(input), "front" to wantsFront(input))))
         }
@@ -444,6 +472,7 @@ class NilaEngine(
                     ?: NilaResponse.Text("How long should the timer run? Try \"timer for 10 minutes\".")
             }
             "flashlight" -> Torch(args["on"] as Boolean)
+            "record_audio" -> VoiceRecorder
             "open_camera" -> Camera(args["video"] as Boolean? ?: false, args["front"] as Boolean? ?: false)
             "timer_control" -> (args["action"] as String).takeIf { it in setOf("pause", "resume", "stop", "status") }?.let { TimerControl(it) }
                 ?: NilaResponse.Text("I can pause, resume or stop the timer, or tell you how much time is left.")

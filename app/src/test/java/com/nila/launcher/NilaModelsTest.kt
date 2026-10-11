@@ -64,10 +64,10 @@ class NilaModelsTest {
 
     @Test
     fun greetingsAndQuestionsAboutNilaSkipTools() {
-        listOf("hi", "Hello there", "who are you", "What can you do?", "what's your name", "thanks!", "hi nila", "how are you doing today").forEach {
+        listOf("hi", "Hello there", "who are you", "What can you do?", "what's your name", "thanks!", "hi nila", "how are you doing today", "hello how are you", "hey what's up", "hi good morning").forEach {
             assertTrue(it, engine.isSmallTalk(it))
         }
-        listOf("i'm hungry", "wake me up at 6", "high protein dinner", "open youtube", "hey, wake me up at 7", "help me set a timer for 5 minutes", "hi can you put milk in my notes").forEach {
+        listOf("i'm hungry", "wake me up at 6", "high protein dinner", "open youtube", "hey, wake me up at 7", "help me set a timer for 5 minutes", "hi can you put milk in my notes", "hey nila play music", "hi how are you, remind me tomorrow").forEach {
             assertFalse(it, engine.isSmallTalk(it))
         }
     }
@@ -163,5 +163,14 @@ class NilaModelsTest {
     fun calculatorStaysAheadOfModels() {
         assertEquals(NilaResponse.Text("18% of 4250 is 765"), engine.calculate("What is 18% of 4250?"))
         assertEquals(null, engine.calculate("hi"))
+        // A follow-up keeps the amount and changes the rate, worked out here rather than by Gemma.
+        assertEquals(NilaResponse.Text("20% of 4250 is 850"), engine.calculateFollowUp("and 20%", listOf("18% of 4250 is 765", "what is 18% of 4250")))
+        // A second follow-up: the turn before has no amount, NILA's answer to it does (seen on the iQOO 15).
+        assertEquals(
+            NilaResponse.Text("15% of 4250 is 637.5"),
+            engine.calculateFollowUp("what about 15 percent?", listOf("20% of 4250 is 850", "and 20%", "18% of 4250 is 765", "what is 18% of 4250")),
+        )
+        assertEquals(null, engine.calculateFollowUp("and 20%", listOf("Timer started.", "set a timer for 5 minutes")))
+        assertEquals(null, engine.calculateFollowUp("set a timer for 20 minutes", listOf("18% of 4250 is 765")))
     }
 }

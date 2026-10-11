@@ -644,16 +644,10 @@ private fun NilaApp(resumeVersion: Int) {
         }
     }
 
-    // How the agent screen was last opened: from the mascot it starts listening, from a typed hand-off it does not.
-    var agentEntry by remember { mutableStateOf(AgentEntry.Text) }
-
-    fun openAgent(entry: AgentEntry) {
-        agentEntry = entry
-        open(NilaScreen.Nila)
-    }
+    // The agent screen always opens ready to type; listening starts only when the mic is tapped.
+    fun openAgent() = open(NilaScreen.Nila)
 
     fun closeOverlay() {
-        agentEntry = AgentEntry.Text
         screen = navigation.back()
     }
 
@@ -688,12 +682,12 @@ private fun NilaApp(resumeVersion: Int) {
                 HomeScreen(
                     resumeVersion = resumeVersion,
                     nilaMood = nilaMood,
-                    onInvokeNila = { openAgent(AgentEntry.Voice) },
+                    onInvokeNila = { openAgent() },
                     onOpenApps = { open(NilaScreen.Apps) },
                     onChangeWallpaper = { changeWallpaper(context) },
                     facts = facts,
                     onSuggestion = { request ->
-                        openAgent(AgentEntry.Text)
+                        openAgent()
                         submit(request)
                     },
                 )
@@ -731,7 +725,7 @@ private fun NilaApp(resumeVersion: Int) {
                                     }
                                 },
                                 onAskNila = { request ->
-                                    openAgent(AgentEntry.Text)
+                                    openAgent()
                                     submit(request)
                                 },
                                 onBack = ::closeOverlay,
@@ -739,7 +733,6 @@ private fun NilaApp(resumeVersion: Int) {
                                 onChangeWallpaper = { changeWallpaper(context) },
                             )
                             NilaScreen.Nila -> AgentSpace(
-                                entry = agentEntry,
                                 turns = turns,
                                 input = input,
                                 isThinking = isThinking,
@@ -852,11 +845,9 @@ private const val BUSY_CARD_ALPHA = 0.35f
 private const val BOUNDARY_ALPHA = 0.35f
 
 /** Where the agent screen was opened from: the mascot starts listening straight away, typed hand-offs do not. */
-internal enum class AgentEntry { Voice, Text }
 
 @Composable
 private fun AgentSpace(
-    entry: AgentEntry,
     turns: List<Turn>,
     input: String,
     isThinking: Boolean,
@@ -897,9 +888,6 @@ private fun AgentSpace(
     fun dismissVoice() {
         voice.cancel()
         notice = null
-    }
-    LaunchedEffect(Unit) {
-        if (entry == AgentEntry.Voice) voice.toggle()
     }
     val focusManager = LocalFocusManager.current
     val mood = when {
@@ -1127,7 +1115,7 @@ private fun ResponseView(
         // Only reached if a dismissal was not confirmed through the card; it is never sent without confirmation.
         is NilaResponse.DismissAlarm -> AnswerCard("This alarm was not turned off.")
         // Torch, Camera and Note are done in performNow before they reach the chat.
-        is Torch, is Camera, is Note, is TimerControl, is MapSearch, is WebSearch, is PlayMusic, is MediaKey, is SoundChange,
+        is Torch, is Camera, VoiceRecorder, is Note, is TimerControl, is MapSearch, is WebSearch, is PlayMusic, is MediaKey, is SoundChange,
         is SettingsPage, is LaunchApp, ShowAlarms, BatteryLevel, ShowNotes -> AnswerCard("Done.")
         is Message -> MessageCard(response, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is Timer -> TimerCard()
@@ -1509,6 +1497,11 @@ private fun performNow(context: Context, response: NilaResponse): NilaResponse =
     is Camera -> runCatching { context.startActivity(cameraIntent(response)) }.fold(
         { NilaResponse.Text(if (response.video) "Opening the camera to record video." else if (response.front) "Opening the front camera." else "Opening the camera.") },
         { NilaResponse.Text("No camera app is available.") },
+    )
+    // The recorder registered for RECORD_SOUND (vivo: com.vivo.soundrecorder).
+    VoiceRecorder -> runCatching { context.startActivity(Intent(android.provider.MediaStore.Audio.Media.RECORD_SOUND_ACTION)) }.fold(
+        { NilaResponse.Text("Opening the voice recorder.") },
+        { NilaResponse.Text("No voice recorder app is available.") },
     )
     is Note -> { saveNote(context, response.text); NoteSaved(response.text) }
     is Timer -> response.also { NilaTimer.start(context, it.seconds) }

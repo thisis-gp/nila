@@ -283,6 +283,7 @@ class NilaBrain(
         fun answer(path: String, response: NilaResponse) =
             done(path, (response as? NilaResponse.FoodSearch)?.let { engine.foodConstraints(input, it) } ?: response).also { remember(input, it) }
         engine.calculate(input)?.let { return@withContext answer("calculator", it) }
+        engine.calculateFollowUp(input, history.reversed().flatMap { (user, nila) -> listOf(nila, user) })?.let { return@withContext answer("calculator:follow-up", it) }
         val keyword = engine.route(input)
         if (keyword is NilaIntent.Call && keyword.call.capabilityId == REMEMBER && assistant != null) {
             return@withContext answer("rules+gemma:$REMEMBER", rememberWithKind(input, engine.execute(keyword)))
@@ -511,7 +512,7 @@ class NilaBrain(
             set an alarm for <time> | cancel the alarm for <time> | turn off my alarm | show my alarms
             set a timer for <n> minutes | pause the timer | resume the timer | stop the timer | how much time is left
             turn on the flashlight | turn off the flashlight
-            open the camera | take a selfie | record a video
+            open the camera | take a selfie | record a video | record my voice
             schedule <title> <day> at <time> | remind me to <task> every month on the <day> | take a note that <text> | show my notes
             call <name or number> | tell <name> <message>
             take me to <place> | <things> near me | search for <query>

@@ -14,6 +14,8 @@ data class Torch(val on: Boolean) : NilaResponse
 data class CalendarEvent(val title: String, val date: LocalDate, val time: LocalTime?) : NilaResponse
 data class Note(val text: String) : NilaResponse
 data class Camera(val video: Boolean, val front: Boolean = false) : NilaResponse
+/** The phone's own voice recorder, opened ready to record. */
+data object VoiceRecorder : NilaResponse
 /** Pause, resume, stop or ask about NILA's own timer. */
 data class TimerControl(val action: String) : NilaResponse
 /** A note saved in NILA; the card offers to copy it into the phone's notes app too. */
