@@ -110,7 +110,16 @@ class NilaEngine(
     private val clockTime = Regex("""(?<![\d:.])(\d{1,2})(?:[:.\s](\d{2}))?\s*(am|pm)?(?![\d:.])""")
     private val compactTime = Regex("""(?<!\d)(\d{1,2})(\d{2})\s*(am|pm)?(?!\d)""")
     private val smallTalk = Regex(
-        """^\s*(hi+|hello|hey|namaste|thanks|thank you|good (morning|afternoon|evening|night)|who are you|what are you|what('?s| is) your name|what can you do|how are you|help)\b""",
+        """^\s*(hi+|hello|hey|namaste|thanks|thank you|good (morning|afternoon|evening|night)|who are you|what are you|""" +
+            """what('?s| is) your name|what can you do|what do you do|how can you help( me)?|how are you|help)\b""",
+    )
+    // A question that names NILA itself is about the assistant, not a request for it to act — wording
+    // varies too much for a fixed phrase list ("what is the use of nila", "why should I use nila", ...).
+    // Excludes any action verb so "can NILA call Mom?" or "can NILA open YouTube?" keep their tools.
+    private val aboutNila = Regex(
+        """^\s*(what|who|why|how|is|are|does|do|can)\b""" +
+            """(?!.*\b(call|remind|open|set|turn|switch|play|navigate|order|buy|book|message|text|search|find|show|""" +
+            """start|stop|add|remove|delete|send|wake|alarm|timer|note|remember)\b).*\bnila\b""",
     )
     private val apps = mapOf(
         "youtube" to Triple("YouTube", "com.google.android.youtube", "https://youtube.com"),
@@ -319,9 +328,11 @@ class NilaEngine(
     private val GreetingTail = Regex("""^[\s,!.]*(how are you( doing)?( today)?|how('s| is) it going|what'?s up|good (morning|afternoon|evening|night))[\s,!.?]*$""")
 
     fun isSmallTalk(input: String): Boolean {
-        val match = smallTalk.find(input.lowercase()) ?: return false
+        val lower = input.lowercase()
+        if (aboutNila.containsMatchIn(lower)) return true
+        val match = smallTalk.find(lower) ?: return false
         // "hello how are you" is all small talk: Gemma picked show_notes for it on the iQOO 15.
-        val rest = input.lowercase().substring(match.range.last + 1).let { if (GreetingTail.matches(it)) "" else it }
+        val rest = lower.substring(match.range.last + 1).let { if (GreetingTail.matches(it)) "" else it }
         return rest.split(Regex("""[^\p{L}\p{N}']+""")).count { it.isNotBlank() } <= 2
     }
 
