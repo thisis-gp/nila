@@ -72,7 +72,6 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Food -> FoodScreen(onOpen, onBack)
         NilaScreen.PreparedOrder -> PreparedOrderScreen(onOpen, onBack)
         NilaScreen.ActionResult -> ActionResultScreen(onOpen)
-        NilaScreen.People -> PeopleScreen(onOpen, onBack)
         NilaScreen.Memory -> MemoryScreen(onOpen, onBack, facts, onForgetFact, onForgetAll)
         NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
@@ -178,19 +177,6 @@ private fun ActionResultScreen(onOpen: (NilaScreen) -> Unit) = Page("ACTION RESU
 }
 
 @Composable
-private fun PeopleScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("PEOPLE & MESSAGES", onOpen, onBack) {
-    ScreenTitle("Messages, grouped\nby person.")
-    BodyText("Demo content only. NILA has not read notifications, contacts or messages on this device.")
-    SectionCard("Arjun Menon", "“Are we still meeting at the studio?” · mock WhatsApp", "MOCK · 4 MIN")
-    SectionCard("Devananda", "Sent 3 launcher references · mock Messages", "MOCK · 21 MIN")
-    NilaCard {
-        SectionLabel("Draft · not sent", color = Lime)
-        BodyText("Running a little late. I’ll be at the studio by 6:30.", Paper)
-    }
-    SecondaryButton("Continue in NILA") { onOpen(NilaScreen.Home) }
-}
-
-@Composable
 private fun MemoryScreen(
     onOpen: (NilaScreen) -> Unit,
     onBack: () -> Unit,
@@ -273,9 +259,10 @@ private fun SettingsScreen(
 
     SettingsGroup("Privacy and safety") {
         SettingsRow(LucideR.drawable.lucide_ic_brain, "My NILA", "What NILA knows about you and your people, on this phone") { onOpen(NilaScreen.Memory) }
-        SettingsRow(LucideR.drawable.lucide_ic_shield_check, "Confirm before acting", "Pay, send, book, delete or share", value = "Always")
         SettingsRow(LucideR.drawable.lucide_ic_volume_2, "Spoken replies", "Offline voices for Lakshmi") { onOpen(NilaScreen.Languages) }
     }
+    // A fact about NILA, not a setting: nothing here to switch.
+    BodyText("NILA always asks before it pays, sends, books, deletes or shares anything.")
 
     SettingsGroup("About") {
         SettingsRow(LucideR.drawable.lucide_ic_sparkles, "What NILA can do", "Every action and the model behind it") { onOpen(NilaScreen.Capabilities) }

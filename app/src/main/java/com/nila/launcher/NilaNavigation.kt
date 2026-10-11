@@ -11,7 +11,6 @@ enum class NilaScreen {
     Food,
     PreparedOrder,
     ActionResult,
-    People,
     Memory,
     Capabilities,
     Apps,
