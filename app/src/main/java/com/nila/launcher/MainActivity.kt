@@ -711,11 +711,38 @@ private fun MonthlyReminderCard(reminder: MonthlyReminder, context: Context, onR
         if (needsNotificationPermission(context)) ask.launch(android.Manifest.permission.POST_NOTIFICATIONS)
     }
 }
-
 /** Android 13 and newer need permission before any notification shows. */
 internal fun needsNotificationPermission(context: Context) =
     android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
         ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+
+/** A one-time reminder: one tap and My NILA notifies at that time, even when NILA is closed. */
+@Composable
+private fun OneOffReminderCard(reminder: OneOffReminder, context: Context, onResult: (String) -> Unit) {
+    var saved by remember { mutableStateOf(false) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) onResult("Saved, but notifications are off for NILA. Turn them on in Android settings to be reminded.")
+    }
+    val time = "%s, %d:%02d %s".format(
+        eventWhen(reminder.at.toLocalDate(), null).substringBefore(","),
+        (reminder.at.hour + 11) % 12 + 1, reminder.at.minute, if (reminder.at.hour < 12) "am" else "pm",
+    )
+    ActionCard(
+        label = "Reminder",
+        title = reminder.title,
+        detail = "$time\nMy NILA sends a notification then, even when NILA is closed.",
+        action = if (saved) "Reminder set" else "Remind me",
+    ) {
+        if (saved) return@ActionCard
+        NilaReminders(context).add(NilaReminder(java.util.UUID.randomUUID().toString(), reminder.title, "Your reminder from My NILA.", reminder.at))
+        saved = true
+        onResult("Done. I'll remind you: ${reminder.title}, $time.")
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) ask.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+    }
+}
+
 private val MascotTapSize = 40.dp
 private val HeaderMascotSize = 34.dp
 private val WorkingMascotSize = 28.dp
@@ -1076,6 +1103,7 @@ private fun ResponseView(
                 .onFailure { addTurn("Action result", NilaResponse.Text("No calendar app is available.")) }
         }
         is MonthlyReminder -> MonthlyReminderCard(response, context) { addTurn("Action result", NilaResponse.Text(it)) }
+        is OneOffReminder -> OneOffReminderCard(response, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is Call -> CallCard(response.who, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is NilaResponse.Alarm -> ActionCard(
             label = "Alarm",

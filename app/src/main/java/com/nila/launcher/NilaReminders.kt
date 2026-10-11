@@ -12,6 +12,8 @@ import android.content.SharedPreferences
 import android.net.Uri
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import java.time.LocalDate
+import java.time.LocalTime
 import java.time.LocalDateTime
 import java.time.YearMonth
 import java.time.ZoneId
@@ -251,3 +253,75 @@ internal fun reminderWhen(reminder: NilaReminder, now: LocalDateTime = LocalDate
     val next = nextFiring(reminder, now) ?: return "Done"
     return eventWhen(next.toLocalDate(), next.toLocalTime()) + if (reminder.monthlyDay != null) " · every month" else ""
 }
+
+// ---- One-time reminders from chat ------------------------------------------------
+
+/** A one-time reminder: "remind me to call Amma at 6 pm". */
+data class OneOffReminder(val title: String, val at: LocalDateTime) : NilaResponse
+
+private val ReminderWord = Regex("""\b(remind|reminder|reminders)\b""")
+private val EveryMonth = Regex("""\b(every month|each month|monthly)\b""")
+private val InTime = Regex("""\bin\s+(\d{1,3})\s*(min|mins|minutes?|hr|hrs|hours?)\b""")
+private val AtTime = Regex("""\b(?:at|by)\s+(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?(?!\s*(?:min|hour|day))""")
+private val PartOfDayTime = mapOf(
+    Regex("""\btonight\b""") to LocalTime.of(21, 0),
+    Regex("""\b(this )?evening\b""") to LocalTime.of(18, 0),
+    Regex("""\b(this )?afternoon\b""") to LocalTime.of(14, 0),
+    Regex("""\b(this |tomorrow )?morning\b""") to LocalTime.of(9, 0),
+    Regex("""\bnoon\b""") to LocalTime.NOON,
+)
+private val ReminderLead = Regex(
+    """^\s*(please\s+)?(can you\s+)?(help me\s+(to\s+)?)?((set|add|create|make|put)\s+(up\s+)?(a\s+|me\s+a\s+)?reminder|remind me)\s*(to|about|for|that|of)?\s*""",
+)
+private val ReminderDay = Regex("""\b(today|tomorrow|tonight|(on\s+)?(next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b""")
+private const val DEFAULT_HOUR = 9
+
+/**
+ * "remind me to call Amma at 6 pm", "set a reminder to pay rent tomorrow", "remind me in 2 hours to take
+ * medicine". The time comes only from the user's words; with no time or nothing to remind about, NILA asks.
+ * Null when the message isn't a reminder, or is a monthly one (handled by [monthlyReminderArgs]).
+ */
+fun oneOffReminder(text: String, now: LocalDateTime): NilaResponse? {
+    val lower = text.lowercase().trim().trimEnd('.', '!', '?')
+    if (!ReminderWord.containsMatchIn(lower) || EveryMonth.containsMatchIn(lower) || !ReminderLead.containsMatchIn(lower) ||
+        Regex("""\b(cancel|stop|delete|remove)\b""").containsMatchIn(lower)
+    ) return null
+    val day = when {
+        Regex("""\btomorrow\b""").containsMatchIn(lower) -> now.toLocalDate().plusDays(1)
+        else -> java.time.DayOfWeek.entries.firstOrNull { Regex("""\b${it.name.lowercase()}\b""").containsMatchIn(lower) }
+            ?.let { now.toLocalDate().with(java.time.temporal.TemporalAdjusters.next(it)) }
+    }
+    val at: LocalDateTime? = InTime.find(lower)?.let { m ->
+        val n = m.groupValues[1].toLong()
+        if (m.groupValues[2].startsWith("h")) now.plusHours(n) else now.plusMinutes(n)
+    } ?: AtTime.find(lower)?.let { m ->
+        val hour = m.groupValues[1].toInt()
+        val minute = m.groupValues[2].toIntOrNull() ?: 0
+        if (hour > 23 || minute > 59) return NilaResponse.Text("That time doesn't look right. Try \"at 6 pm\".")
+        val hours = when (m.groupValues[3].replace(".", "")) {
+            "am" -> listOf(hour % 12)
+            "pm" -> listOf(hour % 12 + 12)
+            // "at 6" with no am/pm: whichever 6 o'clock comes next.
+            else -> if (hour > 12 || hour == 0) listOf(hour) else listOf(hour % 12, hour % 12 + 12)
+        }
+        val date = day ?: now.toLocalDate()
+        hours.map { date.atTime(it, minute) }.firstOrNull { day != null || it.isAfter(now) }
+            ?: date.plusDays(1).atTime(hours.first(), minute)
+    } ?: PartOfDayTime.entries.firstOrNull { (words) -> words.containsMatchIn(lower) }?.let { (_, time) ->
+        val date = day ?: if (lower.contains("tomorrow")) now.toLocalDate().plusDays(1) else now.toLocalDate()
+        date.atTime(time).let { if (!it.isAfter(now)) it.plusDays(1) else it }
+    } ?: day?.atTime(DEFAULT_HOUR, 0)
+
+    val title = ReminderLead.replace(lower, "")
+        .replace(InTime, " ").replace(AtTime, " ").replace(ReminderDay, " ")
+        .let { t -> PartOfDayTime.keys.fold(t) { acc, words -> acc.replace(words, " ") } }
+        .replace(Regex("""\b(to|about|for|me)\s*$"""), "").replace(Regex("""^\s*(to|about|me)\b"""), "")
+        .replace(Regex("""\s+"""), " ").trim()
+    return when {
+        title.isBlank() && at == null -> NilaResponse.Text("Sure. What should I remind you about, and when? Like \"remind me to call Amma at 6 pm\".")
+        at == null -> NilaResponse.Text("When should I remind you to $title? Like \"at 6 pm\", \"tomorrow at 9\" or \"in 2 hours\".")
+        title.isBlank() -> NilaResponse.Text("What should I remind you about at ${"%02d:%02d".format(at.hour, at.minute)}?")
+        else -> OneOffReminder(title.replaceFirstChar(Char::uppercase), at)
+    }
+}
+
