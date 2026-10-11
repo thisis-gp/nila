@@ -1,6 +1,9 @@
 package com.nila.launcher
 
 import android.content.Context
+import android.content.SharedPreferences
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import java.time.DayOfWeek
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -63,7 +66,10 @@ private val PersonalStatement = Regex(
     """^\s*(?:my|our)\s+[\p{L}]+(?:'s)?\s+(?:loves?|likes?|hates?|prefers?|enjoys?|is|isn't|eats|doesn't|does not|can't|cannot|favourite|favorite|birthday|name|allergy)\b|""" +
         """^\s*(?:i|i'm|i am)\s+(?:love|like|hate|prefer|enjoy|am|'m|allergic|vegetarian|vegan|don't|do not|can't|cannot)\b|^\s*i'm\b""",
 )
-private val RequestWords = Regex("""\b(order|buy|get me|book|call|message|tell|remind|set|show|find|search|open|play|take me|what|who|how|when|where|can you|please)\b""")
+private val RequestWords = Regex(
+    """\b(order|buy|get me|book|call|message|text|tell|remind|set|show|find|search|open|play|take me|turn|switch|start|stop|send|add|cancel|""" +
+        """pay|delete|remove|schedule|navigate|what|who|how|when|where|can you|please)\b""",
+)
 
 /**
  * "my wife loves butter chicken" tells NILA something; it does not ask for anything. Such a statement is
@@ -131,48 +137,82 @@ internal fun memorySummary(facts: List<MemoryFact>): String =
         "• $who${fact.text} (${fact.kind.label.lowercase()})"
     }
 
+/** Facts as stored: a JSON list. */
+internal fun encodeFacts(facts: List<MemoryFact>): String = JSONArray().apply {
+    facts.forEach { fact ->
+        put(JSONObject().put("id", fact.id).put("text", fact.text).put("kind", fact.kind.name).put("savedAt", fact.savedAt).put("about", fact.about))
+    }
+}.toString()
+
+/** A malformed entry is skipped, never fatal: memory is a convenience, not a dependency. */
+internal fun decodeFacts(raw: String): List<MemoryFact> {
+    val list = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
+    return (0 until list.length()).mapNotNull { i ->
+        val o = list.optJSONObject(i) ?: return@mapNotNull null
+        val text = o.optString("text").ifBlank { return@mapNotNull null }
+        MemoryFact(o.optString("id").ifBlank { UUID.randomUUID().toString() }, text, MemoryKind.from(o.optString("kind")), o.optLong("savedAt"), aboutKey(o.optString("about")))
+    }
+}
+
 /**
- * The facts, as a JSON list in the `nila_memory` preferences. Reads migrate the old single `fact` key once.
+ * The facts to keep when moving from the old plain store to the encrypted one: what is already encrypted,
+ * then every fact from the plain store (and its oldest single `fact`), so an update loses nothing.
+ */
+internal fun movedFacts(secure: String?, plain: String?, plainLegacy: String?, savedAt: Long): List<MemoryFact> {
+    val kept = plain?.let(::decodeFacts).orEmpty().fold(secure?.let(::decodeFacts).orEmpty(), ::withFact)
+    return migrated(kept, plainLegacy, savedAt)
+}
+
+/**
+ * The facts, as a JSON list in EncryptedSharedPreferences (`nila_memory_secure`), excluded from backup and
+ * device transfer. Facts from older builds' plain `nila_memory` file move in once, and that file is deleted.
  * ponytail: SharedPreferences holds a few dozen short facts fine; move to ObjectBox with the rest of memory when it lands.
  */
 internal class NilaMemory(context: Context) {
-    private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
 
-    fun facts(): List<MemoryFact> {
-        val stored = prefs.getString(FACTS, null)?.let(::decode).orEmpty()
-        val legacy = prefs.getString(LEGACY_FACT, null) ?: return stored
-        return migrated(stored, legacy, System.currentTimeMillis()).also(::write)
+    private val prefs by lazy {
+        val masterKey = MasterKey.Builder(appContext).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+        EncryptedSharedPreferences.create(
+            appContext,
+            SECURE_PREFS,
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+        ).also(::moveFromPlain)
     }
+
+    private fun moveFromPlain(secure: SharedPreferences) {
+        val plain = appContext.getSharedPreferences(PLAIN_PREFS, Context.MODE_PRIVATE)
+        if (plain.all.isEmpty()) return
+        val moved = movedFacts(secure.getString(FACTS, null), plain.getString(FACTS, null), plain.getString(LEGACY_FACT, null), System.currentTimeMillis())
+        // commit, not apply: the plain copy is deleted only once the encrypted one is on disk.
+        if (secure.edit().putString(FACTS, encodeFacts(moved)).commit()) {
+            plain.edit().clear().commit()
+            appContext.deleteSharedPreferences(PLAIN_PREFS)
+        }
+    }
+
+    fun facts(): List<MemoryFact> = prefs.getString(FACTS, null)?.let(::decodeFacts).orEmpty()
 
     fun save(text: String, kind: MemoryKind, about: String = ME): List<MemoryFact> =
         withFact(facts(), newFact(text, kind, System.currentTimeMillis(), about)).also(::write)
 
     fun delete(id: String): List<MemoryFact> = facts().filterNot { it.id == id }.also(::write)
 
+    /** Removes a fact by its words, for the Forget on the card that announced it. */
+    fun forget(text: String, about: String): List<MemoryFact> =
+        facts().filterNot { sameText(it.text, text) && it.about == aboutKey(about) }.also(::write)
+
     fun clear(): List<MemoryFact> = emptyList<MemoryFact>().also(::write)
 
     private fun write(facts: List<MemoryFact>) {
-        prefs.edit().putString(FACTS, encode(facts)).remove(LEGACY_FACT).apply()
-    }
-
-    private fun encode(facts: List<MemoryFact>): String = JSONArray().apply {
-        facts.forEach { fact ->
-            put(JSONObject().put("id", fact.id).put("text", fact.text).put("kind", fact.kind.name).put("savedAt", fact.savedAt).put("about", fact.about))
-        }
-    }.toString()
-
-    /** A malformed entry is skipped, never fatal: memory is a convenience, not a dependency. */
-    private fun decode(raw: String): List<MemoryFact> {
-        val list = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
-        return (0 until list.length()).mapNotNull { i ->
-            val o = list.optJSONObject(i) ?: return@mapNotNull null
-            val text = o.optString("text").ifBlank { return@mapNotNull null }
-            MemoryFact(o.optString("id").ifBlank { UUID.randomUUID().toString() }, text, MemoryKind.from(o.optString("kind")), o.optLong("savedAt"), aboutKey(o.optString("about")))
-        }
+        prefs.edit().putString(FACTS, encodeFacts(facts)).apply()
     }
 
     private companion object {
-        const val PREFS = "nila_memory"
+        const val PLAIN_PREFS = "nila_memory"
+        const val SECURE_PREFS = "nila_memory_secure"
         const val FACTS = "facts"
         const val LEGACY_FACT = "fact"
     }

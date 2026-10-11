@@ -40,6 +40,27 @@ class MyNilaTest {
         assertFalse(isPersonalStatement("order my wife's favourite"))
         assertFalse(isPersonalStatement("my wife loves butter chicken, order it"))
         assertFalse(isPersonalStatement("order butter chicken"))
+        // A personal detail with a request in it is a request.
+        assertFalse(isPersonalStatement("I'm in the dark, turn on the flashlight"))
+        assertFalse(isPersonalStatement("my mom is calling, call her back"))
+        assertFalse(isPersonalStatement("I'm late, send a message to Priya"))
+        assertFalse(isPersonalStatement("I'm done, stop the timer"))
+        assertFalse(isPersonalStatement("I'm going out, cancel my alarm"))
+        assertFalse(isPersonalStatement("my wife is home, switch off the lights"))
+    }
+
+    @Test
+    fun savedFactsSurviveStorageAndTheMoveToEncryption() {
+        val facts = listOf(
+            MemoryFact("1", "loves butter chicken", MemoryKind.Preference, 10, "wife"),
+            MemoryFact("2", "allergic to peanuts", MemoryKind.Allergy, 20),
+        )
+        assertEquals(facts, decodeFacts(encodeFacts(facts)))
+        // An update from the plain store keeps every fact, including the oldest single one, without duplicates.
+        val moved = movedFacts(secure = null, plain = encodeFacts(facts), plainLegacy = "Home is Kondapur", savedAt = 30)
+        assertEquals(listOf("loves butter chicken", "allergic to peanuts", "Home is Kondapur"), moved.map { it.text })
+        assertEquals("wife", moved.first().about)
+        assertEquals(facts, movedFacts(secure = encodeFacts(facts), plain = encodeFacts(facts), plainLegacy = null, savedAt = 30))
     }
 
     @Test

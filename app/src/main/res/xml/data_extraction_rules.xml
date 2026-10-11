@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and newer. My NILA stays on this phone: no cloud backup, no device transfer. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="nila_memory.xml" />
+        <exclude domain="sharedpref" path="nila_memory_secure.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="nila_memory.xml" />
+        <exclude domain="sharedpref" path="nila_memory_secure.xml" />
+    </device-transfer>
+</data-extraction-rules>

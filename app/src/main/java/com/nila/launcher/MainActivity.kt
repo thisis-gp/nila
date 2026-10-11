@@ -561,6 +561,12 @@ private fun NilaApp(resumeVersion: Int) {
                                 food = foodActions,
                                 suggestion = morningSuggestion(facts, LocalTime.now()),
                                 grocery = groceryActions,
+                                forget = { saved ->
+                                    // Undo for an automatic save: the fact goes, and the card says so instead of offering Forget again.
+                                    facts = memory.forget(saved.fact, saved.about)
+                                    val index = turns.indexOfFirst { it.response === saved }
+                                    if (index >= 0) turns[index] = turns[index].copy(response = NilaResponse.Text("Forgotten: ${saved.fact}"))
+                                },
                             ) { label, next -> turns += Turn(label, next) }
                             NilaScreen.Home -> Unit
                             else -> NilaScreenCatalogue(
@@ -674,6 +680,7 @@ private fun AgentSpace(
     food: FoodActions,
     suggestion: MemorySuggestion?,
     grocery: GroceryActions,
+    forget: (NilaResponse.Remember) -> Unit,
     addTurn: (String, NilaResponse) -> Unit,
 ) {
     val lastWasConfirmation = turns.lastOrNull()?.response is NilaResponse.Confirmation
@@ -762,11 +769,11 @@ private fun AgentSpace(
                             // Keep the booking card on screen while Swiggy answers, faded so taps wait.
                             WorkingOnIt()
                             Box(Modifier.alpha(BUSY_CARD_ALPHA)) {
-                                ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, grocery = grocery, addTurn = addTurn)
+                                ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, grocery = grocery, forget = forget, addTurn = addTurn)
                             }
                         }
                         busy -> WorkingOnIt()
-                        else -> ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, grocery = grocery, addTurn = addTurn)
+                        else -> ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, grocery = grocery, forget = forget, addTurn = addTurn)
                     }
                 }
             }
@@ -907,6 +914,7 @@ private fun ResponseView(
     confirm: (String) -> Unit,
     food: FoodActions,
     grocery: GroceryActions,
+    forget: (NilaResponse.Remember) -> Unit,
     addTurn: (String, NilaResponse) -> Unit,
 ) {
     when (response) {
@@ -927,7 +935,16 @@ private fun ResponseView(
                 fontSize = 15.sp,
                 lineHeight = 22.sp,
             )
-            Text("${response.kind.label} · on this phone · forget it in Settings › My NILA", color = Muted, fontSize = 12.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("${response.kind.label} · on this phone, encrypted", color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                Text(
+                    "Forget",
+                    color = Lime,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clickable { forget(response) }.padding(start = 12.dp, top = 6.dp, bottom = 6.dp),
+                )
+            }
         }
         // Only reached if a dismissal was not confirmed through the card; it is never sent without confirmation.
         is NilaResponse.DismissAlarm -> AnswerCard("This alarm was not turned off.")
