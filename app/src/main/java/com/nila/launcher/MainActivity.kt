@@ -1158,7 +1158,7 @@ private fun ResponseView(
             ActionCard(
                 label = "Monthly reminder",
                 title = response.title,
-                detail = "Every month on ${dayLabel(response)} at %02d:%02d. First: %s.\nYour calendar keeps it and reminds you, even when NILA is closed."
+                detail = "Every month on ${dayLabel(response)} at %02d:%02d. First: %s.\nOpens your calendar to save it as a repeating event: check it says \"every month\"."
                     .format(response.time.hour, response.time.minute, eventWhen(first.toLocalDate(), null).substringBefore(",")),
                 action = "Add to calendar",
             ) {

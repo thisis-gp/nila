@@ -41,9 +41,10 @@ class MonthlyReminderTest {
     @Test
     fun theCalendarRuleNeverSkipsAShortMonth() {
         assertEquals("FREQ=MONTHLY;BYMONTHDAY=5", MonthlyReminder("Bill", 5, LocalTime.NOON).rule)
-        // The 31st is "the last day": a 31st-only rule would skip 30-day months and February.
-        assertEquals("FREQ=MONTHLY;BYMONTHDAY=-1", MonthlyReminder("Bill", 31, LocalTime.NOON).rule)
-        assertEquals("the last day", dayLabel(MonthlyReminder("Bill", 30, LocalTime.NOON)))
+        // Days 29-31 fall back to a short month's last day, and never fire late in a long one.
+        assertEquals("FREQ=MONTHLY;BYMONTHDAY=29,30,31;BYSETPOS=-1", MonthlyReminder("Bill", 31, LocalTime.NOON).rule)
+        assertEquals("FREQ=MONTHLY;BYMONTHDAY=28,29,30;BYSETPOS=-1", MonthlyReminder("Bill", 30, LocalTime.NOON).rule)
+        assertEquals("the 30th", dayLabel(MonthlyReminder("Bill", 30, LocalTime.NOON)))
         assertEquals("the 21st", dayLabel(MonthlyReminder("Bill", 21, LocalTime.NOON)))
         assertEquals("the 12th", dayLabel(MonthlyReminder("Bill", 12, LocalTime.NOON)))
     }
@@ -54,5 +55,8 @@ class MonthlyReminderTest {
         assertEquals(LocalDateTime.of(2026, 11, 5, 10, 0), firstReminder(MonthlyReminder("Bill", 5, LocalTime.of(10, 0)), now))
         assertEquals(LocalDateTime.of(2026, 10, 21, 9, 0), firstReminder(MonthlyReminder("Bill", 21, LocalTime.of(9, 0)), now))
         assertEquals(LocalDateTime.of(2026, 10, 31, 10, 0), firstReminder(MonthlyReminder("Bill", 31, LocalTime.of(10, 0)), now))
+        // A bill due on the 30th: 30 October, and 28 February in a short month.
+        assertEquals(LocalDateTime.of(2026, 10, 30, 10, 0), firstReminder(MonthlyReminder("Bill", 30, LocalTime.of(10, 0)), now))
+        assertEquals(LocalDateTime.of(2027, 2, 28, 10, 0), firstReminder(MonthlyReminder("Bill", 30, LocalTime.of(10, 0)), LocalDateTime.of(2027, 2, 1, 0, 0)))
     }
 }

@@ -148,10 +148,11 @@ fun dismissPlan(hour: Int?, minute: Int, nextHour: Int?, nextMinute: Int?): Dism
 
 /** A reminder that repeats every month on [day] at [time]; a day after the 28th means the month's last day. */
 data class MonthlyReminder(val title: String, val day: Int, val time: LocalTime) : NilaResponse {
-    val lastDay get() = day > LAST_SAFE_DAY
-
-    /** The calendar's repeat rule: the same date each month, or the last day so short months are not skipped. */
-    val rule get() = if (lastDay) "FREQ=MONTHLY;BYMONTHDAY=-1" else "FREQ=MONTHLY;BYMONTHDAY=$day"
+    /**
+     * The calendar's repeat rule: the same date each month. For the 29th to 31st, the latest of that date
+     * and the two before it, so a bill due on the 30th is on the 30th, and on the 28th in February.
+     */
+    val rule get() = if (day > LAST_SAFE_DAY) "FREQ=MONTHLY;BYMONTHDAY=${day - 2},${day - 1},$day;BYSETPOS=-1" else "FREQ=MONTHLY;BYMONTHDAY=$day"
 }
 
 private const val LAST_SAFE_DAY = 28
@@ -183,7 +184,7 @@ fun monthlyReminderArgs(text: String): Map<String, Any>? {
 }
 
 /** "the 5th", "the 21st", "the last day". */
-fun dayLabel(reminder: MonthlyReminder): String = if (reminder.lastDay) "the last day" else reminder.day.let { d ->
+fun dayLabel(reminder: MonthlyReminder): String = reminder.day.let { d ->
     "the " + d.toString() + when {
         d % 100 in 11..13 -> "th"
         d % 10 == 1 -> "st"
@@ -196,7 +197,8 @@ fun dayLabel(reminder: MonthlyReminder): String = if (reminder.lastDay) "the las
 /** When the reminder first fires: this month if its day and time are still ahead, else next month. */
 fun firstReminder(reminder: MonthlyReminder, now: java.time.LocalDateTime): java.time.LocalDateTime {
     fun inMonth(month: java.time.YearMonth) =
-        (if (reminder.lastDay) month.atEndOfMonth() else month.atDay(minOf(reminder.day, month.lengthOfMonth()))).atTime(reminder.time)
+        // The 30th in February is the 28th (or 29th): the month's last day, never a skipped month.
+        month.atDay(minOf(reminder.day, month.lengthOfMonth())).atTime(reminder.time)
     val thisMonth = inMonth(java.time.YearMonth.from(now))
     return if (thisMonth.isAfter(now)) thisMonth else inMonth(java.time.YearMonth.from(now).plusMonths(1))
 }
