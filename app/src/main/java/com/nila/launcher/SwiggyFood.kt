@@ -265,6 +265,10 @@ internal class FoodFlow(private val context: Context) {
     suspend fun zomatoShop(address: FoodAddress, restaurant: FoodRestaurant): ZomatoShop? =
         if (!zomato.connected || intent.query.isBlank()) null else zomato.shop(address, restaurant.name, intent.query)
 
+    /** The dish across Zomato near [address], for the Swiggy dish list; null when Zomato isn't connected. */
+    suspend fun zomatoNearby(address: FoodAddress): ZomatoNearby? =
+        if (!zomato.connected || intent.query.isBlank()) null else zomato.nearby(address, intent.query)
+
     suspend fun menu(address: FoodAddress, restaurant: FoodRestaurant, query: String): NilaResponse {
         // search_menu scoped to the restaurant returns the variant IDs the cart needs;
         // the full menu browse is only a fallback when the dish search comes back empty.

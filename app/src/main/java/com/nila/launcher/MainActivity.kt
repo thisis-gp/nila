@@ -222,6 +222,7 @@ private fun NilaApp(resumeVersion: Int) {
                 runFood("Check Zomato total") { foodFlow.zomatoTotal(payment, method) }
             override fun back(card: FoodCard) = runFood("Back") { NilaResponse.Food(card) }
             override suspend fun zomatoShop(address: FoodAddress, restaurant: FoodRestaurant) = foodFlow.zomatoShop(address, restaurant)
+            override suspend fun zomatoNearby(address: FoodAddress) = foodFlow.zomatoNearby(address)
             override fun lastResults() = foodFlow.lastResults
             override fun lastMenu() = foodFlow.lastMenu
             override fun lastCart() = foodFlow.lastCart

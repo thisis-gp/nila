@@ -15,6 +15,15 @@ class ZomatoDishesTest {
         assertTrue(mentionsDish("Egg Briyani", "order biryani"))
         assertFalse(mentionsDish("Chicken 65", "biryani"))
         assertFalse(mentionsDish("Biryani Rice Bowl Combo", "order food"))
+        // Every word of the dish: butter chicken is not chicken biryani.
+        assertTrue(mentionsDish("Butter Chicken Boneless", "butter chicken"))
+        assertFalse(mentionsDish("Chicken Biryani", "butter chicken"))
+        // Seen on the iQOO 15: sauces and fried rice with the same words are not butter chicken.
+        assertFalse(mentionsDish("Stir Fried Chicken In A Garlic Butter Sauce", "butter chicken"))
+        assertFalse(mentionsDish("Burnt Butter Garlic Fried Rice Chicken", "butter chicken"))
+        assertTrue(mentionsDish("Malabar Parotta (2 pcs) with Butter Chicken", "butter chicken"))
+        assertTrue(mentionsDish("Hyderabadi Chicken Dum Biryani", "chicken biryani"))
+        assertTrue(mentionsDish("Butter Paneer Chicken", "butter chicken"))
     }
 
     @Test
