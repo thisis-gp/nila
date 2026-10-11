@@ -34,6 +34,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -60,12 +61,18 @@ import coil3.compose.AsyncImage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /** What the food cards can ask NILA to do next. Implemented in MainActivity. */
 internal interface FoodActions {
     fun locate(query: String)
-    fun zomatoTotal(payment: FoodCard.Payment, method: String)
+    /** Every app's price for the cart at checkout, filled in as each app answers. */
+    fun quotes(): StateFlow<QuoteBoard>
+    fun retryQuote(providerId: String)
+    fun signIn(provider: FoodProvider)
+    /** Opens a delivery app NILA can't order on, so the user finishes there. */
+    fun openApp(provider: FoodProvider)
     fun applyCoupon(payment: FoodCard.Payment, coupon: FoodCoupon)
     fun back(card: FoodCard)
     /** The same shop on Zomato with its prices for this request; null when Zomato isn't connected. */
@@ -107,7 +114,7 @@ internal fun FoodCardView(card: FoodCard, actions: FoodActions) {
         is FoodCard.Order -> OrderCard(card, actions)
         is FoodCard.Problem -> Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                SectionLabel("Swiggy", color = Orange)
+                SectionLabel(orderingProvider.name, color = Orange)
                 Text(card.message, color = Paper)
             }
         }
@@ -126,7 +133,7 @@ internal fun BackLink(label: String, onBack: () -> Unit) {
 }
 
 @Composable
-internal fun StepHeader(step: Int, title: String, source: String = "Swiggy · live") {
+internal fun StepHeader(step: Int, title: String, source: String = "${orderingProvider.name} · live") {
     SourceLabel(source)
     Spacer(Modifier.height(4.dp))
     Text(title, color = Paper, fontSize = 26.sp, fontFamily = FontFamily.Serif, lineHeight = 30.sp)
@@ -382,7 +389,7 @@ private fun NewAddressFormCard(prefill: CurrentPlace?, onSave: (NewAddressForm) 
                 enabled = valid && !saving,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
-            ) { Text(if (saving) "Saving to Swiggy…" else "Save and deliver here") }
+            ) { Text(if (saving) "Saving to ${orderingProvider.name}…" else "Save and deliver here") }
         }
     }
 }
@@ -838,6 +845,10 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
             armed = false
         }
     }
+    val board by actions.quotes().collectAsState()
+    val ranked = board.takeIf { card.compareKey != null && it.key == card.compareKey }?.ranked()
+    // One primary action: order here when the cheapest app is the one NILA orders on, else open the cheapest app.
+    val openInstead = ranked?.winner?.provider?.takeIf { !it.canOrder && it.appPackage != null }
     val upi = card.options.filter { !it.method.equals("Cash", true) }
     val cash = card.options.filter { it.method.equals("Cash", true) }
 
@@ -861,6 +872,15 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         actions.lastCart()?.let { cart -> BackLink("Edit cart") { actions.back(cart) } }
         StepHeader(5, "Review and pay")
+        ranked?.let { CompareSection(it, actions) }
+        openInstead?.let { app ->
+            Button(
+                onClick = { actions.openApp(app) },
+                modifier = Modifier.fillMaxWidth().height(PrimaryActionHeight),
+                shape = RoundedCornerShape(ActionRadius),
+                colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink),
+            ) { Text("Open in ${app.name}", fontWeight = FontWeight.Bold) }
+        }
         // One method shown: the one used last time, or the first. The rest stay one tap away.
         if (showAll) {
             Group("PAY BY UPI APP", upi)
@@ -876,7 +896,6 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
             )
         }
         OffersBlock(card, enabled = !placed) { actions.applyCoupon(card, it) }
-        card.zomato?.let { compared -> CompareBlock(card, compared, selected?.method.orEmpty(), enabled = !placed) { actions.zomatoTotal(card, it) } }
         Spacer(Modifier.height(4.dp))
         Surface(color = CommitInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -903,74 +922,25 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
                         }
                     },
                     enabled = selected != null && !placed,
-                    colors = ButtonDefaults.buttonColors(containerColor = if (armed) Orange else Lime, contentColor = Ink),
+                    colors = when {
+                        armed -> ButtonDefaults.buttonColors(containerColor = Orange, contentColor = Ink)
+                        openInstead == null -> ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)
+                        else -> ButtonDefaults.buttonColors(containerColor = Color.Transparent, contentColor = Lime)
+                    },
+                    border = if (openInstead != null && !armed) BorderStroke(1.dp, Lime.copy(alpha = 0.5f)) else null,
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                     shape = RoundedCornerShape(16.dp),
                 ) {
                     Text(
                         when {
                             placed -> "Placing order…"
-                            armed -> "Tap again to place · ${card.cart.total}"
-                            else -> "Place order · ${card.cart.total}"
+                            armed -> "Tap again to order · ${card.cart.total}"
+                            else -> "Order on ${orderingProvider.name} · ${card.cart.total}"
                         },
                         fontWeight = FontWeight.Bold,
                     )
                 }
-                Text("This places a real Swiggy order and charges you.", color = Muted, fontSize = 11.sp)
-            }
-        }
-    }
-}
-
-/**
- * The same order on Zomato: dish prices first (both apps add their own fees), then Zomato's real total
- * once the user asks for it. A gap is said plainly, never filled with a guessed match.
- */
-@Composable
-private fun CompareBlock(card: FoodCard.Payment, compared: ZomatoComparison, method: String, enabled: Boolean, onTotal: (String) -> Unit) {
-    SectionLabel("Compare", Modifier.padding(top = 4.dp))
-    Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            when (compared) {
-                is ZomatoGap -> Text("Zomato · ${compared.reason}", color = Muted, fontSize = 13.sp)
-                is ZomatoQuote -> {
-                    val swiggyItems = card.cart.bill.firstOrNull { it.first == "Item total" }?.second?.let(::digitsOf)
-                        ?: card.cart.lines.sumOf { digitsOf(it.price) ?: 0 }
-                    val swiggyTotal = digitsOf(card.cart.total)
-                    val zomatoTotal = compared.total
-                    val (zomatoAmount, swiggyAmount, what) =
-                        if (zomatoTotal != null && swiggyTotal != null) Triple(zomatoTotal, swiggyTotal, "total to pay")
-                        else Triple(compared.itemsTotal, swiggyItems, "dish prices")
-                    val gap = zomatoAmount - swiggyAmount
-                    Text(
-                        when {
-                            gap < 0 -> "Zomato is ₹${-gap} cheaper (${what})"
-                            gap > 0 -> "Swiggy is ₹$gap cheaper (${what})"
-                            else -> "Same price on both (${what})"
-                        },
-                        color = if (gap < 0) Lime else Paper,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                    )
-                    Text("Swiggy ₹$swiggyAmount · Zomato ₹$zomatoAmount", color = Paper, fontSize = 13.sp)
-                    Text(
-                        listOf(compared.restaurantName, compared.eta).filter(String::isNotBlank).joinToString(" · "),
-                        color = Muted,
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (compared.missing.isNotEmpty()) Text("Not on Zomato: ${compared.missing.joinToString()}", color = Muted, fontSize = 12.sp)
-                    if (zomatoTotal == null) {
-                        Text(
-                            "Check Zomato total with fees · makes a Zomato cart, no order",
-                            color = Lime,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.clickable(enabled = enabled) { onTotal(method) }.padding(vertical = 2.dp),
-                        )
-                    }
-                }
+                Text("This places a real ${orderingProvider.name} order and charges you.", color = Muted, fontSize = 11.sp)
             }
         }
     }
@@ -1084,7 +1054,7 @@ private fun OrderCard(card: FoodCard.Order, actions: FoodActions) {
                 }
                 Text("Ordered.\nYou stayed in control.", color = Ink, fontSize = 30.sp, fontFamily = FontFamily.Serif, lineHeight = 34.sp)
                 Text(card.detail, color = Ink.copy(alpha = 0.75f), fontSize = 13.sp)
-                card.orderId?.let { Text("Swiggy order $it", color = Ink.copy(alpha = 0.6f), fontSize = 11.sp) }
+                card.orderId?.let { Text("${orderingProvider.name} order $it", color = Ink.copy(alpha = 0.6f), fontSize = 11.sp) }
                 Button(
                     onClick = { actions.track(card.orderId) },
                     modifier = Modifier.fillMaxWidth().height(50.dp),

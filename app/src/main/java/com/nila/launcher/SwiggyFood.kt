@@ -118,7 +118,8 @@ sealed interface FoodCard {
         val options: List<FoodPayOption>,
         val coupons: List<FoodCoupon> = emptyList(),
         val applied: FoodCoupon? = null,
-        val zomato: ZomatoComparison? = null,
+        /** The [QuoteBoard] key of this cart's price comparison across apps; null before it starts. */
+        val compareKey: String? = null,
     ) : FoodCard
     /** [dishes] are the names in the order, so a placed card can offer to remember one. */
     data class Order(
@@ -139,9 +140,8 @@ sealed interface FoodCard {
  * Swiggy doesn't document response shapes, so parsers search the JSON tree by key
  * names instead of fixed paths, and every raw response is kept in files/probe/.
  */
-internal class FoodFlow(private val context: Context) {
+internal class FoodFlow(private val context: Context, private val quotes: FoodQuotes) {
     private var client: McpClient? = null
-    private val zomato = ZomatoCompare(context)
     private var cartRestaurantId: String? = null
     private val cartItems = linkedMapOf<String, Pair<FoodItem, Int>>()
 
@@ -263,11 +263,13 @@ internal class FoodFlow(private val context: Context) {
 
     /** The same shop on Zomato for what the user asked; null when Zomato isn't connected. */
     suspend fun zomatoShop(address: FoodAddress, restaurant: FoodRestaurant): ZomatoShop? =
-        if (!zomato.connected || intent.query.isBlank()) null else zomato.shop(address, restaurant.name, intent.query)
+        if (!ZomatoProvider.connected(context) || intent.query.isBlank()) null
+        else ZomatoProvider.compare(context).shop(address, restaurant.name, intent.query)
 
     /** The dish across Zomato near [address], for the Swiggy dish list; null when Zomato isn't connected. */
     suspend fun zomatoNearby(address: FoodAddress): ZomatoNearby? =
-        if (!zomato.connected || intent.query.isBlank()) null else zomato.nearby(address, intent.query)
+        if (!ZomatoProvider.connected(context) || intent.query.isBlank()) null
+        else ZomatoProvider.compare(context).nearby(address, intent.query)
 
     suspend fun menu(address: FoodAddress, restaurant: FoodRestaurant, query: String): NilaResponse {
         // search_menu scoped to the restaurant returns the variant IDs the cart needs;
@@ -333,16 +335,9 @@ internal class FoodFlow(private val context: Context) {
         val ordered = options.sortedByDescending { it.label == usual }
         val coupons = call("fetch_food_coupons", JSONObject().put("restaurantId", restaurant.id).put("addressId", address.id))
             ?.let(::parseCoupons).orEmpty()
-        // Same order on Zomato, by dish price, when the user has connected Zomato in Settings.
-        val compared = if (zomato.connected) zomato.quote(address, restaurant, cart) else null
-        return card(FoodCard.Payment(address, restaurant, cart, ordered, coupons, zomato = compared).also { lastPayment = it })
-    }
-
-    /** The user asked for Zomato's real total: creates a Zomato cart for the same items, never checks out. */
-    suspend fun zomatoTotal(payment: FoodCard.Payment, method: String): NilaResponse {
-        val quote = payment.zomato as? ZomatoQuote ?: return card(payment)
-        val priced = zomato.total(quote, method) ?: return card(payment.copy(zomato = ZomatoGap("Zomato couldn't price this cart right now")))
-        return card(payment.copy(zomato = priced).also { lastPayment = it })
+        // The same cart priced on every connected app; the card fills in as each answers.
+        val compareKey = quotes.start(cartRequest(SwiggyProvider.id, address, restaurant, cart, coupon = null))
+        return card(FoodCard.Payment(address, restaurant, cart, ordered, coupons, compareKey = compareKey).also { lastPayment = it })
     }
 
     /** Applies one coupon; Swiggy answers with the repriced cart, which replaces the bill on the same card. */
@@ -351,7 +346,8 @@ internal class FoodFlow(private val context: Context) {
             ?: return problem("Applying ${coupon.code}")
         val repriced = parseCart(result, payment.restaurant.name).takeIf { it.lines.isNotEmpty() }
             ?: parseCart(call("get_food_cart", JSONObject().put("addressId", payment.address.id).put("restaurantName", payment.restaurant.name)) ?: result, payment.restaurant.name)
-        return card(payment.copy(cart = repriced, applied = coupon).also { lastPayment = it })
+        val compareKey = quotes.start(cartRequest(SwiggyProvider.id, payment.address, payment.restaurant, repriced, coupon.code))
+        return card(payment.copy(cart = repriced, applied = coupon, compareKey = compareKey).also { lastPayment = it })
     }
 
     /** Commit: places a real Swiggy order. Only reachable from the two-tap confirmation. */

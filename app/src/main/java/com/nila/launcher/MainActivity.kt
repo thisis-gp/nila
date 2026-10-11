@@ -230,7 +230,10 @@ private fun NilaApp(resumeVersion: Int) {
     var justReplied by remember { mutableStateOf(false) }
     val swiggySession = remember(SignIns.revision) { SwiggyAuth.currentSession(context) }
     val zomatoSession = remember(SignIns.revision) { ZomatoAuth.currentSession(context) }
-    val foodFlow = remember { FoodFlow(context.applicationContext) }
+    val foodQuotes = remember { FoodQuotes(context.applicationContext, scope) }
+    val foodFlow = remember { FoodFlow(context.applicationContext, foodQuotes) }
+    // A sign-in from the comparison's "Sign in" row prices that app on the open card.
+    LaunchedEffect(SignIns.revision) { foodQuotes.refresh() }
     val instamart = remember { InstamartShop(context.applicationContext) }
 
     /** Runs one Swiggy step as its own chat turn, with the same thinking state as a typed request. */
@@ -267,8 +270,19 @@ private fun NilaApp(resumeVersion: Int) {
                 runFood("Deliver to ${address.label}") { foodFlow.deliverTo(address, query) }
             override fun applyCoupon(payment: FoodCard.Payment, coupon: FoodCoupon) =
                 runFood("Apply ${coupon.code}") { foodFlow.applyCoupon(payment, coupon) }
-            override fun zomatoTotal(payment: FoodCard.Payment, method: String) =
-                runFood("Check Zomato total") { foodFlow.zomatoTotal(payment, method) }
+            override fun quotes() = foodQuotes.state
+            override fun retryQuote(providerId: String) = foodQuotes.retry(providerId)
+            override fun signIn(provider: FoodProvider) =
+                SignIns.start(provider.auth, context) {
+                    Toast.makeText(context.applicationContext, "${provider.name} sign-in didn't complete.", Toast.LENGTH_SHORT).show()
+                }
+            override fun openApp(provider: FoodProvider) {
+                val pkg = provider.appPackage ?: return
+                val launch = context.packageManager.getLaunchIntentForPackage(pkg)
+                    ?: Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pkg"))
+                runCatching { context.startActivity(launch) }
+                    .onFailure { Toast.makeText(context, "${provider.name} can't be opened.", Toast.LENGTH_SHORT).show() }
+            }
             override fun back(card: FoodCard) = runFood("Back") { NilaResponse.Food(card) }
             override suspend fun zomatoShop(address: FoodAddress, restaurant: FoodRestaurant) = foodFlow.zomatoShop(address, restaurant)
             override suspend fun zomatoNearby(address: FoodAddress) = foodFlow.zomatoNearby(address)
