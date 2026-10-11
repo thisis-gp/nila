@@ -61,6 +61,15 @@ fun messageParts(text: String): Pair<String, String>? = messageLead.find(text)?.
 }
 
 fun directionsTo(text: String) = Regex("""^\s*(?:please\s+)?(?:take me to|navigate to|directions to|get directions to|how do i get to|route to)\s+(.+)$""", RegexOption.IGNORE_CASE).after(text, 1)
+    ?: placeAsked(text)
+
+/**
+ * "where is Meghana Biryani", "how far is the airport": a named place, answered with the route card, not a web
+ * search or a food order. Things the user owns ("where is my phone", "my order") are not places.
+ */
+private fun placeAsked(text: String): String? =
+    Regex("""^\s*(?:please\s+)?(?:where is|where's|wheres|where are|how far is|how far away is|how far to|location of|address of|show me where)\s+(?!my\b|your\b|it\b|that\b|this\b)(.+?)\s*\??$""", RegexOption.IGNORE_CASE)
+        .after(text, 1)
 
 fun nearbyQuery(text: String) = Regex("""^\s*(?:find\s+|show\s+|search\s+)?(.+?)\s+(?:near me|nearby|around me|close by)\b""", RegexOption.IGNORE_CASE).after(text, 1)
 

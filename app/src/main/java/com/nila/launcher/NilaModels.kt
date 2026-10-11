@@ -743,6 +743,7 @@ class NilaBrain(
             Questions about the user's own details, name, likes, diet or family become "what do you know about ..." or "what is my name", never "show my notes". Use "show my notes" only when the user says notes.
             call <name or number> | tell <name> <message>
             take me to <place> | <things> near me | search for <query>
+            "where is <place>" or "how far is <place>" -> take me to <place>, even when the place is a restaurant: "where is meghana biryani" -> take me to meghana biryani.
             order food <cooked dish or meal from a restaurant> | shop groceries <item to buy from a store>
             Cooked dishes and meals are food: biryani, pizza, dosa, a paneer roll, dinner, lunch.
             Things you cook with or keep at home are groceries: milk, eggs, bread, fruit, bananas, vegetables, rice, atta, oil, sugar, snacks, soap, detergent.
