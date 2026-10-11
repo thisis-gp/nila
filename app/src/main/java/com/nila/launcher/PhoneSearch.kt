@@ -50,6 +50,12 @@ import kotlinx.coroutines.withContext
 data class PhotoSearch(val from: LocalDate, val to: LocalDate, val label: String) : NilaResponse
 
 private val PhotoWords = Regex("""\b(photos?|pictures?|pics?|images?|selfies?|screenshots?)\b""")
+
+/** A request to see photos: "show", "find", "my photos", "photos from …". */
+private val PhotoAsk = Regex("""\b(show|find|see|view|display|open|look at|where are|search)\b|\bmy (photos?|pictures?|pics?|images?|selfies?|screenshots?)\b|\b(photos?|pictures?|pics?|images?|selfies?|screenshots?) (from|of|on|taken|i took|i clicked)\b""")
+
+/** Doing something with photos is a command, not a search: "take a selfie today", "print pictures on friday". */
+private val PhotoAction = Regex("""^\s*(please\s+)?(take|click|capture|record|print|delete|send|share|edit|upload|set|remind)\b""")
 private val months = listOf("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
 private val monthWord = """(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"""
 private val MonthDayYear = Regex("""\b$monthWord\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b""")
@@ -73,7 +79,8 @@ private fun dayLabel(date: LocalDate) = "%s %d %s %d".format(
  */
 fun photoSearch(text: String, today: LocalDate): PhotoSearch? {
     val lower = text.lowercase()
-    if (!PhotoWords.containsMatchIn(lower)) return null
+    // Review on #40: "take a selfie today" and "remind me to print pictures on friday" were gallery searches.
+    if (!PhotoWords.containsMatchIn(lower) || !PhotoAsk.containsMatchIn(lower) || PhotoAction.containsMatchIn(lower)) return null
     fun day(date: LocalDate?) = date?.let { PhotoSearch(it, it, dayLabel(it)) }
     fun safe(y: Int, m: Int, d: Int) = runCatching { LocalDate.of(y, m, d) }.getOrNull()
     MonthDayYear.find(lower)?.let { m -> return day(safe(m.groupValues[3].toInt(), monthOf(m.groupValues[1]), m.groupValues[2].toInt())) }
@@ -112,7 +119,8 @@ internal fun findPhotos(context: Context, search: PhotoSearch): List<PhonePhoto>
     val end = search.to.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
     val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
     val selection = "(${MediaStore.Images.Media.DATE_TAKEN} >= ? AND ${MediaStore.Images.Media.DATE_TAKEN} < ?) OR " +
-        "(${MediaStore.Images.Media.DATE_TAKEN} IS NULL AND ${MediaStore.Images.Media.DATE_ADDED} >= ? AND ${MediaStore.Images.Media.DATE_ADDED} < ?)"
+        // Many camera apps write 0, not NULL, when a photo has no time taken.
+        "((${MediaStore.Images.Media.DATE_TAKEN} IS NULL OR ${MediaStore.Images.Media.DATE_TAKEN} = 0) AND ${MediaStore.Images.Media.DATE_ADDED} >= ? AND ${MediaStore.Images.Media.DATE_ADDED} < ?)"
     val args = arrayOf(start.toString(), end.toString(), (start / 1000).toString(), (end / 1000).toString())
     val photos = mutableListOf<PhonePhoto>()
     context.contentResolver.query(collection, arrayOf(MediaStore.Images.Media._ID), selection, args, "${MediaStore.Images.Media.DATE_TAKEN} DESC")?.use { c ->
@@ -128,13 +136,38 @@ private val photoPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.T
 @Composable
 internal fun PhotoSearchCard(search: PhotoSearch) {
     val context = LocalContext.current
-    var allowed by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, photoPermission) == PackageManager.PERMISSION_GRANTED) }
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed = it }
+    fun granted() = ContextCompat.checkSelfPermission(context, photoPermission) == PackageManager.PERMISSION_GRANTED
+    var allowed by remember { mutableStateOf(granted()) }
+    // After two refusals Android stops asking: then the button opens NILA's settings instead.
+    var blocked by remember { mutableStateOf(false) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        allowed = ok
+        val activity = context as? android.app.Activity
+        blocked = !ok && activity != null && !activity.shouldShowRequestPermissionRationale(photoPermission)
+    }
+    // Back from Android's settings: check again.
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    androidx.compose.runtime.DisposableEffect(lifecycle) {
+        val watcher = androidx.lifecycle.LifecycleEventObserver { _, event -> if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) allowed = granted() }
+        lifecycle.addObserver(watcher)
+        onDispose { lifecycle.removeObserver(watcher) }
+    }
     NilaCard {
         SectionLabel("Your photos · ${search.label}", color = Lime)
         if (!allowed) {
             Text("NILA needs to see your photos to search them. They stay on this phone.", color = Paper, fontSize = 14.sp)
-            PrimaryAction("Allow photo access", onClick = { ask.launch(photoPermission) })
+            if (blocked) {
+                PrimaryAction("Open settings to allow photos", onClick = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+                })
+            } else {
+                PrimaryAction("Allow photo access", onClick = { ask.launch(photoPermission) })
+            }
             return@NilaCard
         }
         val photos by produceState<List<PhonePhoto>?>(null, search) { value = withContext(Dispatchers.IO) { runCatching { findPhotos(context, search) }.getOrDefault(emptyList()) } }
@@ -163,8 +196,13 @@ private fun Thumbnail(photo: PhonePhoto, modifier: Modifier) {
     val bitmap by produceState<Bitmap?>(null, photo.uri) {
         value = withContext(Dispatchers.IO) {
             runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) context.contentResolver.loadThumbnail(photo.uri, Size(THUMB_PX, THUMB_PX), null)
-                else null
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    context.contentResolver.loadThumbnail(photo.uri, Size(THUMB_PX, THUMB_PX), null)
+                } else {
+                    // Android 8-9: Android's own small thumbnail of the photo.
+                    @Suppress("DEPRECATION")
+                    MediaStore.Images.Thumbnails.getThumbnail(context.contentResolver, ContentUris.parseId(photo.uri), MediaStore.Images.Thumbnails.MINI_KIND, null)
+                }
             }.getOrNull()
         }
     }

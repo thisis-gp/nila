@@ -26,5 +26,8 @@ class PhoneSearchTest {
         assertNull(photoSearch("order biryani on Dec 18 2024", today))
         assertNull(photoSearch("show my photos", today))
         assertNull(photoSearch("photos from 31 February 2024", today))
+        // Review on #40: doing something with photos is a command, not a gallery search.
+        assertNull(photoSearch("take a selfie today", today))
+        assertNull(photoSearch("remind me to print pictures on friday", today))
     }
 }
