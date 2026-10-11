@@ -102,6 +102,8 @@ class NilaEngine(
     extraCapabilities: List<CapabilityDescriptor> = emptyList(),
     private val now: () -> LocalTime = { LocalTime.now() },
     private val today: () -> LocalDate = { LocalDate.now() },
+    /** (id, title) of the apps NILA built, so "open water" can open the built app (SkillActions.kt). */
+    private val installedApps: () -> List<Pair<String, String>> = { emptyList() },
 ) {
     private val percentage = Regex("""(\d+(?:\.\d+)?)\s*%\s*(?:of)?\s*(\d+(?:\.\d+)?)""")
     private val percentFollowUp = Regex("""\s*(?:and|what about|how about|now)?\s*(?:with\s+)?(\d+(?:\.\d+)?)\s*(?:%|percent)\s*[?.!]*\s*""")
@@ -292,7 +294,7 @@ class NilaEngine(
             permission = PermissionClass.PREPARE,
             label = "Call",
         ),
-    ).plus(moreCapabilities).plus(extraCapabilities).associateBy { it.id }
+    ).plus(moreCapabilities).plus(skillCapabilities).plus(extraCapabilities).associateBy { it.id }
 
     /** Timer length read from the user's words, so the model never decides the duration. */
     fun timerArgs(input: String): Map<String, Any>? = timerSeconds(input)?.let { mapOf("seconds" to it) }
@@ -422,6 +424,7 @@ class NilaEngine(
             return NilaIntent.Call(ToolCall("add_note", noteText(input)?.let { mapOf("text" to it) }.orEmpty()))
         }
         callTarget(input)?.let { return NilaIntent.Call(ToolCall("call_contact", mapOf("who" to it))) }
+        skillCall(input, normalized, installedApps())?.let { return NilaIntent.Call(it) }
         moreActionCall(input)?.let { return NilaIntent.Call(it) }
         if (Regex("""\b(event|meeting|appointment|calendar)\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("create_event", eventArgs(input)))
 
@@ -531,7 +534,7 @@ class NilaEngine(
                 if (hour != null && time == null) NilaResponse.Text("That event time is not valid.")
                 else CalendarEvent(args["title"] as String, eventDate(args["day"] as String? ?: "", today()), time)
             }
-            else -> moreRun(call) ?: NilaResponse.Text("I can't do that yet. Nothing was done.")
+            else -> skillRun(call) ?: moreRun(call) ?: NilaResponse.Text("I can't do that yet. Nothing was done.")
         }
     }
 
