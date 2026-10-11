@@ -93,6 +93,7 @@ internal class ZomatoCompare(private val context: Context) {
     private fun stop(reason: String, failed: Boolean = false): Nothing = throw Stop(ZomatoGap(reason, failed))
 
     private val addressIds = ConcurrentHashMap<String, String>()
+    private val nearbyUsed = ConcurrentHashMap<String, AddressResult.Nearby>()
     private val restaurants = ConcurrentHashMap<String, JSONObject>()
     private val listings = ConcurrentHashMap<String, List<JSONObject>>()
     @Volatile private var savedCache: Pair<Long, List<ProviderAddress>>? = null
@@ -109,20 +110,35 @@ internal class ZomatoCompare(private val context: Context) {
 
     /**
      * NILA's address among the saved Zomato ones, through the shared matcher. Zomato can't save an address
-     * for NILA, so a missing one is [zomatoCantAdd]. A match is kept for the session.
+     * for NILA, so with no exact match the nearest saved one within [NEAREST_MAX_KM] stands in
+     * ([AddressResult.Nearby]), and with none that close it is [zomatoCantAdd]. An exact match is kept for the session.
      */
     suspend fun ensure(address: NilaAddress): AddressResult {
         val key = addressKey(address.line)
         addressIds[key]?.let { return AddressResult.Ready(it) }
         val saved = saved() ?: return AddressResult.Failed(NO_ANSWER)
-        val match = matchAddress(address, saved) ?: return zomatoCantAdd(address.label)
-        addressIds[key] = match.id
-        return AddressResult.Ready(match.id)
+        val match = matchAddress(address, saved)
+        if (match != null) {
+            addressIds[key] = match.id
+            nearbyUsed.remove(key)
+            return AddressResult.Ready(match.id)
+        }
+        val nearby = nearestAddress(address, saved, NEAREST_MAX_KM)
+        if (nearby == null) {
+            nearbyUsed.remove(key)
+            return zomatoCantAdd(address.label)
+        }
+        nearbyUsed[key] = nearby
+        return nearby
     }
+
+    /** The nearby address Zomato prices [address] from, once [ensure] has chosen one; null when it has the exact address. */
+    fun nearbyFor(address: NilaAddress): AddressResult.Nearby? = nearbyUsed[addressKey(address.line)]
 
     private suspend fun addressId(address: DeliveryAddress): String = when (val result = ensure(address.toNila())) {
         is AddressResult.Ready -> result.providerAddressId
         is AddressResult.Added -> result.providerAddressId
+        is AddressResult.Nearby -> result.providerAddressId
         is AddressResult.CantAdd -> stop(result.reason)
         is AddressResult.Failed -> stop(result.reason, failed = true)
     }
@@ -309,6 +325,8 @@ internal class ZomatoCompare(private val context: Context) {
         const val NEARBY_SHOPS = 4
         const val MAX_PARALLEL_CALLS = 3
         const val SAVED_TTL_MS = 60_000L
+        // Farther than this, a saved address says nothing about NILA's: delivery fees and shops would differ.
+        const val NEAREST_MAX_KM = 5.0
     }
 }
 

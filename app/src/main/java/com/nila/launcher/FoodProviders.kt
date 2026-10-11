@@ -35,7 +35,8 @@ data class Bill(
 
 /** What one app said about the cart: a priced bill, or why there is none. */
 sealed interface ProviderQuote {
-    data class Priced(val bill: Bill, val etaMinutes: Int?, val coupon: String?) : ProviderQuote
+    /** [nearby] is set when the app priced this from a saved address close to NILA's, so its fees aren't exact. */
+    data class Priced(val bill: Bill, val etaMinutes: Int?, val coupon: String?, val nearby: AddressResult.Nearby? = null) : ProviderQuote
     data object Checking : ProviderQuote
     data object SignIn : ProviderQuote
     data class NotAvailable(val reason: String) : ProviderQuote
@@ -80,18 +81,21 @@ internal interface FoodProvider {
 
     /** The addresses saved in this app, for NILA's address picker. */
     suspend fun savedAddresses(context: Context): List<ProviderAddress> = emptyList()
+
+    /** The saved address this app prices [address] from when it has no exact match, once [ensureAddress] has chosen one. */
+    fun nearbyAddress(context: Context, address: NilaAddress): AddressResult.Nearby? = null
 }
 
 /** The comparison row for an app without NILA's address; null when the app has it and pricing can go on. */
 internal fun addressQuote(result: AddressResult): ProviderQuote? = when (result) {
-    is AddressResult.Ready, is AddressResult.Added -> null
+    is AddressResult.Ready, is AddressResult.Added, is AddressResult.Nearby -> null
     is AddressResult.CantAdd -> ProviderQuote.NoAddress(result.reason, result.fix)
     is AddressResult.Failed -> ProviderQuote.Failed(result.reason)
 }
 
 /** The same for a dish line: an app without the address is left out of it. */
 internal fun addressDishPrice(result: AddressResult): DishPrice? = when (result) {
-    is AddressResult.Ready, is AddressResult.Added -> null
+    is AddressResult.Ready, is AddressResult.Added, is AddressResult.Nearby -> null
     is AddressResult.CantAdd -> DishPrice.NoAddress
     is AddressResult.Failed -> DishPrice.Failed(result.reason)
 }
@@ -159,12 +163,17 @@ internal object ZomatoProvider : FoodProvider {
 
     override suspend fun savedAddresses(context: Context): List<ProviderAddress> = compare(context).saved().orEmpty()
 
+    override fun nearbyAddress(context: Context, address: NilaAddress): AddressResult.Nearby? = compare(context).nearbyFor(address)
+
     override suspend fun quoteCart(context: Context, cart: CartRequest): ProviderQuote {
-        addressQuote(ensureAddress(context, cart.address.toNila()))?.let { return it }
+        val nila = cart.address.toNila()
+        addressQuote(ensureAddress(context, nila))?.let { return it }
         val zomato = compare(context)
         val quote = when (val matched = zomato.quote(cart)) {
             is ZomatoGap -> if (matched.failed) ProviderQuote.Failed(matched.reason) else ProviderQuote.NotAvailable(matched.reason)
-            is ZomatoQuote -> zomato.total(matched)
+            is ZomatoQuote -> zomato.total(matched).let { total ->
+                if (total is ProviderQuote.Priced) total.copy(nearby = zomato.nearbyFor(nila)) else total
+            }
         }
         // An expired sign-in surfaces as "Sign in to compare", with the button, rather than as a failure.
         return if (connected(context)) quote else ProviderQuote.SignIn

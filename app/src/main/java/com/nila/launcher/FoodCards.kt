@@ -50,6 +50,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -664,6 +669,19 @@ private fun DishesCard(card: FoodCard.Dishes, actions: FoodActions) {
                 modifier = Modifier.clickable { actions.signIn(app) }.padding(vertical = 2.dp),
             )
         }
+        // An app without NILA's exact address says so once: it prices from a saved address nearby, or can't compare
+        // until the address is added there. Either way the way to add it is one tap.
+        val nila = deliveryAddress(card.address).toNila()
+        val place = shortPlaceName(card.address.line, card.address.label)
+        compareApps.forEach { app ->
+            val nearby = app.nearbyAddress(context, nila)
+            val missing = dishPrices.values.any { it[app.id] == DishPrice.NoAddress }
+            if (nearby == null && !missing) return@forEach
+            AddAddressNote(
+                lead = nearby?.let { "${app.name} prices from ${nearbyText(it)}" },
+                action = if (nearby != null) "Add $place in ${app.name}" else "Add $place in ${app.name} once to compare prices",
+            ) { actions.openApp(app) }
+        }
         val shown = if (showAll) card.dishes else card.dishes.take(DISH_PREVIEW)
         shown.forEachIndexed { index, dish ->
             val compared = dishPrices[dishKey(dishRequest(orderingProvider.id, card.address, dish))]
@@ -682,6 +700,19 @@ private fun DishesCard(card: FoodCard.Dishes, actions: FoodActions) {
         ZomatoNearbyBlock(card, actions)
         actions.lastResults()?.let { results -> BackLink("Browse restaurants instead") { actions.back(results) } }
     }
+}
+
+/** One quiet line under the results: [lead] in muted text, then [action], which is the tappable part. */
+@Composable
+private fun AddAddressNote(lead: String?, action: String, onAdd: () -> Unit) {
+    val text = buildAnnotatedString {
+        if (lead != null) {
+            append(lead)
+            append(" · ")
+        }
+        withLink(LinkAnnotation.Clickable("add-address", TextLinkStyles(SpanStyle(color = Lime, fontWeight = FontWeight.SemiBold))) { onAdd() }) { append(action) }
+    }
+    Text(text, color = Muted, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(vertical = 2.dp))
 }
 
 @Composable

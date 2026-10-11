@@ -130,7 +130,11 @@ internal fun CompareRow(app: PricedApp, winner: PricedApp?, expanded: Boolean, o
             Column(Modifier.weight(1f)) {
                 Text(app.provider.name, color = Paper, fontSize = 16.sp)
                 Text(
-                    listOfNotNull(app.quote.etaMinutes?.let { "$it min" }, if (expanded) "Hide bill" else "Bill details").joinToString(" · "),
+                    listOfNotNull(
+                        app.quote.etaMinutes?.let { "$it min" },
+                        app.quote.nearby?.let { "from ${nearbyText(it)}" },
+                        if (expanded) "Hide bill" else "Bill details",
+                    ).joinToString(" · "),
                     color = Muted,
                     fontSize = 12.sp,
                 )

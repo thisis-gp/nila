@@ -202,4 +202,57 @@ class NilaAddressesTest {
         assertNull(addedNote(state.copy(results = mapOf("swiggy" to AddressResult.Ready("s9")))))
         assertNull(addedNote(AddressSyncState()))
     }
+
+    // ---- nearest saved address ----
+
+    private val farLine = "Some Tower, Indiranagar, Bengaluru 560038"
+
+    @Test
+    fun nearestPicksTheClosestWithinFiveKm() {
+        val home = saved("z1", farLine, lat = 12.9986, lng = 77.6070)
+        val closer = saved("z2", "Other Place, Bengaluru 560001", lat = 12.9836, lng = 77.6070)
+        val tooFar = saved("z3", "Far Place, Bengaluru 560100", lat = 13.0436, lng = 77.6070)
+        val nearby = nearestAddress(wework, listOf(home, tooFar, closer), 5.0)!!
+        assertEquals("z2", nearby.providerAddressId)
+        assertEquals(1.3, nearby.distanceKm!!, 0.1)
+    }
+
+    @Test
+    fun nearestIsNullWhenEverythingIsOverFiveKm() {
+        val far = saved("z1", farLine, lat = 13.0436, lng = 77.6070)
+        assertNull(nearestAddress(wework, listOf(far), 5.0))
+    }
+
+    @Test
+    fun withoutCoordinatesTheSamePincodeIsNearby() {
+        val samePin = saved("z1", "Elsewhere Apartments, Bengaluru 560025")
+        val nearby = nearestAddress(wework.copy(lat = null, lng = null), listOf(samePin), 5.0)!!
+        assertEquals("z1", nearby.providerAddressId)
+        assertNull(nearby.distanceKm)
+        assertEquals("your Work address, same pincode", nearbyText(nearby))
+    }
+
+    @Test
+    fun withoutCoordinatesAnotherPincodeIsNeverNearby() {
+        val otherPin = saved("z1", farLine)
+        assertNull(nearestAddress(wework.copy(lat = null, lng = null), listOf(otherPin), 5.0))
+        // The same city alone is not enough either.
+        assertNull(nearestAddress(wework.copy(lat = null, lng = null, city = "Bengaluru"), listOf(otherPin.copy(address = otherPin.address.copy(city = "Bengaluru"))), 5.0))
+    }
+
+    @Test
+    fun nearbyTextRoundsToWholeKm() {
+        assertEquals("your Home address, 3 km away", nearbyText(AddressResult.Nearby("z1", "Home", 2.6)))
+        assertEquals("your Home address, under 1 km away", nearbyText(AddressResult.Nearby("z1", "Home", 0.4)))
+    }
+
+    // ---- short name ----
+
+    @Test
+    fun shortNameIsNeverTheHouseNumber() {
+        assertEquals("Residency Road", shortPlaceName("43, Residency Road, Ashok Nagar, Bengaluru 560025", "Work"))
+        assertEquals("WeWork Galaxy", shortPlaceName("Work: WeWork Galaxy, 43 Residency Road, 560025", "Work"))
+        assertEquals("Galaxy Tower", shortPlaceName("3rd Floor, 12/A, Galaxy Tower, Bengaluru", "Work"))
+        assertEquals("Work", shortPlaceName("43, 560025", "Work"))
+    }
 }

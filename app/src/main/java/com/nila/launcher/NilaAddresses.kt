@@ -13,6 +13,7 @@ import org.json.JSONObject
 import kotlin.math.asin
 import kotlin.math.cos
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -46,6 +47,11 @@ sealed interface AddressResult {
     data class Ready(val providerAddressId: String) : AddressResult
     /** The app didn't have the address, so NILA saved it there just now. */
     data class Added(val providerAddressId: String) : AddressResult
+    /**
+     * The app doesn't have the address, but has [label] close by, so prices come from there. [distanceKm] is null
+     * when only the pincode is known to match.
+     */
+    data class Nearby(val providerAddressId: String, val label: String, val distanceKm: Double?) : AddressResult
     data class CantAdd(val reason: String, val fix: AddressFix?) : AddressResult
     data class Failed(val reason: String) : AddressResult
 }
@@ -55,6 +61,7 @@ val AddressResult.providerAddressId: String?
     get() = when (this) {
         is AddressResult.Ready -> providerAddressId
         is AddressResult.Added -> providerAddressId
+        is AddressResult.Nearby -> providerAddressId
         else -> null
     }
 
@@ -222,6 +229,50 @@ internal fun sameAddress(a: NilaAddress, b: NilaAddress): Boolean {
     distanceMetres(a, b)?.let { return it <= SAME_PLACE_METRES }
     return sharedWords(a, b).isNotEmpty()
 }
+
+/**
+ * The closest saved address within [maxKm] of [nila], for an app that has no exact match. With coordinates on
+ * both sides the distance decides; without them only the same pincode counts. Never the city alone.
+ */
+internal fun nearestAddress(nila: NilaAddress, saved: List<ProviderAddress>, maxKm: Double): AddressResult.Nearby? {
+    val candidates = saved.mapNotNull { candidate ->
+        val km = distanceMetres(nila, candidate.address)?.div(METRES_IN_KM)
+        when {
+            km != null -> candidate.takeIf { km <= maxKm }?.let { it to km }
+            nila.pin != null && nila.pin == candidate.address.pin -> candidate to null
+            else -> null
+        }
+    }
+    val (best, km) = candidates.minWithOrNull(compareBy { it.second ?: Double.MAX_VALUE }) ?: return null
+    return AddressResult.Nearby(best.id, best.address.label, km)
+}
+
+private const val METRES_IN_KM = 1000.0
+
+/**
+ * A short name for an address line: its first part that names a place ("WeWork Galaxy"), never the house
+ * number, a floor or the pincode. A leading number is dropped from a part ("43 Residency Road" is "Residency Road").
+ */
+internal fun shortPlaceName(line: String, fallback: String): String {
+    val parts = line.substringAfter(": ").split(',').map { it.trim().replace(LEADING_NUMBER, "").trim() }
+    val name = parts.firstOrNull { part -> part.any(Char::isLetter) && !FLOOR_PART.containsMatchIn(part) } ?: return fallback
+    return name.take(MAX_SHORT_NAME)
+}
+
+/** "your Home address, 3 km away": where an app priced from when it had no exact address. */
+internal fun nearbyText(nearby: AddressResult.Nearby): String {
+    val km = nearby.distanceKm
+    val away = when {
+        km == null -> "same pincode"
+        km < 1.0 -> "under 1 km away"
+        else -> "${km.roundToInt()} km away"
+    }
+    return "your ${nearby.label} address, $away"
+}
+
+private val LEADING_NUMBER = Regex("""^[\d/\-]+[a-z]?\b[\s\-]*""", RegexOption.IGNORE_CASE)
+private val FLOOR_PART = Regex("""\b(floor|flr|flat|door)\b""", RegexOption.IGNORE_CASE)
+private const val MAX_SHORT_NAME = 28
 
 /** Within this distance two pins on the same pincode are one building; geocoded pins drift by a few dozen metres. */
 internal const val SAME_PLACE_METRES = 300.0
