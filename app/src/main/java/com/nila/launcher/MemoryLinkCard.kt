@@ -140,7 +140,7 @@ internal fun SavedMomentCard(moment: SavedMoment, context: Context) {
             return@Column
         }
         Text(rememberLine(about, moment.saved.fact), color = Paper, fontSize = ReplySize, fontFamily = androidx.compose.ui.text.font.FontFamily.Serif)
-        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
             val choice = linked
             when {
                 choice != null -> Chip(choice.name, {}) { ContactAvatar(choice, context) }
@@ -149,7 +149,7 @@ internal fun SavedMomentCard(moment: SavedMoment, context: Context) {
                     Chip("Pick contact", linker.pick)
                 }
             }
-            TextAction("Undo", { undone = true; scope.launch { memory.forget(moment.saved.fact, about) } }, modifier = Modifier.padding(start = 6.dp, top = 6.dp), color = Muted)
+            TextAction("Undo", { undone = true; scope.launch { memory.forget(moment.saved.fact, about) } }, modifier = Modifier.padding(start = 6.dp), color = Muted)
         }
     }
 }
@@ -171,7 +171,7 @@ internal fun LinkContactCard(response: LinkContact, context: Context) {
             return@Column
         }
         Text("Who's ${aboutPhrase(response.about)} in your contacts?", color = Paper, fontSize = ReplySize, fontFamily = androidx.compose.ui.text.font.FontFamily.Serif)
-        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
             response.suggestions.forEach { s -> Chip(s.name, { linker.link(s) }) { ContactAvatar(s, context) } }
             Chip("Pick contact", linker.pick)
         }
