@@ -110,6 +110,18 @@ class NilaModelsTest {
     }
 
     @Test
+    fun recipeQuestionsAndFoodOrGroceryOrdersStayOutOfTheDeterministicRules() {
+        // search_food/search_groceries are purely model-routed (REWRITE, then chat's own tool-calling) —
+        // confirmed here by staying null; the model's own CHAT-vs-order judgment is verified live on
+        // device, not by a unit test, since it needs a real Gemma inference.
+        listOf(
+            "what can I cook with rice and dal",
+            "order paneer butter masala",
+            "buy ingredients for biryani",
+        ).forEach { assertFalse(it, engine.route(it) is NilaIntent.Call) }
+    }
+
+    @Test
     fun chatRepliesThatClaimAnActionAreCaught() {
         listOf(
             "I've set an alarm for 1:30 for you!",
