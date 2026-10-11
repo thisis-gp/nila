@@ -124,6 +124,14 @@ fun claimsAction(reply: String): Boolean = Regex(
         """|(?i)^\s*(alarm|reminder) (set|scheduled)\b""",
 ).containsMatchIn(reply)
 
+// Gemma's own tool-call syntax, seen leaked onto the text channel instead of a real structured call:
+// "<|tool_call>call:remember_fact{fact:<|"|>...". Checked anywhere in the reply, not just the start —
+// "Sure! <|tool_call>call:x{...}" leaks the same way with real text ahead of it.
+private val rawToolCall = Regex("""<\|?tool_call>|call:\w+\{|<\|"\|>""")
+
+/** True when a reply is (or contains) Gemma's own tool-call syntax, never meant for a person to see. */
+fun looksLikeRawToolCall(reply: String): Boolean = rawToolCall.containsMatchIn(reply)
+
 /** Cleans Gemma's rewrite: first line, no quotes, labels or final full stop. Null for CHAT or nothing. */
 fun cleanCommand(raw: String): String? {
     val line = raw.lineSequence().map { it.trim() }.firstOrNull { it.isNotBlank() } ?: return null
@@ -443,8 +451,8 @@ class NilaBrain(
                     systemInstruction = Contents.of(WEB_ANSWER),
                     samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0),
                 ),
-            ).use { it.sendMessage("Question: $question\n\nSearch results:\n$context").contents.contents.filterIsInstance<Content.Text>().joinToString("") { t -> t.text }.trim() }
-        }.getOrNull()?.takeIf { it.isNotBlank() }
+            ).use { it.sendMessage("Question: $question\n\nSearch results:\n$context").contents.contents.filterIsInstance<Content.Text>().joinToString("") { t -> t.text } }
+        }.getOrNull()?.let { cleanReply(it) }
     }
 
     private fun chat(input: String): NilaResponse? {
@@ -465,11 +473,20 @@ class NilaBrain(
             trace("gemma tool=${proposed.name} args=${proposed.arguments.keys}")
             act(proposed.name, proposed.arguments, input)?.let { return it }
         }
-        val reply = response.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim()
-            .takeIf { it.isNotBlank() }?.let { if (claimsAction(it)) NO_ACTION_TAKEN.also { Log.i(TAG, "replaced a reply that claimed an action") } else it }
+        val reply = cleanReply(response.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim())
             ?: return null
         return NilaResponse.Text(reply)
     }
+
+    /**
+     * Shared by every path that shows raw model text to the user: drops a reply that's Gemma's own
+     * tool-call syntax leaked onto the text channel (e.g. "Sure! <|tool_call>call:x{...}"), and replaces
+     * one that falsely claims an action happened. Null for blank, leaked or unusable text.
+     */
+    private fun cleanReply(text: String): String? = text.trim().takeIf { it.isNotBlank() }
+        ?.also { if (looksLikeRawToolCall(it)) Log.i(TAG, "dropped a reply that leaked raw tool-call syntax") }
+        ?.takeUnless { looksLikeRawToolCall(it) }
+        ?.let { if (claimsAction(it)) NO_ACTION_TAKEN.also { Log.i(TAG, "replaced a reply that claimed an action") } else it }
 
     // vivo drops app logcat; the same keys-only lines go to a private file for device debugging.
     private fun trace(line: String) {
