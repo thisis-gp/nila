@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.R as LucideR
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -121,10 +122,12 @@ internal fun SavedMomentCard(moment: SavedMoment, context: Context) {
     var chosen by remember { mutableStateOf<WhoChoice?>(null) }
     var naming by remember { mutableStateOf(false) }
     var undone by remember { mutableStateOf(false) }
+    // The move to the chosen person; Undo waits for it so it forgets the fact where it actually ended up.
+    var refiling by remember { mutableStateOf<kotlinx.coroutines.Deferred<Refiled>?>(null) }
     fun choose(who: WhoChoice) {
         chosen = who
         naming = false
-        scope.launch { memory.refile(about, moment.saved.fact, who) }
+        refiling = scope.async { memory.refile(about, moment.saved.fact, who) }
     }
     val linker = rememberContactLinker(context) { choice ->
         if (asksWho) return@rememberContactLinker choose(WhoChoice(choice.name, choice.lookupKey))
@@ -133,8 +136,13 @@ internal fun SavedMomentCard(moment: SavedMoment, context: Context) {
     }
     fun undo() {
         undone = true
-        val key = chosen?.let { pickedPersonKey(it.name, it.lookupKey) } ?: about
-        scope.launch { memory.forget(moment.saved.fact, key) }
+        val pending = refiling
+        scope.launch {
+            val moved = pending?.await()
+            // Merged: the person already had this fact before, so there is nothing new to forget.
+            if (moved?.merged == true) return@launch
+            memory.forget(moment.saved.fact, moved?.about ?: about)
+        }
     }
 
     if (undone) return NilaLine("Okay, forgotten.")

@@ -405,7 +405,7 @@ internal class NilaMemory(context: Context) {
      * Moves the fact [text] saved under the generic [relation] person onto [choice] ("Kavya"), keeping the relation.
      * Returns the key it now lives under.
      */
-    suspend fun refile(relation: String, text: String, choice: WhoChoice): String = store.refile(aboutKey(relation), text, choice)
+    suspend fun refile(relation: String, text: String, choice: WhoChoice): Refiled = store.refile(aboutKey(relation), text, choice)
 
     suspend fun clear(): List<MemoryFact> = store.clear()
 
@@ -488,9 +488,10 @@ private class MemoryStore(private val context: Context) {
         }
     }
 
-    suspend fun refile(from: String, text: String, choice: WhoChoice): String {
+    suspend fun refile(from: String, text: String, choice: WhoChoice): Refiled {
         val db = ready.await()
         val moved = refiled(MemoryFact("", text, MemoryKind.Other, 0, from), choice)
+        var merged = false
         db.withTransaction {
             val dao = db.dao()
             val source = dao.person(from) ?: return@withTransaction
@@ -503,10 +504,15 @@ private class MemoryStore(private val context: Context) {
             val target = checkNotNull(dao.person(moved.about))
             val already = dao.textsOf(target.id)
             dao.factsOf(source.id).filter { sameText(it.text, text) }.forEach { fact ->
-                if (already.any { sameText(it, fact.text) }) dao.deleteFact(fact.id) else dao.moveFact(fact.id, target.id)
+                if (already.any { sameText(it, fact.text) }) {
+                    dao.deleteFact(fact.id)
+                    merged = true
+                } else {
+                    dao.moveFact(fact.id, target.id)
+                }
             }
         }
-        return moved.about
+        return Refiled(moved.about, merged)
     }
 
     private fun personFor(key: String) =
@@ -518,11 +524,17 @@ private class MemoryStore(private val context: Context) {
         return db
     }
 
-    /** Memory is a convenience: if the key can no longer open the database, start fresh rather than crash. */
+    /**
+     * Memory is a convenience: if the key can no longer open the database (a lost Keystore key, or a file SQLCipher
+     * can't decrypt), start fresh rather than crash. Any other failure, such as a Room migration mistake, is thrown:
+     * wiping then would silently delete every fact over a bug a later build could fix.
+     */
     private fun openOrReset(keys: MemoryKeyStore): MemoryDatabase {
         fun attempt(): MemoryDatabase? = keys.passphrase()?.let { pass ->
             val db = MemoryDatabase.open(context, pass)
-            runCatching { db.openHelper.writableDatabase }.onFailure { db.close() }.map { db }.getOrNull()
+            runCatching { db.openHelper.writableDatabase }
+                .onFailure { db.close(); if (!isKeyFailure(it)) throw it }
+                .map { db }.getOrNull()
         }
         attempt()?.let { return it }
         MemoryDatabase.wipe(context)
@@ -661,4 +673,12 @@ internal fun personaWith(persona: String, facts: List<MemoryFact>): String {
     val chosen = chatFacts(facts).ifEmpty { return persona }
     return persona + "\nThings the user told you: " + chosen.joinToString("; ") { if (it.about == ME) it.text else "${factPersonLabel(it).lowercase()}: ${it.text}" } +
         ".\nUse them naturally when they help, and never invent other facts about the user."
+}
+
+/** Where a picked person's fact ended up: [merged] when they already had the same fact and the new copy was dropped. */
+internal data class Refiled(val about: String, val merged: Boolean)
+
+/** SQLCipher's "wrong key" failures: the only ones where starting a fresh memory is safer than stopping. */
+internal fun isKeyFailure(error: Throwable): Boolean = generateSequence(error) { it.cause }.any { e ->
+    e::class.simpleName == "SQLiteNotADatabaseException" || e.message.orEmpty().contains("file is not a database", ignoreCase = true)
 }
