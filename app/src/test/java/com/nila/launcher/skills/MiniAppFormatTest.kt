@@ -37,9 +37,11 @@ class MiniAppFormatTest {
     }
 
     @Test
-    fun theWeekBeforeRunsMondayToSunday() {
-        fun on(day: Int) = Item("$day", mapOf("date" to JsonPrimitive(LocalDateTime.of(2026, 10, day, 9, 0).atZone(zone).toInstant().toEpochMilli())))
-        val items = listOf(on(4), on(5), on(11), on(12))
-        assertEquals(listOf("5", "11"), RecipeFunctions.inPeriod(items, "week", clock, back = 1).map { it.id })
+    fun anEarlierPeriodCoversOnlyTheSameDaysSoFar() {
+        // Thursday the 15th: last week is compared Monday to Thursday, not the whole week, so the line never oversells.
+        fun on(day: Int, month: Int = 10) = Item("$month-$day", mapOf("date" to JsonPrimitive(LocalDateTime.of(2026, month, day, 9, 0).atZone(zone).toInstant().toEpochMilli())))
+        val items = listOf(on(4), on(5), on(8), on(9), on(12), on(1, 9), on(15, 9), on(16, 9))
+        assertEquals(listOf("10-5", "10-8"), RecipeFunctions.inPeriod(items, "week", clock, back = 1).map { it.id })
+        assertEquals(listOf("9-1", "9-15"), RecipeFunctions.inPeriod(items, "month", clock, back = 1).map { it.id })
     }
 }

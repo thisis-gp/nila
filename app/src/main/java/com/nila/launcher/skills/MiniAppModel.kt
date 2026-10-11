@@ -41,6 +41,7 @@ object MiniAppModel {
     private const val MERCHANT = "merchant"
     private const val DONE = "done"
     private const val DEFAULT_SUBMIT = "Add"
+    private const val MONEY_INPUT = "money"
     private const val TXN_ROW = "TxnRow"
     private val SHORT_DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
 
@@ -48,6 +49,10 @@ object MiniAppModel {
         val byId = (recipe["components"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.associateBy { it.string("id").orEmpty() }
         val blocks = mutableListOf<Block>()
         val pendingInputs = mutableListOf<Field>()
+        val inputs = byId.values.filter { it.string("component") == "Input" }
+        // Money is whatever a money Input writes; with no Input writing it, a bank payment's "amount" (in paise).
+        val moneyFields = inputs.filter { it.string("type") == MONEY_INPUT }.mapNotNull { it.string("field") }.toSet() +
+            setOf(AMOUNT).filter { amount -> inputs.none { it.string("field") == amount } }
 
         fun add(data: DataResult, make: (List<Item>) -> Block) {
             when (data) {
@@ -62,7 +67,7 @@ object MiniAppModel {
                 "Text" -> component.string("text")?.let { blocks += Block.Note(it) }
                 "StatTile" -> {
                     val isFirst = blocks.none { it is Block.Hero || it is Block.Counter }
-                    statTile(component, runtime, clock, isFirst)?.let { blocks += it }
+                    statTile(component, runtime, clock, isFirst, moneyFields)?.let { blocks += it }
                 }
                 "Counter" -> blocks += Block.Counter(component.string("label").orEmpty(), shown(runtime.value(component.obj("value"))), component.obj("onStep"))
                 "Chart" -> add(runtime.items(key(component.string("data")))) {
@@ -99,10 +104,10 @@ object MiniAppModel {
         return ScreenState(recipe.string("title").orEmpty(), blocks)
     }
 
-    private fun statTile(component: JsonObject, runtime: AppRuntime, clock: Clock, isFirst: Boolean): Block? {
+    private fun statTile(component: JsonObject, runtime: AppRuntime, clock: Clock, isFirst: Boolean, moneyFields: Set<String>): Block? {
         val fn = component.obj("value")
         val current = (runtime.value(fn) as? FnValue.Number)?.value ?: return null
-        val format: (Double) -> String = if (fn.string("field") == AMOUNT) MiniAppFormat::money else MiniAppFormat::number
+        val format: (Double) -> String = if (fn.string("field") in moneyFields) MiniAppFormat::money else MiniAppFormat::number
         val label = component.string("label").orEmpty()
         if (!isFirst) return Block.Note("$label: ${format(current)}")
         // Nothing last period reads as "nothing to compare", not "₹12,480 more than September".

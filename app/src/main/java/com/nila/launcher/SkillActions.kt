@@ -16,25 +16,37 @@ val skillCapabilities = listOf(
 )
 
 private const val APP_WORDS = """(app|tracker|counter|checklist|log|dashboard|list)"""
-/** "build me an expense tracker", "I want a water counter", "can you create a packing checklist". */
-private val buildApp = Regex("""^\s*(please\s+)?(can you\s+)?((make|build|create)\s+(me\s+)?|i\s+(want|need)\s+)(an?\s+)?([\w'-]+\s+){0,4}$APP_WORDS\b""")
-private val listApps = Regex("""\b(my|built|nila'?s?)\s+apps\b|\bapps\s+(you|nila)\s+(made|built)\b""")
-private val removeApp = Regex("""^\s*(please\s+)?(delete|remove|uninstall)\b""")
-private val openApp = Regex("""^\s*(please\s+)?(open|show|launch|start)\b""")
+private const val REMOVE_VERBS = "(delete|remove|uninstall)"
+private const val OPEN_VERBS = "(open|show|launch|start)"
 
 /**
- * Skill phrases, checked before phone-app launching so "open water" opens the water app NILA built.
- * [installed] is (id, title) for each installed app; the longest title said wins.
+ * "build me an expense tracker", "I want a water counter", "can you create a packing checklist". Not app ideas:
+ * "I want to open the Swiggy app", "I need to log my run", "make a list of things to buy". So "want/need" must be
+ * followed by "a/an", no filler word may be "to", and "list of" is a list, not an app.
  */
+private val buildApp = Regex(
+    """^\s*(please\s+)?(can you\s+)?((make|build|create)\s+(me\s+)?(an?\s+)?|i\s+(want|need)\s+an?\s+)((?!to\b)[\w'-]+\s+){0,4}$APP_WORDS\b(?!\s+of\b)""",
+)
+private val listApps = Regex("""\b(my|built|nila'?s?)\s+apps\b|\bapps\s+(you|nila)\s+(made|built)\b""")
+
+/** Skill phrases, checked before phone-app launching so "open water" opens the water app NILA built. */
 internal fun skillCall(input: String, normalized: String, installed: List<Pair<String, String>>): ToolCall? {
     if (buildApp.containsMatchIn(normalized)) return ToolCall("build_app", mapOf("idea" to input.trim()))
     if (listApps.containsMatchIn(normalized)) return ToolCall("list_built_apps", emptyMap())
-    val app = installed.filter { (id, title) -> normalized.contains(title.lowercase()) || normalized.contains(id.replace('-', ' ')) }
-        .maxByOrNull { it.second.length } ?: return null
-    if (removeApp.containsMatchIn(normalized)) return ToolCall("remove_built_app", mapOf("app" to app.first))
-    if (openApp.containsMatchIn(normalized)) return ToolCall("open_built_app", mapOf("app" to app.first))
+    said(normalized, REMOVE_VERBS, installed)?.let { return ToolCall("remove_built_app", mapOf("app" to it)) }
+    said(normalized, OPEN_VERBS, installed)?.let { return ToolCall("open_built_app", mapOf("app" to it)) }
     return null
 }
+
+/**
+ * The installed app named as the whole object of [verbs]: "open water", "delete the water app"; never "show me water
+ * parks near me". [installed] is (id, title); longer titles are tried first.
+ */
+private fun said(normalized: String, verbs: String, installed: List<Pair<String, String>>): String? =
+    installed.sortedByDescending { it.second.length }.firstOrNull { (id, title) ->
+        val name = "(${Regex.escape(title.lowercase())}|${Regex.escape(id.replace('-', ' '))})"
+        Regex("""^\s*(please\s+)?$verbs\s+(my\s+|the\s+)?$name(\s+app)?\s*[.!?]?\s*$""").containsMatchIn(normalized)
+    }?.first
 
 internal fun skillRun(call: ToolCall): NilaResponse? = when (call.capabilityId) {
     "build_app" -> BuildMiniApp(call.args["idea"] as String)

@@ -39,4 +39,12 @@ class NilaNavigationTest {
         assertFalse(navigation.canGoBack)
         assertEquals(NilaScreen.Apps, navigation.current)
     }
+
+    @Test
+    fun replacingTheTopScreenLeavesNothingBehindIt() {
+        val navigation = NilaNavigation(NilaScreen.Home)
+        navigation.open(NilaScreen.AppReview)
+        assertEquals(NilaScreen.MiniApp, navigation.replace(NilaScreen.MiniApp))
+        assertEquals(NilaScreen.Home, navigation.back())
+    }
 }

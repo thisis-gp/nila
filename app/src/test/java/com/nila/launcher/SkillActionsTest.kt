@@ -40,4 +40,18 @@ class SkillActionsTest {
         assertEquals(ToolCall("remove_built_app", mapOf("app" to "water")), tool("delete the water app"))
         assertTrue(engine.respond("delete the water app") is NilaResponse.NeedsConfirmation)
     }
+
+    @Test
+    fun ordinarySentencesAreNotAppIdeas() {
+        for (said in listOf("I want to open the Swiggy app", "I need to log my run", "make a list of things to buy")) {
+            assertNotEquals(said, "build_app", tool(said)?.capabilityId)
+        }
+        assertEquals("build_app", tool("I need a water counter")?.capabilityId)
+    }
+
+    @Test
+    fun aBuiltAppOpensOnlyWhenItIsWhatWasAskedFor() {
+        assertNotEquals("open_built_app", tool("show me water parks near me")?.capabilityId)
+        assertEquals("open_built_app", tool("open my water app")?.capabilityId)
+    }
 }

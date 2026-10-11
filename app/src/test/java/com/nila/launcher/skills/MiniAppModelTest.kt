@@ -73,4 +73,21 @@ class MiniAppModelTest {
         val recipe = recipe("""[{"id":"root","component":"List","items":"/items","template":"row"},{"id":"row","component":"ItemRow","titleField":"name"}]""")
         assertTrue(screen(recipe).blocks.first() is Block.ItemList)
     }
+
+    @Test
+    fun moneyIsShownAsMoneyWhenItsInputTypesMoney() {
+        fun app(field: String, type: String) = recipe(
+            """[{"id":"root","component":"Column","children":["total","form"]},
+            {"id":"total","component":"StatTile","label":"Spent","value":{"fn":"sum","of":"/items","field":"$field"}},
+            {"id":"form","component":"Form","fields":["in"],"submit":{"action":"storage.add"}},
+            {"id":"in","component":"Input","label":"Cost","field":"$field","type":"$type"}]""",
+        )
+        fun heroAfterTyping(recipe: JsonObject, field: String, type: String): String {
+            val runtime = AppRuntime(recipe, setOf("storage.local"), FileAppStore(folder.newFolder()), TransactionSource { emptyList() }, clock)
+            runtime.dispatch(Json.parseToJsonElement("""{"action":"storage.add"}""").jsonObject, null, mapOf(field to typedInput("500", type)))
+            return (MiniAppModel.build(recipe, runtime, clock).blocks.first() as Block.Hero).value
+        }
+        assertEquals("₹500", heroAfterTyping(app("cost", "money"), "cost", "money"))
+        assertEquals("500", heroAfterTyping(app("amount", "number"), "amount", "number"))
+    }
 }

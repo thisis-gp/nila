@@ -768,7 +768,8 @@ private fun NilaApp(resumeVersion: Int) {
                                             is com.nila.launcher.skills.InstallResult.Installed -> {
                                                 draftApp = null
                                                 openedApp = installed.app.id
-                                                open(NilaScreen.MiniApp)
+                                                // Replace the review page, so Back from the new app does not land on an empty review.
+                                                screen = navigation.replace(NilaScreen.MiniApp)
                                             }
                                             is com.nila.launcher.skills.InstallResult.Invalid ->
                                                 Toast.makeText(context, "That app didn't pass the safety check.", Toast.LENGTH_SHORT).show()
