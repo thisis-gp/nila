@@ -131,6 +131,20 @@ class NilaModelsTest {
     }
 
     @Test
+    fun rawToolCallSyntaxLeakedOntoTheTextChannelIsCaughtAnywhereInTheReply() {
+        listOf(
+            "<|tool_call>call:remember_fact{fact:<|\"|>The Ma Triangle of Cooking is a concept...",
+            "call:search_food{query:\"biryani\"}",
+            // Real text can precede the leak; must still be caught, not just at the start.
+            "Sure, here's what I found! <|tool_call>call:web_search{query:\"x\"}",
+        ).forEach { assertTrue(it, looksLikeRawToolCall(it)) }
+        listOf(
+            "You can make a simple omelet with milk and bread.",
+            "I'll call you back once the timer is up.",
+        ).forEach { assertFalse(it, looksLikeRawToolCall(it)) }
+    }
+
+    @Test
     fun removingAnAlarmIsRoutedAndNeverConfusedWithSettingOne() {
         assertEquals(NilaIntent.Call(ToolCall("remove_alarm", mapOf("hour" to 1, "minute" to 30))), engine.route("cancel the alarm for 1:30"))
         assertEquals(NilaIntent.Call(ToolCall("remove_alarm", emptyMap())), engine.route("turn off my alarm"))
