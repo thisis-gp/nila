@@ -107,6 +107,11 @@ internal fun cheapestLine(item: String, groups: List<ProductProviderGroup>): Str
 internal fun sameZeptoCart(a: List<CartItem>, b: List<CartItem>) =
     a.associate { it.productVariantId to it.quantity } == b.associate { it.productVariantId to it.quantity }
 
+/** The real amount due from Zepto's order-preview text, including delivery fees. */
+internal fun zeptoAmountDue(preview: String): String? =
+    Regex("""Amount To Pay:?\**\s*₹\s*([\d,]+(?:\.\d+)?)""", RegexOption.IGNORE_CASE)
+        .find(preview)?.groupValues?.get(1)?.let { "₹$it" }
+
 // An Indian pincode never starts with 0; the last one in a line is the pincode, not a flat or plot number.
 private val pincode = Regex("""\b[1-9]\d{5}\b""")
 private val addressNumber = Regex("""\b\d+[a-z]?\b""", RegexOption.IGNORE_CASE)
@@ -567,15 +572,12 @@ private fun GroceryReviewCard(card: GroceryCard.Review, actions: GroceryActions)
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         actions.lastCart()?.let { cart -> BackLink("Edit carts") { actions.back(cart) } }
         StepHeader(4, "Review your Zepto order", ZEPTO_SOURCE)
-        NilaCard {
-            SectionLabel("Zepto's bill")
-            Text(card.preview, color = Paper, fontSize = 13.sp, lineHeight = 19.sp)
-        }
         CommitGate(
             key = card,
             note = card.note,
             heading = "REAL ZEPTO ORDER · CASH ON DELIVERY",
-            lines = card.items.map { "${it.quantity} × ${it.name}" },
+            lines = card.items.map { "${it.quantity} × ${it.name}" } +
+                listOfNotNull(zeptoAmountDue(card.preview)?.let { "Total to pay: $it" }),
             address = "To ${card.address.label.ifBlank { "saved address" }} · ${card.address.addressLine}",
             warning = "This places a real Zepto order. You pay the rider in cash when it arrives.",
             onPlace = { actions.place(card) },
