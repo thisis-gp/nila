@@ -16,6 +16,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import java.io.File
 import java.security.KeyStore
 import java.security.SecureRandom
@@ -37,6 +39,8 @@ internal data class PersonEntity(
     /** True once NILA has asked which contact this is; it asks at most once, even after "Not now". */
     val linkAsked: Boolean,
     val createdAt: Long,
+    /** The relation a particular person was filed under ("cousin" for Kavya); null for the user and single relations. */
+    val relation: String? = null,
 )
 
 @Entity(
@@ -52,19 +56,43 @@ internal data class FactEntity(
     val savedAt: Long,
 )
 
-/** A fact joined with its person's about key. */
-internal data class FactRow(val id: String, val text: String, val kind: String, val savedAt: Long, val about: String)
+/** A fact joined with its person's about key, name and relation. */
+internal data class FactRow(
+    val id: String,
+    val text: String,
+    val kind: String,
+    val savedAt: Long,
+    val about: String,
+    val personName: String? = null,
+    val relation: String? = null,
+)
+
+private const val FACT_ROWS =
+    "SELECT f.id AS id, f.text AS text, f.kind AS kind, f.savedAt AS savedAt, p.about_key AS about, p.name AS personName, " +
+        "p.relation AS relation FROM facts f JOIN people p ON p.id = f.personId ORDER BY f.savedAt, f.rowid"
 
 @Dao
 internal interface MemoryDao {
     @Query("SELECT * FROM people ORDER BY createdAt, rowid")
     fun observePeople(): Flow<List<PersonEntity>>
 
-    @Query("SELECT f.id AS id, f.text AS text, f.kind AS kind, f.savedAt AS savedAt, p.about_key AS about FROM facts f JOIN people p ON p.id = f.personId ORDER BY f.savedAt, f.rowid")
+    @Query(FACT_ROWS)
     fun observeFacts(): Flow<List<FactRow>>
 
-    @Query("SELECT f.id AS id, f.text AS text, f.kind AS kind, f.savedAt AS savedAt, p.about_key AS about FROM facts f JOIN people p ON p.id = f.personId ORDER BY f.savedAt, f.rowid")
+    @Query(FACT_ROWS)
     suspend fun allFacts(): List<FactRow>
+
+    @Query("SELECT * FROM people WHERE relation = :relation ORDER BY createdAt, rowid")
+    suspend fun peopleWithRelation(relation: String): List<PersonEntity>
+
+    @Query("SELECT * FROM facts WHERE personId = :personId")
+    suspend fun factsOf(personId: String): List<FactEntity>
+
+    @Query("UPDATE facts SET personId = :personId WHERE id = :id")
+    suspend fun moveFact(id: String, personId: String)
+
+    @Query("UPDATE people SET name = :name, relation = :relation WHERE about_key = :key")
+    suspend fun file(key: String, name: String, relation: String?)
 
     @Query("SELECT * FROM people WHERE about_key = :key LIMIT 1")
     suspend fun person(key: String): PersonEntity?
@@ -94,7 +122,14 @@ internal interface MemoryDao {
     suspend fun deleteAllPeople()
 }
 
-@Database(entities = [PersonEntity::class, FactEntity::class], version = 1, exportSchema = false)
+/** Version 2 adds the people.relation column. Existing rows keep everything and get a null relation. */
+internal const val MIGRATION_1_2_SQL = "ALTER TABLE people ADD COLUMN relation TEXT"
+
+internal val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) = db.execSQL(MIGRATION_1_2_SQL)
+}
+
+@Database(entities = [PersonEntity::class, FactEntity::class], version = 2, exportSchema = false)
 internal abstract class MemoryDatabase : RoomDatabase() {
     abstract fun dao(): MemoryDao
 
@@ -105,6 +140,7 @@ internal abstract class MemoryDatabase : RoomDatabase() {
             System.loadLibrary("sqlcipher")
             return Room.databaseBuilder(context, MemoryDatabase::class.java, FILE)
                 .openHelperFactory(SupportOpenHelperFactory(passphrase))
+                .addMigrations(MIGRATION_1_2)
                 .build()
         }
 

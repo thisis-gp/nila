@@ -206,7 +206,7 @@ private fun MemoryScreen(
         SectionCard("Nothing yet", "Just chat: \"my wife loves butter chicken\" or \"I'm vegetarian on Tuesdays\".", "EMPTY")
     } else {
         factsByPerson(facts).forEach { (about, known) ->
-            SectionLabel(aboutLabel(about), Modifier.padding(top = 8.dp))
+            SectionLabel(personTitle(about, known), Modifier.padding(top = 8.dp))
             known.forEach { fact ->
                 NilaCard {
                     SectionLabel(fact.kind.label.uppercase(), color = Lime)

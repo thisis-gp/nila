@@ -42,8 +42,20 @@ enum class MemoryKind(val label: String) {
     }
 }
 
-/** One thing NILA knows about the user or someone close to them ([about]: "me", "wife", "amma"). Stays on the phone. */
-data class MemoryFact(val id: String, val text: String, val kind: MemoryKind, val savedAt: Long, val about: String = ME)
+/**
+ * One thing NILA knows about the user or someone close to them ([about]: "me", "wife", "amma"). Stays on the phone.
+ * A fact filed on one particular cousin or friend has that person's key as [about], their [personName] ("Kavya")
+ * and the [relation] they were saved under ("cousin").
+ */
+data class MemoryFact(
+    val id: String,
+    val text: String,
+    val kind: MemoryKind,
+    val savedAt: Long,
+    val about: String = ME,
+    val personName: String? = null,
+    val relation: String? = null,
+)
 
 internal const val ME = "me"
 
@@ -71,6 +83,49 @@ internal fun aboutPhrase(about: String): String = when {
     about in RelationWords -> "your $about"
     else -> aboutLabel(about)
 }
+
+/**
+ * Relations that can be several people: NILA asks each time which cousin or friend a fact is about. Every other
+ * relation ("wife", "amma") names one person, keyed by the relation itself, and NILA asks once which contact it is.
+ */
+private val ManyRelations = setOf(
+    "cousin", "friend", "colleague", "brother", "sister", "son", "daughter", "uncle", "aunt",
+    "grandma", "grandpa", "neighbour", "neighbor", "roommate", "boss",
+)
+
+/** True when [about] is a relation that can be several people: "cousin", "friend", "brother". */
+internal fun isManyRelation(about: String): Boolean = aboutKey(about) in ManyRelations
+
+/** The person-list title: the person's own name for a cousin NILA filed by name, "Cousin (not sure who)" for the rest. */
+internal fun personTitle(about: String, facts: List<MemoryFact>): String {
+    val filed = facts.firstOrNull { it.relation != null }
+    return when {
+        about == ME -> "You"
+        filed != null -> filed.personName ?: aboutLabel(about)
+        isManyRelation(about) -> "${aboutLabel(about)} (not sure who)"
+        else -> aboutLabel(about)
+    }
+}
+
+/** The line under a person's title: "Cousin · 2 things NILA knows", or just the count when there is no relation. */
+internal fun personSubtitle(facts: List<MemoryFact>): String {
+    val relation = facts.firstNotNullOfOrNull { it.relation }
+    return (relation?.let { aboutLabel(it) + " · " } ?: "") + knownCount(facts.size)
+}
+
+/** Who a fact is about, for a one-line list: "Wife", "Kavya (cousin)". */
+internal fun factPersonLabel(fact: MemoryFact): String =
+    if (fact.relation != null) "${fact.personName ?: aboutLabel(fact.about)} (${fact.relation})" else aboutLabel(fact.about)
+
+/** The person key for someone picked for a Many relation: their contact's lookup key, otherwise their name. */
+internal fun pickedPersonKey(name: String, lookupKey: String?): String = aboutKey(lookupKey ?: name)
+
+/** [fact] filed on the person the user picked: their key and name, with the relation it was saved under kept. */
+internal fun refiled(fact: MemoryFact, choice: WhoChoice): MemoryFact =
+    fact.copy(about = pickedPersonKey(choice.name, choice.lookupKey), personName = choice.name.trim(), relation = fact.relation ?: fact.about)
+
+/** The facts saved under [relation]: the generic "cousin" ones and those filed on a particular cousin. */
+private fun underRelation(relation: String, facts: List<MemoryFact>) = facts.filter { it.about == relation || it.relation == relation }
 
 /** Facts grouped by person, the user first, then everyone else in the order NILA learned about them. */
 internal fun factsByPerson(facts: List<MemoryFact>): List<Pair<String, List<MemoryFact>>> =
@@ -112,7 +167,40 @@ internal fun groundedFact(fact: String, said: String): Boolean {
 private val RelationWords = setOf(
     "wife", "husband", "partner", "son", "daughter", "kid", "kids", "children", "mom", "mother", "amma", "dad", "father",
     "appa", "brother", "sister", "friend", "boss", "grandma", "grandpa", "baby", "user", "she", "he", "her", "his", "their",
+    "cousin", "colleague", "uncle", "aunt", "girlfriend", "boyfriend", "roommate", "neighbour", "neighbor",
 )
+
+private const val LEARN_RELATIONS =
+    "wife|husband|partner|mom|mother|amma|dad|father|appa|son|daughter|brother|sister|cousin|friend|colleague|boss|" +
+        "uncle|aunt|grandma|grandpa|girlfriend|boyfriend|roommate|neighbour|neighbor"
+
+private val LearnStatement = Regex(
+    """^my ($LEARN_RELATIONS) (likes|loves|enjoys|prefers|hates|can't eat|cannot eat|doesn't eat|does not eat|is allergic to|is vegetarian|is vegan)(?: (.+))?$""",
+)
+private val LearnFavourite = Regex("""^my ($LEARN_RELATIONS)'s (favourite|favorite) (?:is )?(.+)$""")
+private val NoObjectVerbs = setOf("is vegetarian", "is vegan")
+
+/**
+ * "my cousin likes cricket" gives Remember("likes cricket", Preference, "cousin") without asking Gemma. The verb picks
+ * the kind: Allergy for "is allergic to", Diet for veg, vegan and "can't eat", Preference otherwise. Null when the
+ * message is not one of these plain shapes; Gemma reads the rest.
+ */
+internal fun learnRule(text: String): NilaResponse.Remember? {
+    val said = normalized(text).trimEnd('.', '!').replace(Regex("""\s+"""), " ")
+    LearnFavourite.find(said)?.let { m ->
+        val (relation, word, rest) = m.destructured
+        return NilaResponse.Remember("$word is $rest", MemoryKind.Preference, aboutKey(relation))
+    }
+    val m = LearnStatement.find(said) ?: return null
+    val (relation, verb, rest) = m.destructured
+    if (rest.isBlank() && verb !in NoObjectVerbs) return null
+    val kind = when {
+        verb == "is allergic to" -> MemoryKind.Allergy
+        verb in NoObjectVerbs || verb.endsWith(" eat") -> MemoryKind.Diet
+        else -> MemoryKind.Preference
+    }
+    return NilaResponse.Remember(if (rest.isBlank()) verb else "$verb $rest", kind, aboutKey(relation))
+}
 
 private val FavouriteOf = Regex("""\bmy\s+([\p{L}]+?)(?:'s|s)?\s+(?:favourite|favorite|usual)(?:\s+(?:food|dish|meal|order))?\b""")
 
@@ -121,7 +209,7 @@ internal fun favouriteOf(text: String): String? = FavouriteOf.find(text.lowercas
 
 /** The dish or item [about] likes most recently, in the fact's own words: "butter chicken". */
 internal fun favouriteFor(about: String, facts: List<MemoryFact>): String? =
-    facts.filter { it.about == about && it.kind == MemoryKind.Preference }.maxByOrNull { it.savedAt }
+    underRelation(about, facts).filter { it.kind == MemoryKind.Preference }.maxByOrNull { it.savedAt }
         ?.let { factWords(it.text).filter { w -> w !in RelationWords }.joinToString(" ").ifBlank { null } }
 
 /** "order my wife's favourite" → "order butter chicken", or null when NILA doesn't know it yet. */
@@ -129,6 +217,30 @@ internal fun withFavourite(text: String, facts: List<MemoryFact>): String? {
     val about = favouriteOf(text) ?: return null
     val dish = favouriteFor(about, facts) ?: return null
     return FavouriteOf.replace(text.lowercase(), dish)
+}
+
+/**
+ * "order my cousin's favourite" when more than one cousin has a favourite: "Which cousin, Kavya or Arjun?".
+ * Null when one person or none fits, so NILA never guesses between people.
+ */
+internal fun whichPersonQuestion(about: String, facts: List<MemoryFact>): String? {
+    val people = underRelation(about, facts).filter { it.kind == MemoryKind.Preference }.groupBy { it.about }
+    if (people.size < 2) return null
+    val names = people.filterKeys { it != about }.map { (key, known) -> known.first().personName ?: aboutLabel(key) } +
+        listOfNotNull("someone else".takeIf { about in people })
+    return "Which $about, ${names.dropLast(1).joinToString(", ")} or ${names.last()}?"
+}
+
+private val NamedFavourite = Regex("""\b([\p{L}]+)'s\s+(?:favourite|favorite|usual)(?:\s+(?:food|dish|meal|order))?\b""")
+
+/** "order Kavya's favourite" gives "order cricket", when Kavya is someone NILA filed a favourite for. */
+internal fun withNamedFavourite(text: String, facts: List<MemoryFact>): String? {
+    val said = normalized(text)
+    val match = NamedFavourite.find(said) ?: return null
+    val person = facts.firstOrNull { it.personName?.lowercase() == match.groupValues[1] } ?: return null
+    val dish = facts.filter { it.about == person.about && it.kind == MemoryKind.Preference }.maxByOrNull { it.savedAt }
+        ?.let { factWords(it.text).filter { w -> w !in RelationWords }.joinToString(" ").ifBlank { null } } ?: return null
+    return said.replaceRange(match.range, dish)
 }
 
 // Questions about the user or their people, answered from My NILA. Group 1 is the person; empty means the user.
@@ -157,9 +269,22 @@ internal fun askedName(text: String): Boolean = AskName.containsMatchIn(normaliz
 
 /** Everything NILA knows about one person, in the same clean lines My NILA shows, or that it knows nothing yet. */
 internal fun personSummary(about: String, facts: List<MemoryFact>): String {
-    val known = facts.filter { it.about == about && !isNameFact(it) }
+    val known = (if (about == ME) facts.filter { it.about == ME } else underRelation(about, facts)).filterNot(::isNameFact)
+    val people = known.groupBy { it.about }
+    if (people.size > 1) {
+        val groups = people.entries.sortedBy { it.key == about }.joinToString("\n") { (key, list) ->
+            val title = if (key == about) "Not sure who" else list.first().personName ?: aboutLabel(key)
+            title + "\n" + list.joinToString("\n") { "• ${factLine(it.text)}" }
+        }
+        return "You've told me about more than one $about:\n$groups\nYou can change any of this in My NILA."
+    }
     val name = if (about == ME) userName(facts) else null
-    val who = if (about == ME) "you" else "your $about"
+    val filed = known.firstOrNull { it.about != about }?.personName
+    val who = when {
+        about == ME -> "you"
+        filed != null -> "$filed, your $about"
+        else -> "your $about"
+    }
     if (known.isEmpty()) {
         return if (name != null) "You're $name. That's all I know so far: tell me more, like \"I'm vegetarian\"."
         else "I don't know anything about $who yet. Tell me, like \"my wife loves butter chicken\"."
@@ -184,7 +309,7 @@ private fun comparable(text: String) = text.trim().lowercase().replace(Regex("""
 internal fun memorySummary(facts: List<MemoryFact>): String =
     if (facts.isEmpty()) "You have not asked me to remember anything yet."
     else "You asked me to remember:\n" + facts.joinToString("\n") { fact ->
-        val who = if (fact.about == ME) "" else "${aboutLabel(fact.about)}: "
+        val who = if (fact.about == ME) "" else "${factPersonLabel(fact)}: "
         "• $who${fact.text} (${fact.kind.label.lowercase()})"
     }
 
@@ -226,7 +351,7 @@ internal fun entitiesFromFacts(facts: List<MemoryFact>, now: Long, newId: () -> 
 
 /** True exactly when NILA should ask "Which contact is your [about]?": someone other than the user, not linked, never asked. */
 internal fun shouldAskContactLink(about: String, person: PersonEntity?): Boolean =
-    about != ME && (person == null || (person.contactLookupKey == null && !person.linkAsked))
+    about != ME && !isManyRelation(about) && (person == null || (person.contactLookupKey == null && !person.linkAsked))
 
 private val MentionedRelation = Regex(
     """\bmy\s+(wife|husband|partner|son|daughter|mom|mother|amma|dad|father|appa|brother|sister|boss|grandma|grandpa)\b""",
@@ -245,7 +370,7 @@ internal data class MemoryPerson(
     val facts: List<MemoryFact>,
 )
 
-private fun factOf(row: FactRow) = MemoryFact(row.id, row.text, MemoryKind.from(row.kind), row.savedAt, row.about)
+private fun factOf(row: FactRow) = MemoryFact(row.id, row.text, MemoryKind.from(row.kind), row.savedAt, row.about, row.personName, row.relation)
 
 /**
  * The facts and the people they are about, in an encrypted Room database (SQLCipher; the passphrase is
@@ -271,6 +396,16 @@ internal class NilaMemory(context: Context) {
     suspend fun delete(id: String): List<MemoryFact> = store.delete(id)
 
     suspend fun forget(text: String, about: String): List<MemoryFact> = store.forget(text, about)
+
+    /** The people already filed under [relation] ("cousin"), to offer as choices for a new fact about one of them. */
+    suspend fun knownAs(relation: String): List<WhoChoice> =
+        store.dao().peopleWithRelation(aboutKey(relation)).map { WhoChoice(it.name, it.contactLookupKey, known = true) }
+
+    /**
+     * Moves the fact [text] saved under the generic [relation] person onto [choice] ("Kavya"), keeping the relation.
+     * Returns the key it now lives under.
+     */
+    suspend fun refile(relation: String, text: String, choice: WhoChoice): String = store.refile(aboutKey(relation), text, choice)
 
     suspend fun clear(): List<MemoryFact> = store.clear()
 
@@ -351,6 +486,27 @@ private class MemoryStore(private val context: Context) {
             val uri = Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_LOOKUP_URI, Uri.encode(contact.lookupKey)).toString()
             dao.link(key, contact.lookupKey, uri, contact.name)
         }
+    }
+
+    suspend fun refile(from: String, text: String, choice: WhoChoice): String {
+        val db = ready.await()
+        val moved = refiled(MemoryFact("", text, MemoryKind.Other, 0, from), choice)
+        db.withTransaction {
+            val dao = db.dao()
+            val source = dao.person(from) ?: return@withTransaction
+            if (dao.person(moved.about) == null) dao.insertPeople(listOf(personFor(moved.about)))
+            dao.file(moved.about, moved.personName ?: aboutLabel(moved.about), moved.relation)
+            choice.lookupKey?.let { lookup ->
+                val uri = Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_LOOKUP_URI, Uri.encode(lookup)).toString()
+                dao.link(moved.about, lookup, uri, choice.name.trim())
+            }
+            val target = checkNotNull(dao.person(moved.about))
+            val already = dao.textsOf(target.id)
+            dao.factsOf(source.id).filter { sameText(it.text, text) }.forEach { fact ->
+                if (already.any { sameText(it, fact.text) }) dao.deleteFact(fact.id) else dao.moveFact(fact.id, target.id)
+            }
+        }
+        return moved.about
     }
 
     private fun personFor(key: String) =
@@ -503,6 +659,6 @@ internal fun chatFacts(facts: List<MemoryFact>): List<MemoryFact> =
 /** The chat persona with the user's own facts appended; unchanged when there are none. */
 internal fun personaWith(persona: String, facts: List<MemoryFact>): String {
     val chosen = chatFacts(facts).ifEmpty { return persona }
-    return persona + "\nThings the user told you: " + chosen.joinToString("; ") { if (it.about == ME) it.text else "${it.about}: ${it.text}" } +
+    return persona + "\nThings the user told you: " + chosen.joinToString("; ") { if (it.about == ME) it.text else "${factPersonLabel(it).lowercase()}: ${it.text}" } +
         ".\nUse them naturally when they help, and never invent other facts about the user."
 }

@@ -303,7 +303,11 @@ class NilaBrain(
         // A statement about the user or their people is remembered (learn), never acted on. When it is saved the
         // card is the whole answer; a chat reply would only offer to save what is already saved.
         if (isPersonalStatement(input)) return learn(input) ?: withContext(llm) { chat(input) } ?: NilaResponse.Text("Got it.")
+        // "order Kavya's favourite": a cousin or friend NILA filed by name.
+        withNamedFavourite(input, facts())?.let { return answerFor(it) }
         val who = favouriteOf(input) ?: return understand(input) ?: answerFor(input)
+        // Several cousins with favourites: ask which one rather than guess.
+        whichPersonQuestion(who, facts())?.let { return NilaResponse.Text(it) }
         val resolved = withFavourite(input, facts())
             ?: return NilaResponse.Text("I don't know your $who's favourite yet. Tell me, like \"my $who loves butter chicken\".")
         return answerFor(resolved)
@@ -322,6 +326,8 @@ class NilaBrain(
      */
     suspend fun learn(input: String): NilaResponse.Remember? = withContext(llm) {
         val readAsFact = learnNext.also { learnNext = false }
+        // "my cousin likes cricket": the plain shapes are saved by rule, so they never fall through to chat.
+        learnRule(input)?.let { return@withContext it }
         if (!readAsFact && !mightBePersonal(input)) return@withContext null
         if (favouriteOf(input) != null || askedAbout(input) != null) return@withContext null
         // "remember that …" was already saved by the rules.

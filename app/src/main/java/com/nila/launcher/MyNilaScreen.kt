@@ -272,7 +272,7 @@ private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit, o
     } else {
         people.forEach { (about, known) ->
             val isMe = about == ME
-            val title = if (isMe) name ?: "You" else aboutLabel(about)
+            val title = if (isMe) name ?: "You" else personTitle(about, known)
             Row(
                 Modifier.fillMaxWidth().padding(top = 8.dp).then(if (isMe) Modifier.clip(RoundedCornerShape(12.dp)).clickable { sheet = SheetTarget(nameFact, ME, isName = true) } else Modifier),
                 verticalAlignment = Alignment.CenterVertically,
@@ -282,7 +282,7 @@ private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit, o
                 }
                 Column(Modifier.weight(1f).padding(start = AvatarGap)) {
                     Text(title, color = Paper, fontWeight = FontWeight.Bold, fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text((if (isMe) "You · " else "") + knownCount(known.size), color = Muted, fontSize = 13.sp, maxLines = 1)
+                    Text((if (isMe) "You · " else "") + personSubtitle(known), color = Muted, fontSize = 13.sp, maxLines = 1)
                 }
             }
             known.forEach { fact -> FactRow(fact) { sheet = SheetTarget(fact, about) } }

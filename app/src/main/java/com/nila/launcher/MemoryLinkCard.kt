@@ -14,6 +14,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -27,6 +32,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.R as LucideR
 import androidx.compose.ui.unit.sp
@@ -101,43 +108,92 @@ private fun Chip(label: String, onClick: () -> Unit, leading: @Composable (() ->
 
 /**
  * Saving a fact is a short reply and a card: "Remembered", the person and the fact, then the people it might be
- * as chips, "Pick contact", and Undo. A linked contact replaces the chips with their face and name.
+ * as chips, "Pick contact", and Undo. A linked contact replaces the chips with their face and name. For a cousin
+ * or friend ([SavedMoment.who] set) the card asks "Which cousin?" every time and files the fact on the one picked.
  */
 @Composable
 internal fun SavedMomentCard(moment: SavedMoment, context: Context) {
     val memory = remember { NilaMemory(context.applicationContext) }
     val scope = rememberCoroutineScope()
     val about = moment.saved.about
+    val asksWho = moment.who != null
     var linked by remember { mutableStateOf<ContactChoice?>(null) }
+    var chosen by remember { mutableStateOf<WhoChoice?>(null) }
+    var naming by remember { mutableStateOf(false) }
     var undone by remember { mutableStateOf(false) }
+    fun choose(who: WhoChoice) {
+        chosen = who
+        naming = false
+        scope.launch { memory.refile(about, moment.saved.fact, who) }
+    }
     val linker = rememberContactLinker(context) { choice ->
+        if (asksWho) return@rememberContactLinker choose(WhoChoice(choice.name, choice.lookupKey))
         linked = choice
         scope.launch { memory.linkContact(about, choice) }
+    }
+    fun undo() {
+        undone = true
+        val key = chosen?.let { pickedPersonKey(it.name, it.lookupKey) } ?: about
+        scope.launch { memory.forget(moment.saved.fact, key) }
     }
 
     if (undone) return NilaLine("Okay, forgotten.")
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         NilaLine("Noted. I'll keep that.")
         val choice = linked
+        val who = chosen
+        val open = asksWho && who == null
         ResultCard(
             icon = LucideR.drawable.lucide_ic_user,
             title = "Remembered",
             actions = {
-                if (choice == null && moment.suggestions != null) {
+                if (open) {
+                    moment.who.orEmpty().forEach { w ->
+                        val face = w.lookupKey?.let { ContactChoice(it, w.name) }
+                        Chip(whoLabel(w, about), { choose(w) }, leading = if (face != null) { { ContactAvatar(face, context) } } else null)
+                    }
+                    Chip("Pick contact", linker.pick)
+                    if (!naming) Chip("Someone new", { naming = true })
+                } else if (choice == null && moment.suggestions != null) {
                     moment.suggestions.forEach { s -> Chip(s.name, { linker.link(s) }) { ContactAvatar(s, context) } }
                     Chip("Pick contact", linker.pick)
                 }
-                TextAction("Undo", { undone = true; scope.launch { memory.forget(moment.saved.fact, about) } }, modifier = Modifier.padding(start = 6.dp), color = Muted)
+                TextAction("Undo", ::undo, modifier = Modifier.padding(start = 6.dp), color = Muted)
             },
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (choice != null) ContactAvatar(choice, context) else InitialAvatar(aboutLabel(about))
+                val face = choice ?: who?.lookupKey?.let { ContactChoice(it, who.name) }
+                val name = choice?.name ?: who?.name?.trim() ?: aboutLabel(about)
+                if (face != null) ContactAvatar(face, context) else InitialAvatar(name)
                 Column {
-                    Text(choice?.name ?: aboutLabel(about), color = Paper, fontSize = 17.sp, fontFamily = FontFamily.Serif)
-                    Text(factLine(moment.saved.fact), color = Muted, fontSize = 14.sp)
+                    Text(name, color = Paper, fontSize = 17.sp, fontFamily = FontFamily.Serif)
+                    val line = factLine(moment.saved.fact)
+                    Text(if (who != null) "${aboutLabel(about)} · $line" else line, color = Muted, fontSize = 14.sp)
                 }
             }
+            if (open) Text("Which $about?", color = Paper, fontSize = 15.sp)
+            if (open && naming) NewPersonField(onDone = { name -> choose(WhoChoice(name, lookupKey = null)) })
         }
+    }
+}
+
+/** A name for someone who is not in contacts, typed in the card. */
+@Composable
+private fun NewPersonField(onDone: (String) -> Unit) {
+    var name by remember { mutableStateOf("") }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            placeholder = { Text("Name", color = Muted) },
+            singleLine = true,
+            shape = RoundedCornerShape(12.dp),
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { if (name.isNotBlank()) onDone(name.trim()) }),
+            modifier = Modifier.weight(1f),
+            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Paper, unfocusedTextColor = Paper, focusedBorderColor = Lime, unfocusedBorderColor = Stroke, cursorColor = Lime),
+        )
+        if (name.isNotBlank()) Chip("Save", { onDone(name.trim()) })
     }
 }
 

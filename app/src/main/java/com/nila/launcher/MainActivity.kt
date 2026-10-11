@@ -498,10 +498,16 @@ private fun NilaApp(resumeVersion: Int) {
             }
             if (response is NilaResponse.Remember) memory.save(response.fact, response.kind, response.about)
             // A saved fact about someone close asks, in the same card, which contact they are (once per person).
-            suspend fun savedMoment(saved: NilaResponse.Remember) = SavedMoment(
-                saved,
-                if (saved.about != ME && memory.claimContactAsk(saved.about)) withContext(Dispatchers.IO) { suggestContacts(context, saved.about) } else null,
-            )
+            // A cousin or friend can be several people, so the card asks every time which one it was.
+            suspend fun savedMoment(saved: NilaResponse.Remember) = when {
+                saved.about != ME && isManyRelation(saved.about) -> SavedMoment(
+                    saved,
+                    suggestions = null,
+                    who = whoChoices(memory.knownAs(saved.about), withContext(Dispatchers.IO) { suggestContacts(context, saved.about) }),
+                )
+                saved.about != ME && memory.claimContactAsk(saved.about) -> SavedMoment(saved, withContext(Dispatchers.IO) { suggestContacts(context, saved.about) })
+                else -> SavedMoment(saved, null)
+            }
             val shown = if (response is NilaResponse.Remember) savedMoment(response) else response
             turns[pendingIndex] = Turn(prompt, shown)
             if (speakReply) spokenText(response)?.let(lakshmi::speak)
