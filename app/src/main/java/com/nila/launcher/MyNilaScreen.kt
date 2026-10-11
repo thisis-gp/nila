@@ -84,6 +84,7 @@ internal enum class MyNilaTab(val label: String) { People("People"), Health("Hea
  */
 @Composable
 internal fun MyNilaScreen(
+    showLockBanner: Boolean,
     facts: List<MemoryFact>,
     onForgetFact: (String) -> Unit,
     onEditFact: (String, String) -> Unit,
@@ -194,6 +195,13 @@ internal fun MyNilaScreen(
         }
         SerifTitle("My NILA", size = 38.sp, modifier = Modifier.padding(top = 12.dp))
         Text("Stored only on this phone, encrypted", color = Muted, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(top = 4.dp))
+        if (showLockBanner) Text(
+            "Set a screen lock on your phone to protect My NILA",
+            color = Lime,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(top = 12.dp).clickable { MyNilaLock.openSecuritySettings(context) }.padding(vertical = 6.dp),
+        )
         SegmentedTabs(tab, Modifier.padding(top = 20.dp, bottom = 16.dp)) { tab = it; open = null }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             when {
@@ -572,5 +580,21 @@ private fun pdfFirstPage(bytes: ByteArray, cache: File, maxSide: Int): ReportPag
         null
     } finally {
         temp.delete()
+    }
+}
+
+/** What the panel shows while My NILA is locked: no facts, no health data, just a way to unlock. */
+@Composable
+internal fun LockedMyNila(onUnlock: () -> Unit, onBack: () -> Unit, onSideDrag: (Float) -> Unit, onSideDragEnd: (Float) -> Unit) {
+    Column(
+        Modifier.fillMaxSize().background(Ink).safeDrawingPadding().padding(horizontal = ScreenGutter, vertical = 12.dp)
+            .sideSwipe(onDrag = onSideDrag, onEnd = onSideDragEnd),
+    ) {
+        Box(Modifier.padding(top = 8.dp).offset(x = (-4).dp)) { RoundButton(LucideR.drawable.lucide_ic_chevron_left, "Back", onBack) }
+        Column(Modifier.weight(1f).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            NilaMascot(mood = MascotMood.Sleeping, size = EmptyMascotSize)
+            SerifTitle("My NILA is locked", size = 28.sp, modifier = Modifier.padding(top = 20.dp, bottom = 24.dp))
+            PrimaryAction("Unlock", onUnlock)
+        }
     }
 }

@@ -50,6 +50,8 @@ data class ProductProviderGroup(
 
 sealed interface NilaResponse {
     data class Text(val value: String) : NilaResponse
+    /** An answer drawn from My NILA (facts, health). Shown only while My NILA is unlocked. */
+    data class Private(val value: String) : NilaResponse
     data class Alarm(val hour: Int, val minute: Int) : NilaResponse
     /** A confirmed request to turn off an alarm: at [hour]:[minute], or the next alarm when [hour] is null. */
     data class DismissAlarm(val hour: Int?, val minute: Int) : NilaResponse

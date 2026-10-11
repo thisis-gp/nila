@@ -9,7 +9,6 @@ import android.provider.AlarmClock
 import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -93,6 +92,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import androidx.fragment.app.FragmentActivity
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import java.time.LocalTime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -100,8 +104,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.composables.icons.lucide.R as LucideR
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     private var resumeVersion by mutableIntStateOf(0)
+    private val screenOff = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = MyNilaLock.onScreenOff(System.currentTimeMillis())
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Edge-to-edge hands the keyboard inset to Compose; safeDrawingPadding in NilaApp applies it once.
@@ -115,7 +122,21 @@ class MainActivity : ComponentActivity() {
         // keyboard AND Compose's imePadding() pads again on top of that,
         // double-counting the inset and leaving dead space above the keyboard.
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        ContextCompat.registerReceiver(this, screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED)
         setContent { NilaApp(resumeVersion) }
+    }
+    // Checked before the first frame back, so My NILA never flashes open after the screen turned off.
+    override fun onStart() {
+        super.onStart()
+        MyNilaLock.onStart(System.currentTimeMillis())
+    }
+    override fun onStop() {
+        MyNilaLock.onStop(System.currentTimeMillis())
+        super.onStop()
+    }
+    override fun onDestroy() {
+        unregisterReceiver(screenOff)
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -187,6 +208,10 @@ private fun NilaApp(resumeVersion: Int) {
     if (screen != NilaScreen.Home && screen != NilaScreen.MyNila) overlayScreen = screen
     // 0 = home, 1 = My NILA fully open; dragged by the finger, then settled with a spring.
     val sidePanel = remember { Animatable(0f) }
+    LaunchedEffect(launcherPreferences) { MyNilaLock.load(launcherPreferences) }
+    val lockSupport = remember(resumeVersion, MyNilaLock.enabled) { MyNilaLock.support(context) }
+    val myNilaLocked = MyNilaLock.enabled && !MyNilaLock.unlocked && lockSupport == LockSupport.Ready
+    val activity = context as FragmentActivity
     var panelDragging by remember { mutableStateOf(false) }
     val panelWidth = with(LocalDensity.current) { LocalConfiguration.current.screenWidthDp.dp.toPx() }
 
@@ -445,7 +470,7 @@ private fun NilaApp(resumeVersion: Int) {
                     trackingStarted = hasStepPermission(context) && !baselineExists,
                 )
             } else if (normalized.contains("what do you remember")) {
-                NilaResponse.Text(memorySummary(facts))
+                NilaResponse.Private(memorySummary(facts))
             } else if (Regex("""\b(show|read|list|open|what are)\b.*\bnotes?\b""").containsMatchIn(prompt.lowercase())) {
                 NilaResponse.Text(notesSummary(context))
             } else {
@@ -517,6 +542,12 @@ private fun NilaApp(resumeVersion: Int) {
         if (!panelDragging) sidePanel.animateTo(if (screen == NilaScreen.MyNila) 1f else 0f, PanelSpring)
     }
 
+    // The system prompt opens once the panel has settled open; cancelling leaves the locked state, which has its own Unlock button.
+    LaunchedEffect(screen, myNilaLocked) {
+        if (screen != NilaScreen.MyNila || !myNilaLocked) return@LaunchedEffect
+        snapshotFlow { sidePanel.value >= 1f && !panelDragging }.first { it }
+        MyNilaLock.unlock(activity)
+    }
     BackHandler(enabled = navigation.canGoBack) { closeOverlay() }
     // "Add to My NILA" on a chat card opens My NILA's health form, prefilled.
     LaunchedEffect(MyNilaRequests.pending) { if (MyNilaRequests.pending != null) open(NilaScreen.MyNila) }
@@ -573,7 +604,13 @@ private fun NilaApp(resumeVersion: Int) {
                             .background(Ink)
                             .pointerInput(Unit) {},
                     ) {
-                    MyNilaScreen(
+                    if (myNilaLocked) LockedMyNila(
+                        onUnlock = { MyNilaLock.unlock(activity) },
+                        onBack = ::closeOverlay,
+                        onSideDrag = ::dragPanel,
+                        onSideDragEnd = ::releasePanel,
+                    ) else MyNilaScreen(
+                            showLockBanner = MyNilaLock.enabled && lockSupport == LockSupport.NoScreenLock,
                             facts = facts,
                             onForgetFact = { id -> scope.launch { memory.delete(id) } },
                             onEditFact = { id, text ->
@@ -1096,6 +1133,7 @@ private fun ResponseView(
         // Confirmation is this card only: the iQOO 15 loan devices have fingerprint locked for the hackathon.
         is NilaResponse.NeedsConfirmation -> CommitCard(response) { confirm(response.token) }
         is NilaResponse.Text -> AnswerCard(response.value)
+        is NilaResponse.Private -> PrivateAnswerCard(response.value)
         is HealthPrompt -> ActionCard(
             label = "My NILA · Health",
             title = "${response.title} · ${eventWhen(response.date, null).substringBefore(",")}",
@@ -1272,6 +1310,19 @@ private fun ResponseView(
 private fun withEta(detail: String, eta: String) = if (eta.isNotBlank()) "$detail · $eta" else detail
 
 /** NILA's plain answer: calm text on a card, nothing to tap. */
+/** A personal answer: shown while My NILA is unlocked, otherwise a locked card whose Unlock button opens the phone's prompt. */
+@Composable
+private fun PrivateAnswerCard(text: String) {
+    val context = LocalContext.current
+    val locked = MyNilaLock.enabled && !MyNilaLock.unlocked && remember(MyNilaLock.enabled) { MyNilaLock.support(context) } == LockSupport.Ready
+    if (!locked) return AnswerCard(text)
+    NilaCard {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Unlock My NILA to see this", color = Paper, fontSize = 15.sp, lineHeight = 22.sp)
+            PrimaryAction("Unlock", onClick = { (context as? FragmentActivity)?.let(MyNilaLock::unlock) })
+        }
+    }
+}
 @Composable
 private fun AnswerCard(text: String) {
     if (text.isBlank()) return

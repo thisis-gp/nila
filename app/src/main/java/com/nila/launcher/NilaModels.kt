@@ -312,7 +312,7 @@ class NilaBrain(
     private fun myNilaAnswer(text: String): NilaResponse? {
         val about = askedAbout(text) ?: return null
         val known = facts()
-        return NilaResponse.Text(if (askedName(text)) nameAnswer(known) else personSummary(about, known))
+        return NilaResponse.Private(if (askedName(text)) nameAnswer(known) else personSummary(about, known))
     }
 
     /**
@@ -379,8 +379,8 @@ class NilaBrain(
     /** Answers from My NILA's health records only; with none, says so instead of guessing. */
     private fun healthAnswer(input: String): NilaResponse {
         val records = healthRecords()
-        if (records.isEmpty()) return NilaResponse.Text("There are no health records in My NILA yet. Upload a report in My NILA › Health and I can answer from it.")
-        val model = assistant ?: return NilaResponse.Text("My NILA has ${records.size} health records. Open My NILA › Health to see them.")
+        if (records.isEmpty()) return NilaResponse.Private("There are no health records in My NILA yet. Upload a report in My NILA › Health and I can answer from it.")
+        val model = assistant ?: return NilaResponse.Private("My NILA has ${records.size} health records. Open My NILA › Health to see them.")
         val reply = runCatching {
             model.createConversation(
                 ConversationConfig(
@@ -389,7 +389,7 @@ class NilaBrain(
                 ),
             ).use { it.sendMessage(input) }.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim()
         }.getOrNull()
-        return NilaResponse.Text(reply?.takeIf(String::isNotBlank) ?: "Open My NILA › Health to see your records.")
+        return NilaResponse.Private(reply?.takeIf(String::isNotBlank) ?: "Open My NILA › Health to see your records.")
     }
 
     private suspend fun answerFor(input: String): NilaResponse = withContext(llm) {
