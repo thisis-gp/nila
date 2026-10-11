@@ -8,7 +8,7 @@ import kotlinx.serialization.json.jsonObject
 /** A recipe with a storage data source at /items unless the test says otherwise. [extra] must end with a comma. */
 fun recipe(
     components: String,
-    data: String = """{"items":{"provider":"storage","store":"s"}}""",
+    data: String = """{"items":{"provider":"storage","store":"test-app-storage"}}""",
     permissions: String = """["storage.local"]""",
     extra: String = "",
 ): JsonObject = Json.parseToJsonElement(

@@ -91,4 +91,13 @@ class AppBuilderTest {
         assertEquals("app", slug("தண்ணீர்"))
         assertTrue(slug("x".repeat(100)).length <= RecipeCatalog.MAX_ID_CHARS)
     }
+
+    @Test
+    fun fallbackDataBelongsToTheNewApp() {
+        val plan = """{"template":"log","title":"Weight Log","providers":["storage"]}"""
+        val result = AppBuilder(ScriptedModel(plan, "nope", "nope", "nope")).build("track my weight") as BuildResult.Fallback
+        val items = (result.recipe.getValue("data") as JsonObject).getValue("items") as JsonObject
+        assertEquals("weight-log-storage", items.string("store"))
+        assertEquals(emptyList<RecipeError>(), RecipeValidator.validate(result.recipe))
+    }
 }

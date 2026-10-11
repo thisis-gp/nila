@@ -47,7 +47,10 @@ class AppBuilder(private val model: RecipeModel) {
             }
             request = AppBuilderPrompts.fixRequest(idea, skeleton, raw, errors)
         }
-        val fallback = JsonObject(Json.parseToJsonElement(example).jsonObject + mapOf("id" to skeleton.getValue("id"), "title" to skeleton.getValue("title")))
+        // Repair moves the example's data under the new app's own store names.
+        val fallback = RecipeRepair.repair(
+            JsonObject(Json.parseToJsonElement(example).jsonObject + mapOf("id" to skeleton.getValue("id"), "title" to skeleton.getValue("title"))),
+        )
         return BuildResult.Fallback(plan, fallback, errors)
     }
 
@@ -91,7 +94,7 @@ internal fun skeleton(plan: Plan): JsonObject {
             for (provider in plan.providers) {
                 putJsonObject(AppBuilder.DATA_KEYS.getValue(provider)) {
                     put("provider", provider)
-                    if (RecipeCatalog.providers.getValue(provider).ownStore) put("store", "$id-$provider")
+                    if (RecipeCatalog.providers.getValue(provider).ownStore) put("store", RecipeCatalog.storeName(id, provider))
                 }
             }
         }

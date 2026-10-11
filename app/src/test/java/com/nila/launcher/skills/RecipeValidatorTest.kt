@@ -74,4 +74,27 @@ class RecipeValidatorTest {
         ))
         assertHas(errors, "rules[0]: op must be one of")
     }
+
+    @Test
+    fun eachComponentHasOnePlace() {
+        // A component listed twice, or by two parents, renders twice; chained, that doubles per level.
+        assertHas(
+            messages(recipe("""[{"id":"root","component":"Column","children":["b","b"]},{"id":"b","component":"Text","text":"x"}]""")),
+            "b: used in more than one place",
+        )
+        assertHas(
+            messages(recipe("""[{"id":"root","component":"Column","children":["a","c"]},{"id":"a","component":"Column","children":["d"]},
+                {"id":"c","component":"Column","children":["d"]},{"id":"d","component":"Text","text":"x"}]""")),
+            "d: used in more than one place",
+        )
+    }
+
+    @Test
+    fun ownStoresBelongToTheApp() {
+        val errors = messages(recipe(
+            """[{"id":"root","component":"Text","text":"x"}]""",
+            data = """{"items":{"provider":"storage","store":"bank-app-storage"}}""",
+        ))
+        assertHas(errors, "data.items: store must be test-app-storage")
+    }
 }

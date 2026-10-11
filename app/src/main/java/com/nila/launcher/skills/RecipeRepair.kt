@@ -28,8 +28,10 @@ object RecipeRepair {
     }
 
     fun repair(recipe: JsonObject): JsonObject {
+        val appId = recipe.string("id").orEmpty()
         val data = (recipe["data"] as? JsonObject).orEmpty()
             .filterValues { RecipeCatalog.providers[(it as? JsonObject)?.string("provider")] != null }
+            .mapValues { (_, source) -> pinStore(source as JsonObject, appId) }
         // Least privilege: exactly the permissions the data sources need, whatever the model asked for.
         val permissions = data.values.mapNotNull { RecipeCatalog.providers[(it as JsonObject).string("provider")]?.permission }.toSortedSet()
         return JsonObject(
@@ -40,6 +42,12 @@ object RecipeRepair {
                 "components" to JsonArray(repairComponents((recipe["components"] as? JsonArray).orEmpty()).map { JsonObject(it) }),
             ),
         )
+    }
+
+    private fun pinStore(source: JsonObject, appId: String): JsonObject {
+        val provider = RecipeCatalog.providers.getValue(source.string("provider").orEmpty())
+        if (!provider.ownStore) return source
+        return JsonObject(source + ("store" to JsonPrimitive(RecipeCatalog.storeName(appId, provider.name))))
     }
 
     private fun repairComponents(raw: List<JsonElement>): List<Map<String, JsonElement>> {
@@ -82,7 +90,7 @@ object RecipeRepair {
         return linkedMapOf(RecipeCatalog.ROOT_ID to root) + byId
     }
 
-    /** Keeps what root reaches, in the original order, and cuts every reference back to an ancestor. */
+    /** Keeps what root reaches, in the original order. Cuts references back to an ancestor and second uses of a component. */
     private fun keepTree(byId: Map<String, MutableMap<String, JsonElement>>): List<Map<String, JsonElement>> {
         val reached = mutableSetOf<String>()
         fun visit(id: String, ancestors: Set<String>) {
@@ -93,12 +101,16 @@ object RecipeRepair {
                 when (prop.kind) {
                     PropKind.ID -> {
                         val ref = component[name].stringOrNull() ?: continue
-                        if (ref in path) component.remove(name) else visit(ref, path)
+                        if (ref in path || ref in reached) component.remove(name) else visit(ref, path)
                     }
                     PropKind.ID_LIST -> {
-                        val refs = (component[name] as? JsonArray).orEmpty().mapNotNull { it.stringOrNull() }.filter { it !in path }
-                        component[name] = idList(refs)
-                        for (ref in refs) visit(ref, path)
+                        val kept = mutableListOf<String>()
+                        for (ref in (component[name] as? JsonArray).orEmpty().mapNotNull { it.stringOrNull() }) {
+                            if (ref in path || ref in reached) continue
+                            kept += ref
+                            visit(ref, path)
+                        }
+                        component[name] = idList(kept)
                     }
                     else -> {}
                 }

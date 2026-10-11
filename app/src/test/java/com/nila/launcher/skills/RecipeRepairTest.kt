@@ -1,6 +1,7 @@
 package com.nila.launcher.skills
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -66,5 +67,31 @@ class RecipeRepairTest {
     fun editDistanceCountsSingleEdits() {
         assertEquals(1, editDistance("statile", "stattile"))
         assertEquals(0, editDistance("list", "list"))
+    }
+
+    @Test
+    fun keepsEachComponentInOnePlace() {
+        val fixed = RecipeRepair.repair(recipe("""[{"id":"root","component":"Column","children":["a","b","b"]},
+            {"id":"a","component":"Text","text":"x"},{"id":"b","component":"Text","text":"y"}]"""))
+        assertEquals(emptyList<RecipeError>(), RecipeValidator.validate(fixed))
+        assertEquals(listOf("a", "b"), (fixed.components().first().getValue("children") as JsonArray).map { it.stringOrNull() })
+        // A child shared by two parents stays with the first; the second parent, now empty, goes back to the model.
+        val shared = RecipeRepair.repair(recipe("""[{"id":"root","component":"Column","children":["a","c"]},
+            {"id":"a","component":"Column","children":["d"]},{"id":"c","component":"Column","children":["d"]},
+            {"id":"d","component":"Text","text":"x"}]"""))
+        assertEquals(listOf("c.children: must not be empty"), RecipeValidator.validate(shared).map { it.toString() })
+    }
+
+    @Test
+    fun pinsStoresToTheApp() {
+        val fixed = RecipeRepair.repair(recipe(
+            """[{"id":"root","component":"Text","text":"x"}]""",
+            data = """{"items":{"provider":"storage","store":"bank-app-storage"},"txns":{"provider":"transactions"}}""",
+            permissions = """["storage.local","transactions.read"]""",
+        ))
+        assertEquals(emptyList<RecipeError>(), RecipeValidator.validate(fixed))
+        val data = fixed.getValue("data") as JsonObject
+        assertEquals("test-app-storage", (data.getValue("items") as JsonObject).string("store"))
+        assertEquals(null, (data.getValue("txns") as JsonObject).string("store"))
     }
 }

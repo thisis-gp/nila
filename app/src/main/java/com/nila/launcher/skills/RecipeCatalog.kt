@@ -39,6 +39,9 @@ object RecipeCatalog {
 
     val permissions: Set<String> = providers.values.map { it.permission }.toSet()
 
+    /** An app's own data lives only under its own name, so one app can never read or write another's. */
+    fun storeName(appId: String, provider: String) = "$appId-$provider"
+
     private fun required(kind: PropKind, values: Set<String> = emptySet()) = PropSpec(kind, required = true, values = values)
     private fun optional(kind: PropKind, values: Set<String> = emptySet()) = PropSpec(kind, values = values)
 

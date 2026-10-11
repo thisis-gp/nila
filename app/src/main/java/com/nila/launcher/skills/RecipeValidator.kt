@@ -35,8 +35,12 @@ object RecipeValidator {
         if (data.isNullOrEmpty()) fail("data", "must name at least one data source")
         for ((key, source) in data.orEmpty()) {
             val provider = RecipeCatalog.providers[(source as? JsonObject)?.string("provider")]
-            if (provider == null) fail("data.$key", "unknown provider")
-            else if (provider.permission !in permissions.orEmpty()) fail("data.$key", "needs permission ${provider.permission}")
+            val store = RecipeCatalog.storeName(recipe.string("id").orEmpty(), provider?.name.orEmpty())
+            when {
+                provider == null -> fail("data.$key", "unknown provider")
+                provider.permission !in permissions.orEmpty() -> fail("data.$key", "needs permission ${provider.permission}")
+                provider.ownStore && (source as JsonObject).string("store") != store -> fail("data.$key", "store must be $store")
+            }
         }
         val dataKeys = data.orEmpty().keys
 
@@ -126,7 +130,10 @@ object RecipeValidator {
         return null
     }
 
-    /** Walks from root. A reference back to an ancestor is a loop; a component root never reaches is an error. */
+    /**
+     * Walks from root. A reference back to an ancestor is a loop; a component root never reaches is an error.
+     * Each component has one place: shared or repeated children would render once per path, doubling per level.
+     */
     private fun checkTree(byId: Map<String, JsonObject>): List<RecipeError> {
         val errors = mutableListOf<RecipeError>()
         val reached = mutableSetOf<String>()
@@ -135,8 +142,11 @@ object RecipeValidator {
             val component = byId[id] ?: return
             val spec = RecipeCatalog.components[component.string("component")] ?: return
             for (ref in spec.refs(component)) {
-                if (ref == id || ref in ancestors) errors.add(RecipeError(id, "points back at $ref (a loop)"))
-                else visit(ref, ancestors + id)
+                when {
+                    ref == id || ref in ancestors -> errors.add(RecipeError(id, "points back at $ref (a loop)"))
+                    ref in reached -> errors.add(RecipeError(ref, "used in more than one place"))
+                    else -> visit(ref, ancestors + id)
+                }
             }
         }
         visit(RecipeCatalog.ROOT_ID, emptySet())
