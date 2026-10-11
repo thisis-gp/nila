@@ -140,7 +140,7 @@ private fun NilaApp(resumeVersion: Int) {
     val health = remember { HealthStore(context.applicationContext) }
     LaunchedEffect(health) { withContext(Dispatchers.IO) { health.sweep() } }
     val reminders = remember { NilaReminders(context.applicationContext) }
-    val brain = remember { NilaBrain(context.applicationContext, engine) { memory.facts() } }
+    val brain = remember { NilaBrain(context.applicationContext, engine, { memory.facts() }, { health.records() }) }
     // Lakshmi speaks replies to spoken requests; typed requests stay silent.
     val lakshmi = remember { Lakshmi(context) }
     DisposableEffect(lakshmi) { onDispose { lakshmi.close() } }

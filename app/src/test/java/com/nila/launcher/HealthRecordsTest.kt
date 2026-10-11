@@ -22,6 +22,11 @@ class HealthRecordsTest {
         assertFalse(isHealthMention("remind me to go to the doctor tomorrow"))
         assertFalse(isHealthMention("call the hospital"))
         assertFalse(isHealthMention("book a doctor appointment"))
+        // Seen on the iQOO 15: a question about a test is answered, not filed as a new visit.
+        assertFalse(isHealthMention("when was my last blood test"))
+        assertTrue(isHealthQuestion("when was my last blood test"))
+        assertTrue(isHealthQuestion("what did the doctor say about my BP?"))
+        assertFalse(isHealthQuestion("how do I book a doctor"))
     }
 
     @Test

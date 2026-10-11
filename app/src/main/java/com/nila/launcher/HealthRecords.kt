@@ -54,12 +54,26 @@ private val HealthCue = Regex(
         """\b(health tracker|my health)\b""",
 )
 
-/** "last week I went to the hospital and this is the report": a health entry for My NILA. */
-internal fun isHealthMention(text: String): Boolean = HealthCue.containsMatchIn(text.lowercase()) && !OtherRequest.containsMatchIn(text.lowercase())
+/** "last week I went to the hospital and this is the report": a health entry for My NILA (not a question about one). */
+internal fun isHealthMention(text: String): Boolean {
+    val lower = text.lowercase()
+    return HealthCue.containsMatchIn(lower) && !OtherRequest.containsMatchIn(lower) && !isHealthQuestion(lower)
+}
 
 // A health word inside a request for something else: "remind me to go to the doctor tomorrow" is a reminder.
 // Open, show and add stay health requests: "open my health tracker", "add my blood test report".
 private val OtherRequest = Regex("""\b(remind|set|call|message|text|send|book|order|buy|schedule|cancel|navigate|take me|turn|switch|start|stop|play|pay|search)\b""")
+
+private val QuestionStart = Regex("""^\s*(when|what|which|how|did|do|have|has|show|list|tell me|find)\b|\?\s*$""")
+private val HealthSubject = Regex("""\b(hospital|doctor|clinic|dentist|lab|test|report|result|scan|x-?ray|mri|checkup|check-up|medicine|tablet|prescription|bp|sugar|blood)\b""")
+
+/** "when was my last blood test", "what did the doctor say": a question answered from the health records. */
+internal fun isHealthQuestion(text: String): Boolean {
+    val lower = text.lowercase()
+    return QuestionStart.containsMatchIn(lower) && HealthSubject.containsMatchIn(lower) &&
+        // About the user's own records: "my last test", "did I", not "how do I book a doctor".
+        Regex("""\b(my|our)\b|\b(did|have|was|were) (i|we)\b""").containsMatchIn(lower)
+}
 
 /** "Hospital visit" for a visit, "Report" when the user talks about a report or a test. */
 internal fun healthKindFor(text: String): HealthKind {
