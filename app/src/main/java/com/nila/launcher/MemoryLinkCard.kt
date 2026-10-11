@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -31,14 +31,37 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private val CardHeadlineSize = 24.sp
-private val AvatarSize = 36.dp
+private val AvatarSize = 28.dp
+private val ReplySize = 19.sp
 
-/** "Saved for you", "Saved for your wife", "Saved for Priya". */
-internal fun savedHeadline(about: String): String = "Saved for ${aboutPhrase(about)}"
+private val SheWords = setOf("wife", "sister", "mom", "mother", "amma", "daughter", "grandma", "aunt", "girlfriend", "akka", "didi", "paati")
+private val HeWords = setOf("husband", "brother", "dad", "father", "appa", "son", "grandpa", "uncle", "boyfriend", "anna", "bhaiya", "thatha")
+private val Verbs = setOf("loves", "likes", "enjoys", "prefers", "eats", "hates", "drinks", "avoids", "wants")
 
-/** "Which contact is your wife?" */
-internal fun linkQuestion(about: String): String = "Which contact is ${aboutPhrase(about)}?"
+/** "you", "she", "he", or "they" for a person NILA has no pronoun for. */
+internal fun pronounFor(about: String): String = when {
+    about == ME -> "you"
+    about.lowercase() in SheWords -> "she"
+    about.lowercase() in HeWords -> "he"
+    else -> "they"
+}
+
+/**
+ * NILA's one-line reply when it saves a fact: "I'll remember she loves pani puri.", "I'll remember you're vegetarian."
+ * The request above already names the person, so the reply doesn't repeat it.
+ */
+internal fun rememberLine(about: String, fact: String): String {
+    val subject = pronounFor(about)
+    val line = factLine(fact)
+    val first = line.substringBefore(' ').lowercase()
+    val rest = line.substringAfter(' ', "")
+    val plural = subject == "you" || subject == "they"
+    val said = when {
+        first in Verbs -> "$subject ${if (plural) first.removeSuffix("s") else first} $rest"
+        else -> "$subject${if (plural) "'re" else "'s"} ${line.replaceFirstChar(Char::lowercase)}"
+    }
+    return "I'll remember ${said.trim()}."
+}
 
 /** The letter shown when a contact has no photo. */
 internal fun contactInitial(name: String): String = name.trim().firstOrNull()?.uppercase() ?: "?"
@@ -80,82 +103,77 @@ private fun LinkedRow(choice: ContactChoice, context: Context) {
     }
 }
 
-/** The suggested contacts as rows, then the picker. */
+/** A small rounded chip: an optional avatar and a label. */
 @Composable
-private fun ContactRows(suggestions: List<ContactChoice>, linker: ContactLinker, context: Context) {
-    suggestions.forEach { choice ->
-        Row(
-            Modifier.fillMaxWidth().clickable { linker.link(choice) }.padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            ContactAvatar(choice, context)
-            Text(choice.name, color = Paper, fontSize = 16.sp)
-        }
+private fun Chip(label: String, onClick: () -> Unit, leading: @Composable (() -> Unit)? = null) {
+    Row(
+        Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(50)).clickable(onClick = onClick)
+            .border(1.dp, Stroke, androidx.compose.foundation.shape.RoundedCornerShape(50))
+            .padding(start = if (leading != null) 4.dp else 14.dp, end = 14.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        leading?.invoke()
+        Text(label, color = Paper, fontSize = 14.sp)
     }
-    TextAction(if (suggestions.isEmpty()) "Choose from contacts" else "Choose another contact", linker.pick)
 }
 
-/** A saved fact and, if wanted, "which contact is she?" in one card. Undo forgets the fact. */
+/**
+ * Saving a fact is a short reply, not a form: one line from NILA, then the people it might be as chips,
+ * "Pick contact", and Undo. A linked contact replaces the chips with their face and name.
+ */
 @Composable
 internal fun SavedMomentCard(moment: SavedMoment, context: Context) {
     val memory = remember { NilaMemory(context.applicationContext) }
     val scope = rememberCoroutineScope()
     val about = moment.saved.about
     var linked by remember { mutableStateOf<ContactChoice?>(null) }
-    var declined by remember { mutableStateOf(false) }
     var undone by remember { mutableStateOf(false) }
     val linker = rememberContactLinker(context) { choice ->
         linked = choice
         scope.launch { memory.linkContact(about, choice) }
     }
-    val asking = moment.suggestions != null && linked == null && !declined
 
-    NilaCard {
+    androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (undone) {
-            Text("Forgotten. Nothing was kept.", color = Muted, fontSize = 14.sp)
-            return@NilaCard
+            Text("Okay, forgotten.", color = Muted, fontSize = ReplySize)
+            return@Column
         }
-        SerifTitle(savedHeadline(about), size = CardHeadlineSize)
-        Text(factLine(moment.saved.fact), color = Paper, fontSize = 16.sp)
-        if (asking) {
-            HorizontalDivider(color = Stroke, modifier = Modifier.padding(vertical = 4.dp))
-            Text(linkQuestion(about), color = Muted, fontSize = 14.sp)
-            ContactRows(moment.suggestions.orEmpty(), linker, context)
-        }
-        linked?.let {
-            HorizontalDivider(color = Stroke, modifier = Modifier.padding(vertical = 4.dp))
-            LinkedRow(it, context)
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-            if (asking) TextAction("Not now", { declined = true }, color = Muted)
-            TextAction("Undo", { undone = true; scope.launch { memory.forget(moment.saved.fact, about) } }, color = Muted)
+        Text(rememberLine(about, moment.saved.fact), color = Paper, fontSize = ReplySize, fontFamily = androidx.compose.ui.text.font.FontFamily.Serif)
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val choice = linked
+            when {
+                choice != null -> Chip(choice.name, {}) { ContactAvatar(choice, context) }
+                moment.suggestions != null -> {
+                    moment.suggestions.forEach { s -> Chip(s.name, { linker.link(s) }) { ContactAvatar(s, context) } }
+                    Chip("Pick contact", linker.pick)
+                }
+            }
+            TextAction("Undo", { undone = true; scope.launch { memory.forget(moment.saved.fact, about) } }, modifier = Modifier.padding(start = 6.dp, top = 6.dp), color = Muted)
         }
     }
 }
 
-/** "Which contact is your wife?" on its own, when someone came up in a request and nothing was saved. */
+/** When someone came up in a request and nothing was saved: just the people it might be, as chips. */
 @Composable
 internal fun LinkContactCard(response: LinkContact, context: Context) {
     val memory = remember { NilaMemory(context.applicationContext) }
     val scope = rememberCoroutineScope()
     var linked by remember { mutableStateOf<ContactChoice?>(null) }
-    var declined by remember { mutableStateOf(false) }
     val linker = rememberContactLinker(context) { choice ->
         linked = choice
         scope.launch { memory.linkContact(response.about, choice) }
     }
-
-    NilaCard {
+    androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         val choice = linked
-        when {
-            choice != null -> LinkedRow(choice, context)
-            declined -> Text("No problem. I won't ask again.", color = Muted, fontSize = 14.sp)
-            else -> {
-                SerifTitle(linkQuestion(response.about), size = CardHeadlineSize)
-                ContactRows(response.suggestions, linker, context)
-                TextAction("Not now", { declined = true }, color = Muted)
-            }
+        if (choice != null) {
+            Chip(choice.name, {}) { ContactAvatar(choice, context) }
+            return@Column
+        }
+        Text("Who's ${aboutPhrase(response.about)} in your contacts?", color = Paper, fontSize = ReplySize, fontFamily = androidx.compose.ui.text.font.FontFamily.Serif)
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            response.suggestions.forEach { s -> Chip(s.name, { linker.link(s) }) { ContactAvatar(s, context) } }
+            Chip("Pick contact", linker.pick)
         }
     }
 }

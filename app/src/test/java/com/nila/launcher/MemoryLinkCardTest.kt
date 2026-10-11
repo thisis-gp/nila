@@ -1,25 +1,25 @@
 package com.nila.launcher
 
-import org.junit.Test
 import org.junit.Assert.assertEquals
+import org.junit.Test
 
 class MemoryLinkCardTest {
     @Test
-    fun headlineNamesWhoTheFactIsFor() {
-        assertEquals("Saved for you", savedHeadline(ME))
-        assertEquals("Saved for your wife", savedHeadline("wife"))
-        assertEquals("Saved for Priya", savedHeadline("priya"))
+    fun theReplyUsesAPronounInsteadOfRepeatingThePerson() {
+        assertEquals("I'll remember she loves pani puri.", rememberLine("sister", "loves pani puri"))
+        assertEquals("I'll remember he likes filter coffee.", rememberLine("appa", "likes filter coffee"))
+        assertEquals("I'll remember they love biryani.", rememberLine("priya", "loves biryani"))
     }
 
     @Test
-    fun questionNamesThePerson() {
-        assertEquals("Which contact is your wife?", linkQuestion("wife"))
-        assertEquals("Which contact is Priya?", linkQuestion("priya"))
+    fun theUsersOwnFactsReadAsYou() {
+        assertEquals("I'll remember you like filter coffee.", rememberLine(ME, "I like filter coffee"))
+        assertEquals("I'll remember you're vegetarian.", rememberLine(ME, "Vegetarian"))
     }
 
     @Test
-    fun initialIsUppercaseOrQuestionMark() {
-        assertEquals("D", contactInitial(" divya"))
-        assertEquals("?", contactInitial(""))
+    fun aContactWithoutAPhotoShowsTheirInitial() {
+        assertEquals("D", contactInitial("divya"))
+        assertEquals("?", contactInitial(" "))
     }
 }
