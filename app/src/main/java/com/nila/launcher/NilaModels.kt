@@ -340,6 +340,8 @@ class NilaBrain(
             return@withContext answer("rules+gemma:$REMEMBER", rememberWithKind(input, engine.execute(keyword)))
         }
         if (keyword is NilaIntent.Call) return@withContext answer("rules:${keyword.call.capabilityId}", engine.execute(keyword))
+        // "photos I took on Dec 18 2024": searched on the phone itself only after explicit commands had first refusal.
+        photoSearch(input, java.time.LocalDate.now())?.let { return@withContext answer("photos", it) }
         if (!engine.isSmallTalk(input)) {
             // Any wording, follow-up or language: Gemma restates it as one plain command the rules understand.
             rewrite(input)?.let { command ->
