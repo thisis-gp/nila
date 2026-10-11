@@ -66,5 +66,7 @@ dependencies {
     // Real org.json for unit tests: Android's copy is a stub off-device. Parses Instamart's get_cart in tests.
     testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
