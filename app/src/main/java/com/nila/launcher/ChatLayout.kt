@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.sp
 // The chat's voice: the person's line is small and plain, NILA answers with the mascot and one serif line,
 // and a card appears only for structured data, always with the same header.
 
-private val ReplyMascotSize = 22.dp
+private val ReplyMascotSize = 32.dp
 private val ReplyTextSize = 19.sp
 private val UserLineSize = 15.sp
 private val CardIconSize = 16.dp
