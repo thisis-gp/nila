@@ -1113,7 +1113,7 @@ private fun ResponseView(
         // Only reached if a dismissal was not confirmed through the card; it is never sent without confirmation.
         is NilaResponse.DismissAlarm -> AnswerCard("This alarm was not turned off.")
         // Torch, Camera and Note are done in performNow before they reach the chat.
-        is Torch, is Camera, is Note, is TimerControl, is MapSearch, is WebSearch, is PlayMusic, is MediaKey, is SoundChange,
+        is Torch, is Camera, VoiceRecorder, is Note, is TimerControl, is MapSearch, is WebSearch, is PlayMusic, is MediaKey, is SoundChange,
         is SettingsPage, is LaunchApp, ShowAlarms, BatteryLevel, ShowNotes -> AnswerCard("Done.")
         is Message -> MessageCard(response, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is Timer -> TimerCard()
@@ -1474,6 +1474,11 @@ private fun performNow(context: Context, response: NilaResponse): NilaResponse =
     is Camera -> runCatching { context.startActivity(cameraIntent(response)) }.fold(
         { NilaResponse.Text(if (response.video) "Opening the camera to record video." else if (response.front) "Opening the front camera." else "Opening the camera.") },
         { NilaResponse.Text("No camera app is available.") },
+    )
+    // The recorder registered for RECORD_SOUND (vivo: com.vivo.soundrecorder).
+    VoiceRecorder -> runCatching { context.startActivity(Intent(android.provider.MediaStore.Audio.Media.RECORD_SOUND_ACTION)) }.fold(
+        { NilaResponse.Text("Opening the voice recorder.") },
+        { NilaResponse.Text("No voice recorder app is available.") },
     )
     is Note -> { saveNote(context, response.text); NoteSaved(response.text) }
     is Timer -> response.also { NilaTimer.start(context, it.seconds) }
