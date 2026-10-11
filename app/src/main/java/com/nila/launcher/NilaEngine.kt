@@ -101,6 +101,7 @@ class NilaEngine(
     private val today: () -> LocalDate = { LocalDate.now() },
 ) {
     private val percentage = Regex("""(\d+(?:\.\d+)?)\s*%\s*(?:of)?\s*(\d+(?:\.\d+)?)""")
+    private val percentFollowUp = Regex("""\s*(?:and|what about|how about|now)?\s*(?:with\s+)?(\d+(?:\.\d+)?)\s*(?:%|percent)\s*[?.!]*\s*""")
     private val alarm = Regex("""alarm\s+(?:(?:for|at|on)\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?""")
     private val remember = Regex("""remember(?: that)?\s+(.+)""")
     // "1:30", "1.30", "1 30" and "9 pm"; then compact "130" or "1330" as hours and minutes.
@@ -333,6 +334,17 @@ class NilaEngine(
         val amount = match.groupValues[2].toBigDecimal()
         val result = amount.multiply(rate).divide(BigDecimal(100)).setScale(2, RoundingMode.HALF_UP)
         return NilaResponse.Text("${match.groupValues[1]}% of ${match.groupValues[2]} is ${result.stripTrailingZeros().toPlainString()}")
+    }
+
+    /**
+     * "and 20%" or "what about 15%" after "18% of 4250": the same amount at the new rate, worked out
+     * here, never by a model (Gemma once answered "20% of 425 is 90.9" on the iQOO 15).
+     */
+    fun calculateFollowUp(input: String, earlier: List<String>): NilaResponse? {
+        val rate = percentFollowUp.matchEntire(normalize(input))?.groupValues?.get(1) ?: return null
+        // The latest amount in the conversation, newest first: after "and 20%" it is NILA's "20% of 4250 is 850".
+        val amount = earlier.firstNotNullOfOrNull { percentage.find(normalize(it))?.groupValues?.get(2) } ?: return null
+        return calculate("$rate% of $amount")
     }
 
     // ponytail: keyword router standing in for FunctionGemma; swap in the model behind the same NilaIntent output.
