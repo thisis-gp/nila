@@ -413,7 +413,10 @@ class NilaBrain(
             // Stock FunctionGemma scored 4.7% on NILA's 12 tools (training eval); with Gemma 4 loaded, chat picks the tool.
             if (assistant == null) modelRoute(input)?.let { return@withContext answer("functiongemma", it) }
         }
-        chat(input)?.let { return@withContext answer("gemma", it) }
+        // Small talk ("what can you do", "hi", "who are you") is already a known, deterministic case —
+        // never hand Gemma tools for it, or it can spontaneously fire one (seen: web_search) instead of
+        // just answering, with no routing stage left afterward to catch the mistake.
+        chat(input, allowTools = !engine.isSmallTalk(input))?.let { return@withContext answer("gemma", it) }
         // Two different situations share this point: the model never loaded at all, or it loaded and
         // just gave nothing usable this one time. They need different messages, not the same fallback.
         if (assistant == null) {
@@ -611,7 +614,7 @@ class NilaBrain(
         }.getOrNull()?.let { cleanReply(it) }
     }
 
-    private fun chat(input: String): NilaResponse? {
+    private fun chat(input: String, allowTools: Boolean = true): NilaResponse? {
         val model = assistant ?: return null
         val response = runCatching {
             model.createConversation(
@@ -620,7 +623,7 @@ class NilaBrain(
                     initialMessages = history.flatMap { (user, nila) -> listOf(Message.user(user), Message.model(nila)) },
                     // A fresh seed per reply: with the default seed "tell me a joke" gave the same joke every time.
                     samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.6, seed = kotlin.random.Random.nextInt()),
-                    tools = engine.capabilities.values.map { tool(CapabilityTool(it)) },
+                    tools = if (allowTools) engine.capabilities.values.map { tool(CapabilityTool(it)) } else emptyList(),
                     automaticToolCalling = false,
                 ),
             ).use { it.sendMessage(input) }
