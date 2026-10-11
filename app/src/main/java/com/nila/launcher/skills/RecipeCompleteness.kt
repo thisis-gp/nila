@@ -8,13 +8,11 @@ import kotlinx.serialization.json.JsonObject
  * their items. Generated apps must show their data and let the user add to what they keep; failures go back to Gemma.
  */
 object RecipeCompleteness {
-    private val ADD_ACTIONS = setOf("storage.add", "counter.step")
-
     fun check(recipe: JsonObject): List<RecipeError> {
         val data = (recipe["data"] as? JsonObject).orEmpty()
         val components = (recipe["components"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
         val shown = components.flatMap(::readKeys).toSet()
-        val adds = components.any { component -> component.values.any { (it as? JsonObject)?.string("action") in ADD_ACTIONS } }
+        val adds = components.any { component -> component.values.any { (it as? JsonObject)?.string("action") in RecipeCatalog.ADD_ACTIONS } }
         return data.flatMap { (key, source) ->
             val provider = RecipeCatalog.providers[(source as? JsonObject)?.string("provider")] ?: return@flatMap emptyList()
             listOfNotNull(

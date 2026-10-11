@@ -38,6 +38,8 @@ object RecipeCatalog {
     val RULE_OPS = setOf("contains", "equals")
     val functions = setOf("sum", "count", "groupBy", "filter", "formatMoney", "formatDate", "contains", "equals")
     val actions = setOf("rules.learn", "storage.add", "storage.update", "storage.delete", "counter.step")
+    /** Actions that put something new into an app's own store. */
+    val ADD_ACTIONS = setOf("storage.add", "counter.step")
     val periods = setOf("day", "week", "month", "year", "all")
     val templates = listOf("money", "log", "counter", "checklist")
 

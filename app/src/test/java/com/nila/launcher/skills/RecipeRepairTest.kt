@@ -156,5 +156,19 @@ class RecipeRepairTest {
         assertEquals(listOf("root", "body"), fixed.components().map { it.string("id") })
         assertEquals(emptyList<RecipeError>(), RecipeValidator.validate(fixed))
     }
+
+    @Test
+    fun givesAChecklistOfTheUsersOwnItemsAnAddForm() {
+        // PC eval v5: three checklists came back with no way to add items, and Gemma repeated that on every retry.
+        val fixed = RecipeRepair.repair(recipe("""[{"id":"root","component":"Column","children":["title","list"]},
+            {"id":"title","component":"Text","text":"Habits"},
+            {"id":"list","component":"Checklist","items":"/items","labelField":"habit","onToggle":{"action":"storage.update"}}]"""))
+        assertEquals(emptyList<RecipeError>(), RecipeValidator.validate(fixed))
+        assertEquals(emptyList<RecipeError>(), RecipeCompleteness.check(fixed))
+        val root = fixed.components().first()
+        assertEquals(listOf("title", "list-add", "list"), (root.getValue("children") as JsonArray).map { it.stringOrNull() })
+        val input = fixed.components().single { it.string("component") == "Input" }
+        assertEquals("habit", input.string("field"))
+    }
 }
 

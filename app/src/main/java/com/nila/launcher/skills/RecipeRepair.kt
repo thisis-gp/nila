@@ -22,6 +22,9 @@ object RecipeRepair {
     private const val INPUT = "Input"
     private const val TEXT = "Text"
     private const val FORM = "Form"
+    private const val CHECKLIST = "Checklist"
+    private const val ADD_LABEL = "Add"
+    private const val ADD_ACTION = "storage.add"
     private const val DEFAULT_INPUT_TYPE = "text"
     private const val TXN_ROW = "TxnRow"
     private const val ITEM_ROW = "ItemRow"
@@ -98,7 +101,8 @@ object RecipeRepair {
         addMissingRows(byId, data)
         addMissingInputs(byId)
         for (component in byId.values) dropDanglingRefs(component, byId.keys)
-        val rooted = if (RecipeCatalog.ROOT_ID in byId) byId else withRoot(byId)
+        val rooted = if (RecipeCatalog.ROOT_ID in byId) byId else LinkedHashMap(withRoot(byId))
+        addChecklistForm(rooted, data)
         return keepTree(rooted)
     }
 
@@ -145,6 +149,40 @@ object RecipeRepair {
                 row["titleField"] = JsonPrimitive(titleField)
             }
             byId[rowId] = row
+        }
+    }
+
+    /**
+     * A Checklist over the user's own items, with nothing anywhere that adds to them, gets an add form just above it.
+     * Gemma left this out of 3 checklists in the PC eval and repeated it on every retry.
+     */
+    private fun addChecklistForm(byId: MutableMap<String, MutableMap<String, JsonElement>>, data: Map<String, JsonElement>) {
+        val adds = byId.values.any { component -> component.values.any { (it as? JsonObject)?.string("action") in RecipeCatalog.ADD_ACTIONS } }
+        if (adds) return
+        val root = byId[RecipeCatalog.ROOT_ID] ?: return
+        val children = (root["children"] as? JsonArray)?.mapNotNull { it.stringOrNull() } ?: return
+        for (list in byId.values.filter { it.string("component") == CHECKLIST }) {
+            val listId = list.string("id")?.takeIf { it in children } ?: continue
+            val key = list.string("items")?.removePrefix("/")?.substringBefore('/')
+            if (RecipeCatalog.providers[(data[key] as? JsonObject)?.string("provider")]?.userAdds != true) continue
+            val formId = "$listId-add"
+            val inputId = "$listId-input"
+            byId[inputId] = mutableMapOf(
+                "id" to JsonPrimitive(inputId),
+                "component" to JsonPrimitive(INPUT),
+                "label" to JsonPrimitive(ADD_LABEL),
+                "field" to JsonPrimitive(list.string("labelField") ?: DEFAULT_TITLE_FIELD),
+                "type" to JsonPrimitive(DEFAULT_INPUT_TYPE),
+            )
+            byId[formId] = mutableMapOf(
+                "id" to JsonPrimitive(formId),
+                "component" to JsonPrimitive(FORM),
+                "fields" to idList(listOf(inputId)),
+                "submit" to JsonObject(mapOf("action" to JsonPrimitive(ADD_ACTION))),
+                "submitLabel" to JsonPrimitive(ADD_LABEL),
+            )
+            root["children"] = idList(children.flatMap { if (it == listId) listOf(formId, it) else listOf(it) })
+            return
         }
     }
 
