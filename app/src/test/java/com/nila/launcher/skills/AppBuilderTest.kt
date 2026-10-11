@@ -100,4 +100,13 @@ class AppBuilderTest {
         assertEquals("weight-log-storage", items.string("store"))
         assertEquals(emptyList<RecipeError>(), RecipeValidator.validate(result.recipe))
     }
+
+    @Test
+    fun fillPromptShowsOnlyTheScreenAsCompactJson() {
+        // Gemma copies the example's shape: a full pretty-printed recipe made it echo ~1.5k chars and hit the token cap.
+        val prompt = AppBuilderPrompts.fillSystem(RecipeExamples.forTemplate("money"))
+        assertTrue(prompt, "\"components\":[{\"id\":\"root\"" in prompt)
+        assertTrue(prompt, "\"permissions\"" !in prompt && "\"recipe\"" !in prompt)
+    }
 }
+

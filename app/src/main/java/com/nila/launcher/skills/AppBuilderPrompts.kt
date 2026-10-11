@@ -1,6 +1,8 @@
 package com.nila.launcher.skills
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 
 /** Prompts for Gemma. The component and value lists come from RecipeCatalog, so prompt and validator cannot drift. */
 object AppBuilderPrompts {
@@ -24,7 +26,7 @@ object AppBuilderPrompts {
     """.trimIndent()
 
     fun fillSystem(example: String): String = listOf(
-        "You build the screen of a NILA phone app. Reply with JSON only, no other text:",
+        "You build the screen of a NILA phone app. Reply with compact JSON on one line only: no spaces, no code fences, no other text:",
         """{"components": [...], "rules": [...]}""",
         "\"components\" is a FLAT list. Each item has \"id\", \"component\" and that component's props.",
         "Children are lists of ids. Exactly one item has id \"root\". Every other item must be reachable from root.",
@@ -35,8 +37,8 @@ object AppBuilderPrompts {
         "- path: \"/\" followed by a data key from the request, like \"/items\".",
         """- function: {"fn": "<${RecipeCatalog.functions.joinToString("|")}>", "of": "<path>", "field": "<field name>", "period": "<${RecipeCatalog.periods.joinToString("|")}>"}""",
         """- action: {"action": "<${RecipeCatalog.actions.joinToString("|")}>"}""",
-        "Use nothing else. Example of a complete app:",
-        example,
+        "Use nothing else. Example screen:",
+        screenOnly(example),
     ).joinToString("\n")
 
     fun fillRequest(idea: String, skeleton: JsonObject): String {
@@ -52,6 +54,15 @@ object AppBuilderPrompts {
             "\n\nYour last answer had these problems:\n" + errors.joinToString("\n") { "- $it" } +
             "\n\nLast answer:\n" + previous.take(MAX_ECHO_CHARS) +
             "\n\nReply with the corrected JSON only."
+
+    /**
+     * Just the parts the model writes, compact. Shown a whole pretty-printed recipe, Gemma echoed all of it
+     * (~1.5k chars) and ran into the output token cap.
+     */
+    private fun screenOnly(example: String): String {
+        val recipe = Json.parseToJsonElement(example).jsonObject
+        return JsonObject(recipe.filterKeys { it == "components" || it == "rules" }).toString()
+    }
 
     internal fun catalogText(): String = RecipeCatalog.components.values.joinToString("\n") { spec ->
         "- ${spec.name}: " + spec.props.entries.joinToString(", ") { (name, prop) ->
