@@ -17,6 +17,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -58,6 +62,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -136,7 +141,7 @@ private fun NilaApp(resumeVersion: Int) {
     // Gemma 4 E2B and FunctionGemma load in the background; until then NILA answers with its rules.
     // What the user asked NILA to remember; read by chat, food, groceries and the morning suggestion.
     val memory = remember { NilaMemory(context.applicationContext) }
-    var facts by remember { mutableStateOf(memory.facts()) }
+    val facts by memory.factsFlow.collectAsState()
     val health = remember { HealthStore(context.applicationContext) }
     LaunchedEffect(health) { withContext(Dispatchers.IO) { health.sweep() } }
     val reminders = remember { NilaReminders(context.applicationContext) }
@@ -175,10 +180,15 @@ private fun NilaApp(resumeVersion: Int) {
     LaunchedEffect(installedApps) {
         launcherPreferences.edit().putStringSet("home_pins", pinnedPackages.toSet()).apply()
     }
+    var showWelcome by remember { mutableStateOf(!launcherPreferences.getBoolean(ONBOARDED_KEY, false)) }
     val navigation = remember { NilaNavigation(NilaScreen.Home) }
     var screen by remember { mutableStateOf(navigation.current) }
     var overlayScreen by remember { mutableStateOf(screen) }
-    if (screen != NilaScreen.Home) overlayScreen = screen
+    if (screen != NilaScreen.Home && screen != NilaScreen.MyNila) overlayScreen = screen
+    // 0 = home, 1 = My NILA fully open; dragged by the finger, then settled with a spring.
+    val sidePanel = remember { Animatable(0f) }
+    var panelDragging by remember { mutableStateOf(false) }
+    val panelWidth = with(LocalDensity.current) { LocalConfiguration.current.screenWidthDp.dp.toPx() }
 
     fun open(destination: NilaScreen) {
         screen = if (destination == NilaScreen.Home) navigation.select(NilaScreen.Home) else navigation.open(destination)
@@ -268,7 +278,7 @@ private fun NilaApp(resumeVersion: Int) {
             override fun track(orderId: String?) =
                 runFood("Track order") { foodFlow.track(orderId) }
             override fun rememberDish(dish: String) {
-                facts = memory.save("I like $dish", MemoryKind.Preference)
+                scope.launch { memory.save("I like $dish", MemoryKind.Preference) }
             }
         }
     }
@@ -460,7 +470,7 @@ private fun NilaApp(resumeVersion: Int) {
                     else -> performNow(context, routed)
                 }
             }
-            if (response is NilaResponse.Remember) facts = memory.save(response.fact, response.kind, response.about)
+            if (response is NilaResponse.Remember) memory.save(response.fact, response.kind, response.about)
             turns[pendingIndex] = Turn(prompt, response)
             if (speakReply) spokenText(response)?.let(lakshmi::speak)
             speakReply = false
@@ -469,9 +479,15 @@ private fun NilaApp(resumeVersion: Int) {
             delay(900) // the dock head visibly "speaks" for a beat right after a reply lands
             justReplied = false
             // After the reply is on screen: keep any personal detail the message carried, and say so.
-            if (response !is NilaResponse.Remember) brain.learn(prompt)?.let { learned ->
-                facts = memory.save(learned.fact, learned.kind, learned.about)
-                turns += Turn("My NILA", learned)
+            val learned = if (response !is NilaResponse.Remember) brain.learn(prompt) else null
+            learned?.let {
+                memory.save(it.fact, it.kind, it.about)
+                turns += Turn("My NILA", it)
+            }
+            // Someone close came up and isn't linked to a contact yet: ask once, in chat.
+            val named = listOfNotNull((response as? NilaResponse.Remember)?.about, learned?.about, mentionedPerson(prompt)).filter { it != ME }.distinct()
+            named.firstOrNull { memory.claimContactAsk(it) }?.let { about ->
+                turns += Turn("My NILA", LinkContact(about, withContext(Dispatchers.IO) { suggestContacts(context, about) }))
             }
         }
     }
@@ -481,6 +497,24 @@ private fun NilaApp(resumeVersion: Int) {
 
     fun closeOverlay() {
         screen = navigation.back()
+    }
+
+    fun dragPanel(dx: Float) {
+        panelDragging = true
+        scope.launch { sidePanel.snapTo((sidePanel.value + dx / panelWidth).coerceIn(0f, 1f)) }
+    }
+
+    fun releasePanel(velocity: Float) {
+        panelDragging = false
+        val settleOpen = panelSettlesOpen(sidePanel.value, velocity)
+        scope.launch { sidePanel.animateTo(if (settleOpen) 1f else 0f, PanelSpring, initialVelocity = velocity / panelWidth) }
+        if (settleOpen && screen != NilaScreen.MyNila) open(NilaScreen.MyNila)
+        if (!settleOpen && screen == NilaScreen.MyNila) closeOverlay()
+    }
+
+    // Opening My NILA any other way (the greeting, Settings, a chat card) slides it in too.
+    LaunchedEffect(screen) {
+        if (!panelDragging) sidePanel.animateTo(if (screen == NilaScreen.MyNila) 1f else 0f, PanelSpring)
     }
 
     BackHandler(enabled = navigation.canGoBack) { closeOverlay() }
@@ -513,6 +547,7 @@ private fun NilaApp(resumeVersion: Int) {
                     lastText.contains("could not", true) || lastText.contains("unavailable", true) || lastText.contains("No alarm", true) -> MascotMood.Error
                     else -> MascotMood.Idle
                 }
+                Box(Modifier.fillMaxSize().graphicsLayer { translationX = sidePanel.value * size.width * HOME_PARALLAX }) {
                 HomeScreen(
                     resumeVersion = resumeVersion,
                     nilaMood = nilaMood,
@@ -525,10 +560,44 @@ private fun NilaApp(resumeVersion: Int) {
                         openAgent()
                         submit(request)
                     },
+                    onSideDrag = ::dragPanel,
+                    onSideDragEnd = ::releasePanel,
                 )
+                }
+
+                // My NILA slides in from the left and follows the finger, like Pixel's Discover page.
+                if (sidePanel.value > 0f || screen == NilaScreen.MyNila) {
+                    Box(
+                        Modifier.fillMaxSize()
+                            .graphicsLayer { translationX = (sidePanel.value - 1f) * size.width }
+                            .background(Ink)
+                            .pointerInput(Unit) {},
+                    ) {
+                    MyNilaScreen(
+                            facts = facts,
+                            onForgetFact = { id -> scope.launch { memory.delete(id) } },
+                            onEditFact = { id, text ->
+                                val old = facts.firstOrNull { it.id == id }
+                                if (old != null) scope.launch { memory.delete(id); memory.save(text, old.kind, old.about) }
+                            },
+                            onAddFact = { text, about -> scope.launch { memory.save(text, MemoryKind.Other, about) } },
+                            onForgetAll = { scope.launch { memory.clear() } },
+                            health = health,
+                            readReport = brain::readReport,
+                            // A report that asks for a follow-up becomes a My NILA reminder on that day.
+                            onSaved = { record -> followUpReminder(record)?.let(reminders::add) },
+                            onDeleted = { record -> reminders.remove("followup-${record.id}") },
+                            draft = MyNilaRequests.pending,
+                            onDraftUsed = { MyNilaRequests.pending = null },
+                            onBack = ::closeOverlay,
+                            onSideDrag = ::dragPanel,
+                            onSideDragEnd = ::releasePanel,
+                        )
+                    }
+                }
 
                 AnimatedVisibility(
-                    visible = screen != NilaScreen.Home,
+                    visible = screen != NilaScreen.Home && screen != NilaScreen.MyNila,
                     enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                     exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
                 ) {
@@ -590,34 +659,25 @@ private fun NilaApp(resumeVersion: Int) {
                                     if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
                                 },
                                 food = foodActions,
-                                suggestion = morningSuggestion(facts, LocalTime.now()),
+                                suggestion = homeSuggestion(facts, java.time.LocalDateTime.now()),
                                 grocery = groceryActions,
                                 forget = { saved ->
                                     // Undo for an automatic save: the fact goes, and the card says so instead of offering Forget again.
-                                    facts = memory.forget(saved.fact, saved.about)
+                                    scope.launch { memory.forget(saved.fact, saved.about) }
                                     val index = turns.indexOfFirst { it.response === saved }
                                     if (index >= 0) turns[index] = turns[index].copy(response = NilaResponse.Text("Forgotten: ${saved.fact}"))
                                 },
                             ) { label, next -> turns += Turn(label, next) }
                             NilaScreen.Home -> Unit
-                            NilaScreen.MyNila -> MyNilaScreen(
-                                facts = facts,
-                                onForgetFact = { id -> facts = memory.delete(id) },
-                                onForgetAll = { facts = memory.clear() },
-                                health = health,
-                                readReport = brain::readReport,
-                                // A report that asks for a follow-up becomes a My NILA reminder on that day.
-                                onSaved = { record -> followUpReminder(record)?.let(::addReminder) },
-                                onDeleted = { record -> reminders.remove("followup-${record.id}") },
-                                draft = MyNilaRequests.pending,
-                                onDraftUsed = { MyNilaRequests.pending = null },
-                                onBack = ::closeOverlay,
-                            )
                             else -> NilaScreenCatalogue(
                                 screen = overlayScreen,
                                 onOpen = ::open,
                                 onBack = ::closeOverlay,
                                 onChooseDefaultHome = ::chooseDefaultHome,
+                                onForgetFact = { id -> scope.launch { memory.delete(id) } },
+                                onForgetAll = { scope.launch { memory.clear() } },
+                                onWelcomeTour = { showWelcome = true },
+                                facts = facts,
                                 accounts = accountsRevision.let { listOf(
                                     ServiceAccount(
                                         name = "Swiggy",
@@ -675,6 +735,20 @@ private fun NilaApp(resumeVersion: Int) {
                             )
                         }
                     }
+                }
+                if (showWelcome) {
+                    // First launch, or "Welcome tour" in Settings. The flag is set when it ends, so a tour cut short shows again.
+                    OnboardingScreen(
+                        onSaveFact = { text, kind, about -> scope.launch { memory.save(text, kind, about) } },
+                        onFinish = { request ->
+                            launcherPreferences.edit().putBoolean(ONBOARDED_KEY, true).apply()
+                            showWelcome = false
+                            if (request != null) {
+                                openAgent()
+                                submit(request)
+                            } else open(NilaScreen.Home)
+                        },
+                    )
                 }
             }
         }
@@ -748,7 +822,6 @@ private val HeaderMascotSize = 34.dp
 private val WorkingMascotSize = 28.dp
 private val EmptyMascotSize = 72.dp
 private val FoodRequestSize = 14.sp
-private val ScreenGutter = 20.dp
 private val PromptMinHeight = 48.dp
 private val ProductImageSize = 60.dp
 private val OptionImageSize = 52.dp
@@ -1055,6 +1128,7 @@ private fun ResponseView(
             )
             if (response.week.any { it.second > 0 }) Text("Last 7 days: %,d steps".format(response.week.sumOf { it.second }), color = Muted, fontSize = 13.sp)
         }
+        is LinkContact -> LinkContactCard(response, context)
         is NilaResponse.Remember -> NilaCard {
             SectionLabel("Saved to My NILA", color = Lime)
             Text(
@@ -1758,3 +1832,5 @@ private fun copyToNotesApp(context: Context, text: String): String {
     }.fold({ app?.let { "Opening ${it.second} with your note. Save it there." } ?: "Pick an app to save the note." }, { "No notes app is available." })
 }
 
+/** Home drifts this fraction of the screen while My NILA slides over it. */
+private const val HOME_PARALLAX = 0.25f

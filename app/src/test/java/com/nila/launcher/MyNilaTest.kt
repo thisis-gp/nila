@@ -87,7 +87,7 @@ class MyNilaTest {
         val facts = listOf(wifeLikes, iAmVeg, ammaAllergy)
         assertEquals("wife", askedAbout("what do you know about my wife?"))
         assertEquals(ME, askedAbout("what do you know about me"))
-        assertTrue(personSummary("wife", facts).contains("loves butter chicken"))
+        assertTrue(personSummary("wife", facts).contains("loves butter chicken", ignoreCase = true))
         assertTrue(personSummary("husband", facts).startsWith("I don't know anything about your husband"))
     }
 

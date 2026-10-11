@@ -2,14 +2,30 @@ package com.nila.launcher
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.net.Uri
+import android.provider.ContactsContract
+import androidx.room.withTransaction
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import java.time.DayOfWeek
 import java.time.LocalDateTime
-import java.time.LocalTime
 import java.util.UUID
-import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import org.json.JSONArray
 
 /** What a remembered fact is about. The model picks the kind when it saves a fact; NILA never guesses it from keywords. */
 enum class MemoryKind(val label: String) {
@@ -108,18 +124,46 @@ internal fun withFavourite(text: String, facts: List<MemoryFact>): String? {
     return FavouriteOf.replace(text.lowercase(), dish)
 }
 
-private val AskAbout = Regex("""\bwhat do you know about\s+(?:my\s+)?([\p{L} ]+?)\s*\??$""")
+// Questions about the user or their people, answered from My NILA. Group 1 is the person; empty means the user.
+private val AskAbout = listOf(
+    Regex("""\bwhat do you (?:know|remember) about\s+(?:my\s+)?([\p{L} ]+?)\s*\??$"""),
+    Regex("""\btell me (?:what you know )?about\s+(?:my\s+)?([\p{L} ]+?)\s*\??$"""),
+    Regex("""\bwhat (?:does|do) my\s+([\p{L} ]+?)\s+(?:like|love|eat|prefer|enjoy)\b"""),
+    Regex("""\b(?:what are|show|show me|give me|list) my (?:details|info|information|profile|preferences|likes)()\b"""),
+    Regex("""^\s*my (?:details|info|information|profile)()\s*\??$"""),
+    Regex("""\bwho am i()\b"""),
+    Regex("""\bwhat do i (?:like|love|eat|prefer|enjoy)()\b"""),
+)
+private val AskName = Regex("""\b(?:what(?:'s| is) my name|do you know my name|what do you call me)\b""")
 
-/** "what do you know about my wife" → "wife"; "…about me" → "me". */
-internal fun askedAbout(text: String): String? = AskAbout.find(text.lowercase().trim())?.groupValues?.get(1)?.let(::aboutKey)
+private fun normalized(text: String) = text.lowercase().trim().replace('’', '\'')
 
-/** Everything NILA knows about one person, or that it knows nothing yet. */
-internal fun personSummary(about: String, facts: List<MemoryFact>): String {
-    val known = facts.filter { it.about == about }
-    val who = if (about == ME) "you" else "your $about"
-    return if (known.isEmpty()) "I don't know anything about $who yet. Tell me, like \"my wife loves butter chicken\"."
-    else "About $who:\n" + known.joinToString("\n") { "• ${it.text} (${it.kind.label.lowercase()})" }
+/** "what do you know about my wife" → "wife"; "…about me", "my details", "who am I" → "me". */
+internal fun askedAbout(text: String): String? {
+    val t = normalized(text)
+    if (AskName.containsMatchIn(t)) return ME
+    return AskAbout.firstNotNullOfOrNull { it.find(t) }?.groupValues?.get(1)?.let { if (it.isBlank()) ME else aboutKey(it) }
 }
+
+/** True for "what's my name": answered with the name alone, not the whole list. */
+internal fun askedName(text: String): Boolean = AskName.containsMatchIn(normalized(text))
+
+/** Everything NILA knows about one person, in the same clean lines My NILA shows, or that it knows nothing yet. */
+internal fun personSummary(about: String, facts: List<MemoryFact>): String {
+    val known = facts.filter { it.about == about && !isNameFact(it) }
+    val name = if (about == ME) userName(facts) else null
+    val who = if (about == ME) "you" else "your $about"
+    if (known.isEmpty()) {
+        return if (name != null) "You're $name. That's all I know so far: tell me more, like \"I'm vegetarian\"."
+        else "I don't know anything about $who yet. Tell me, like \"my wife loves butter chicken\"."
+    }
+    val heading = if (name != null) "Here's what I know about you, $name:" else "Here's what I know about $who:"
+    return heading + "\n" + known.joinToString("\n") { "• ${factLine(it.text)}" } + "\nYou can change any of this in My NILA."
+}
+
+/** "what's my name" → the saved name, or an invitation to share it. */
+internal fun nameAnswer(facts: List<MemoryFact>): String =
+    userName(facts)?.let { "You're $it." } ?: "You haven't told me your name yet. Say \"my name is …\"."
 
 /** The single fact older builds saved joins the list as an Other fact. */
 internal fun migrated(facts: List<MemoryFact>, legacy: String?, savedAt: Long): List<MemoryFact> =
@@ -137,84 +181,230 @@ internal fun memorySummary(facts: List<MemoryFact>): String =
         "• $who${fact.text} (${fact.kind.label.lowercase()})"
     }
 
-/** Facts as stored: a JSON list. */
+// ---- Pure rules: legacy JSON to entities, people, asking once ---------------------------
+
+/** The facts older builds kept as JSON in plain preferences, plus the single `fact` older still. Malformed entries are skipped. */
+internal fun legacyFacts(json: String?, singleFact: String?, now: Long): List<MemoryFact> {
+    val list = json?.let { runCatching { JSONArray(it) }.getOrNull() }
+    val stored = list?.let {
+        (0 until it.length()).mapNotNull { i ->
+            val o = it.optJSONObject(i) ?: return@mapNotNull null
+            val text = o.optString("text").ifBlank { return@mapNotNull null }
+            MemoryFact(o.optString("id").ifBlank { UUID.randomUUID().toString() }, text, MemoryKind.from(o.optString("kind")), o.optLong("savedAt"), aboutKey(o.optString("about")))
+        }
+    }.orEmpty()
+    return migrated(stored.fold(emptyList()) { acc, fact -> withFact(acc, fact) }, singleFact, now)
+}
+
+internal fun combinedLegacyFacts(secureJson: String?, plainJson: String?, singleFact: String?, now: Long): List<MemoryFact> =
+    (legacyFacts(secureJson, null, now) + legacyFacts(plainJson, singleFact, now)).fold(emptyList(), ::withFact)
+
 internal fun encodeFacts(facts: List<MemoryFact>): String = JSONArray().apply {
-    facts.forEach { fact ->
-        put(JSONObject().put("id", fact.id).put("text", fact.text).put("kind", fact.kind.name).put("savedAt", fact.savedAt).put("about", fact.about))
-    }
+    facts.forEach { put(JSONObject().put("id", it.id).put("text", it.text).put("kind", it.kind.name).put("savedAt", it.savedAt).put("about", it.about)) }
 }.toString()
 
-/** A malformed entry is skipped, never fatal: memory is a convenience, not a dependency. */
-internal fun decodeFacts(raw: String): List<MemoryFact> {
-    val list = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
-    return (0 until list.length()).mapNotNull { i ->
-        val o = list.optJSONObject(i) ?: return@mapNotNull null
-        val text = o.optString("text").ifBlank { return@mapNotNull null }
-        MemoryFact(o.optString("id").ifBlank { UUID.randomUUID().toString() }, text, MemoryKind.from(o.optString("kind")), o.optLong("savedAt"), aboutKey(o.optString("about")))
+internal fun decodeFacts(raw: String): List<MemoryFact> = legacyFacts(raw, null, 0)
+
+internal fun movedFacts(secure: String?, plain: String?, plainLegacy: String?, savedAt: Long): List<MemoryFact> =
+    combinedLegacyFacts(secure, plain, plainLegacy, savedAt)
+
+/** One person row per about key (the user first), and every fact filed under its person. */
+internal fun entitiesFromFacts(facts: List<MemoryFact>, now: Long, newId: () -> String = { UUID.randomUUID().toString() }): Pair<List<PersonEntity>, List<FactEntity>> {
+    val people = factsByPerson(facts).map { (about, known) ->
+        PersonEntity(newId(), about, aboutLabel(about), contactLookupKey = null, contactUri = null, linkAsked = false, createdAt = known.minOfOrNull { it.savedAt } ?: now)
     }
+    val idByKey = people.associate { it.key to it.id }
+    return people to facts.map { FactEntity(it.id, idByKey.getValue(it.about), it.text, it.kind.name, it.savedAt) }
 }
 
-/**
- * The facts to keep when moving from the old plain store to the encrypted one: what is already encrypted,
- * then every fact from the plain store (and its oldest single `fact`), so an update loses nothing.
- */
-internal fun movedFacts(secure: String?, plain: String?, plainLegacy: String?, savedAt: Long): List<MemoryFact> {
-    val kept = plain?.let(::decodeFacts).orEmpty().fold(secure?.let(::decodeFacts).orEmpty(), ::withFact)
-    return migrated(kept, plainLegacy, savedAt)
-}
+/** True exactly when NILA should ask "Which contact is your [about]?": someone other than the user, not linked, never asked. */
+internal fun shouldAskContactLink(about: String, person: PersonEntity?): Boolean =
+    about != ME && (person == null || (person.contactLookupKey == null && !person.linkAsked))
+
+private val MentionedRelation = Regex(
+    """\bmy\s+(wife|husband|partner|son|daughter|mom|mother|amma|dad|father|appa|brother|sister|boss|grandma|grandpa)\b""",
+)
+
+/** "order something light for my wife" gives "wife"; null when the message names no one close to the user. */
+internal fun mentionedPerson(text: String): String? =
+    MentionedRelation.find(text.lowercase())?.groupValues?.get(1)?.let(::aboutKey)?.takeIf { it != ME }
+
+/** A person NILA knows about, for the UI: name (the linked contact's when there is one), key, photo and facts. */
+internal data class MemoryPerson(
+    val key: String,
+    val name: String,
+    val photoUri: String?,
+    val contactLookupKey: String?,
+    val facts: List<MemoryFact>,
+)
+
+private fun factOf(row: FactRow) = MemoryFact(row.id, row.text, MemoryKind.from(row.kind), row.savedAt, row.about)
 
 /**
- * The facts, as a JSON list in EncryptedSharedPreferences (`nila_memory_secure`), excluded from backup and
- * device transfer. Facts from older builds' plain `nila_memory` file move in once, and that file is deleted.
- * ponytail: SharedPreferences holds a few dozen short facts fine; move to ObjectBox with the rest of memory when it lands.
+ * The facts and the people they are about, in an encrypted Room database (SQLCipher; the passphrase is
+ * wrapped by the Android Keystore). One database serves the whole process, so every [NilaMemory] shares it.
+ * Nothing here touches the main thread: reads are Flows or suspend functions, and [facts] is a snapshot.
  */
 internal class NilaMemory(context: Context) {
-    private val appContext = context.applicationContext
+    private val store = MemoryStore.get(context.applicationContext)
 
-    private val prefs by lazy {
-        val masterKey = MasterKey.Builder(appContext).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-        EncryptedSharedPreferences.create(
-            appContext,
-            SECURE_PREFS,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-        ).also(::moveFromPlain)
+    /** Every fact, kept current. Collect it from the UI. Empty until the database has opened. */
+    val factsFlow: StateFlow<List<MemoryFact>> get() = store.facts
+
+    /** The facts as of now, without waiting. Use [loadFacts] where a fresh read matters. */
+    fun facts(): List<MemoryFact> = store.facts.value
+
+    suspend fun loadFacts(): List<MemoryFact> = store.dao().allFacts().map(::factOf)
+
+    /** The people NILA knows, each with their facts and, with Contacts access, their photo. */
+    fun people(): Flow<List<MemoryPerson>> = store.people()
+
+    suspend fun save(text: String, kind: MemoryKind, about: String = ME): List<MemoryFact> = store.save(newFact(text, kind, System.currentTimeMillis(), about))
+
+    suspend fun delete(id: String): List<MemoryFact> = store.delete(id)
+
+    suspend fun forget(text: String, about: String): List<MemoryFact> = store.forget(text, about)
+
+    suspend fun clear(): List<MemoryFact> = store.clear()
+
+    /**
+     * True the one time NILA should ask which contact [about] is; the person is made if new, and
+     * marked asked so a later call (or "Not now") never asks again.
+     */
+    suspend fun claimContactAsk(about: String): Boolean = store.claimContactAsk(aboutKey(about))
+
+    /** Stores the contact's lookup key and name on the person. */
+    suspend fun linkContact(about: String, contact: ContactChoice) = store.link(aboutKey(about), contact)
+}
+
+/** The process-wide database, opened lazily on a background thread. */
+private class MemoryStore(private val context: Context) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val ready = scope.async(start = CoroutineStart.LAZY) { openAndMigrate() }
+
+    val facts: StateFlow<List<MemoryFact>> =
+        flow { emitAll(ready.await().dao().observeFacts()) }
+            .map { rows -> rows.map(::factOf) }
+            .stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    suspend fun dao() = ready.await().dao()
+
+    fun people(): Flow<List<MemoryPerson>> =
+        flow { emitAll(ready.await().dao().observePeople()) }
+            .combine(facts) { people, all ->
+                people.map { p ->
+                    MemoryPerson(p.key, p.name, p.contactLookupKey?.let { contactPhotoUri(context, it) }, p.contactLookupKey, all.filter { it.about == p.key })
+                }
+            }
+            .flowOn(Dispatchers.IO)
+
+    suspend fun save(fact: MemoryFact): List<MemoryFact> {
+        val db = ready.await()
+        db.withTransaction {
+            val dao = db.dao()
+            val person = dao.person(fact.about) ?: personFor(fact.about).also { dao.insertPeople(listOf(it)) }
+            val already = dao.textsOf(person.id).any { sameText(it, fact.text) }
+            if (fact.text.isNotBlank() && !already) dao.insertFacts(listOf(FactEntity(fact.id, person.id, fact.text, fact.kind.name, fact.savedAt)))
+        }
+        return db.dao().allFacts().map(::factOf)
     }
 
-    private fun moveFromPlain(secure: SharedPreferences) {
-        val plain = appContext.getSharedPreferences(PLAIN_PREFS, Context.MODE_PRIVATE)
-        if (plain.all.isEmpty()) return
-        val moved = movedFacts(secure.getString(FACTS, null), plain.getString(FACTS, null), plain.getString(LEGACY_FACT, null), System.currentTimeMillis())
-        // commit, not apply: the plain copy is deleted only once the encrypted one is on disk.
-        if (secure.edit().putString(FACTS, encodeFacts(moved)).commit()) {
-            plain.edit().clear().commit()
-            appContext.deleteSharedPreferences(PLAIN_PREFS)
+    suspend fun delete(id: String): List<MemoryFact> {
+        dao().deleteFact(id)
+        return dao().allFacts().map(::factOf)
+    }
+
+    suspend fun forget(text: String, about: String): List<MemoryFact> {
+        dao().forgetFact(text, aboutKey(about))
+        return dao().allFacts().map(::factOf)
+    }
+
+    suspend fun clear(): List<MemoryFact> {
+        dao().deleteAllPeople()
+        return emptyList()
+    }
+
+    suspend fun claimContactAsk(key: String): Boolean {
+        val db = ready.await()
+        return db.withTransaction {
+            val dao = db.dao()
+            val person = dao.person(key)
+            if (!shouldAskContactLink(key, person)) return@withTransaction false
+            if (person == null) dao.insertPeople(listOf(personFor(key)))
+            dao.markAsked(key)
+            true
         }
     }
 
-    fun facts(): List<MemoryFact> = prefs.getString(FACTS, null)?.let(::decodeFacts).orEmpty()
-
-    fun save(text: String, kind: MemoryKind, about: String = ME): List<MemoryFact> =
-        withFact(facts(), newFact(text, kind, System.currentTimeMillis(), about)).also(::write)
-
-    fun delete(id: String): List<MemoryFact> = facts().filterNot { it.id == id }.also(::write)
-
-    /** Removes a fact by its words, for the Forget on the card that announced it. */
-    fun forget(text: String, about: String): List<MemoryFact> =
-        facts().filterNot { sameText(it.text, text) && it.about == aboutKey(about) }.also(::write)
-
-    fun clear(): List<MemoryFact> = emptyList<MemoryFact>().also(::write)
-
-    private fun write(facts: List<MemoryFact>) {
-        prefs.edit().putString(FACTS, encodeFacts(facts)).apply()
+    suspend fun link(key: String, contact: ContactChoice) {
+        val db = ready.await()
+        db.withTransaction {
+            val dao = db.dao()
+            if (dao.person(key) == null) dao.insertPeople(listOf(personFor(key)))
+            val uri = Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_LOOKUP_URI, Uri.encode(contact.lookupKey)).toString()
+            dao.link(key, contact.lookupKey, uri, contact.name)
+        }
     }
 
-    private companion object {
-        const val PLAIN_PREFS = "nila_memory"
-        const val SECURE_PREFS = "nila_memory_secure"
-        const val FACTS = "facts"
-        const val LEGACY_FACT = "fact"
+    private fun personFor(key: String) =
+        PersonEntity(UUID.randomUUID().toString(), key, aboutLabel(key), null, null, linkAsked = false, createdAt = System.currentTimeMillis())
+
+    private suspend fun openAndMigrate(): MemoryDatabase {
+        val db = openOrReset(MemoryKeyStore(context))
+        migrateLegacyPrefs(db)
+        return db
+    }
+
+    /** Memory is a convenience: if the key can no longer open the database, start fresh rather than crash. */
+    private fun openOrReset(keys: MemoryKeyStore): MemoryDatabase {
+        fun attempt(): MemoryDatabase? = keys.passphrase()?.let { pass ->
+            val db = MemoryDatabase.open(context, pass)
+            runCatching { db.openHelper.writableDatabase }.onFailure { db.close() }.map { db }.getOrNull()
+        }
+        attempt()?.let { return it }
+        MemoryDatabase.wipe(context)
+        keys.reset()
+        return checkNotNull(attempt()) { "Memory database could not be opened" }
+    }
+
+    /** Moves prior plain and encrypted JSON stores into SQLCipher; remove old copies only after the DB commit. */
+    private suspend fun migrateLegacyPrefs(db: MemoryDatabase) {
+        val plain = context.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE)
+        val secure = runCatching {
+            val key = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+            EncryptedSharedPreferences.create(
+                context, LEGACY_SECURE_PREFS, key,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+            )
+        }.getOrNull()
+        val secureJson = runCatching { secure?.getString(LEGACY_FACTS, null) }.getOrNull()
+        val plainJson = plain.getString(LEGACY_FACTS, null)
+        val single = plain.getString(LEGACY_FACT, null)
+        if (secureJson == null && plainJson == null && single == null) return
+        val now = System.currentTimeMillis()
+        val (people, facts) = entitiesFromFacts(combinedLegacyFacts(secureJson, plainJson, single, now), now)
+        val saved = runCatching {
+            db.withTransaction {
+                db.dao().insertPeople(people)
+                db.dao().insertFacts(facts)
+            }
+        }.isSuccess
+        if (saved) {
+            plain.edit().remove(LEGACY_FACTS).remove(LEGACY_FACT).commit()
+            if (secureJson != null) secure?.edit()?.remove(LEGACY_FACTS)?.commit()
+        }
+    }
+
+    companion object {
+        private const val LEGACY_PREFS = "nila_memory"
+        private const val LEGACY_SECURE_PREFS = "nila_memory_secure"
+        private const val LEGACY_FACTS = "facts"
+        private const val LEGACY_FACT = "fact"
+
+        @Volatile private var instance: MemoryStore? = null
+
+        fun get(context: Context): MemoryStore = instance ?: synchronized(this) { instance ?: MemoryStore(context).also { instance = it } }
     }
 }
 
@@ -225,8 +415,6 @@ internal class NilaMemory(context: Context) {
 private const val MIN_WORD_LENGTH = 3
 /** A fact with two or more subject words matches only when two of them are in the name: "filter coffee" is not "cold coffee". */
 private const val STRONG_MATCH_WORDS = 2
-private const val SUGGESTION_START_HOUR = 5
-private const val SUGGESTION_END_HOUR = 11
 internal const val CHAT_FACT_LIMIT = 5
 
 private val DayWords: Map<String, Set<DayOfWeek>> =
@@ -247,14 +435,14 @@ private val FramingWords = setOf(
     "who", "when", "food", "foods", "breakfast", "lunch", "dinner", "meal", "meals", "snack", "snacks",
 ) + DayWords.keys.flatMap { listOf(it, "${it}s") } + PartWords.keys.flatMap { listOf(it, "${it}s") }
 
-private fun words(text: String) = text.lowercase().split(Regex("""[^\p{L}\p{N}']+""")).filter(String::isNotBlank)
+internal fun words(text: String) = text.lowercase().split(Regex("""[^\p{L}\p{N}']+""")).filter(String::isNotBlank)
 
 /** The words that say what a fact is about: "I really like filter coffee in the morning" gives [filter, coffee]. */
 internal fun factWords(text: String): List<String> =
     words(text).filter { it.length >= MIN_WORD_LENGTH && it !in FramingWords }.distinct()
 
 /** Whole-word match that forgives a plural on either side: "peanuts" finds "peanut chikki". */
-private fun mentions(text: String, word: String): Boolean {
+internal fun mentions(text: String, word: String): Boolean {
     val stem = Regex.escape(if (word.length > MIN_WORD_LENGTH + 1) word.removeSuffix("s") else word)
     return Regex("""\b$stem(s|es)?\b""").containsMatchIn(text.lowercase())
 }
@@ -283,7 +471,7 @@ internal fun appliesAt(text: String, now: LocalDateTime): Boolean {
     return (days.isEmpty() || now.dayOfWeek in days) && (parts.isEmpty() || partOfDay(now.hour) in parts)
 }
 
-private val VegWord = Regex("""(?<!non[- ])\b(veg|vegetarian|vegan)\b""")
+internal val VegWord = Regex("""(?<!non[- ])\b(veg|vegetarian|vegan)\b""")
 
 /** True when a Diet fact says veg and its day or time, if it names one, is now. */
 internal fun wantsVeg(facts: List<MemoryFact>, now: LocalDateTime): Boolean =
@@ -297,17 +485,6 @@ internal data class FoodMemory(val facts: List<MemoryFact>, val vegPreferred: Bo
 }
 
 internal fun foodMemory(facts: List<MemoryFact>, now: LocalDateTime) = FoodMemory(facts, wantsVeg(facts, now))
-
-/** One gentle nudge from memory: what the chip or pill says, and the request it sends when tapped. */
-internal data class MemorySuggestion(val label: String, val request: String)
-
-/** In the morning, the newest Preference as "Filter coffee for breakfast?"; null at other times or with nothing liked. */
-internal fun morningSuggestion(facts: List<MemoryFact>, now: LocalTime): MemorySuggestion? {
-    if (now.hour !in SUGGESTION_START_HOUR until SUGGESTION_END_HOUR) return null
-    val liked = facts.filter { it.kind == MemoryKind.Preference && it.about == ME }.maxByOrNull { it.savedAt } ?: return null
-    val subject = factWords(liked.text).joinToString(" ").ifBlank { return null }
-    return MemorySuggestion("${subject.replaceFirstChar(Char::uppercase)} for breakfast?", "order $subject")
-}
 
 private val PersonalKinds = setOf(MemoryKind.Preference, MemoryKind.Diet, MemoryKind.Allergy)
 

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Android 12 and newer. My NILA's personal and health data stays off backup and device transfer. -->
+<!-- Health records, reports and memory stay on this phone: never in cloud backup or device transfer (Android 12+). -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="nila_memory.xml" />
@@ -7,6 +7,11 @@
         <exclude domain="sharedpref" path="nila_health.xml" />
         <exclude domain="sharedpref" path="nila_reminders.xml" />
         <exclude domain="sharedpref" path="nila_reminders_secure.xml" />
+        <exclude domain="sharedpref" path="nila_memory_key.xml" />
+        <exclude domain="database" path="nila_memory.db" />
+        <exclude domain="database" path="nila_memory.db-journal" />
+        <exclude domain="database" path="nila_memory.db-wal" />
+        <exclude domain="database" path="nila_memory.db-shm" />
         <exclude domain="file" path="health/" />
     </cloud-backup>
     <device-transfer>
@@ -15,6 +20,11 @@
         <exclude domain="sharedpref" path="nila_health.xml" />
         <exclude domain="sharedpref" path="nila_reminders.xml" />
         <exclude domain="sharedpref" path="nila_reminders_secure.xml" />
+        <exclude domain="sharedpref" path="nila_memory_key.xml" />
+        <exclude domain="database" path="nila_memory.db" />
+        <exclude domain="database" path="nila_memory.db-journal" />
+        <exclude domain="database" path="nila_memory.db-wal" />
+        <exclude domain="database" path="nila_memory.db-shm" />
         <exclude domain="file" path="health/" />
     </device-transfer>
 </data-extraction-rules>

@@ -254,7 +254,7 @@ internal class FoodFlow(private val context: Context) {
                 ?.let(::parseRestaurants).orEmpty()
         }
         if (list.isEmpty()) return card(FoodCard.Problem("No restaurants found for \"$query\" near ${address.label}."))
-        val remembered = foodMemory(facts.facts(), LocalDateTime.now())
+        val remembered = foodMemory(facts.loadFacts(), LocalDateTime.now())
         val results = FoodCard.Restaurants(address, query, list, intent, bestFits(list, intent, remembered)).also { lastResults = it }
         val dishes = dishResult?.let { rankDishes(parseDishes(it, list), intent, remembered) }.orEmpty()
         if (dishes.isEmpty()) return card(results)

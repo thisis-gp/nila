@@ -12,6 +12,7 @@ enum class NilaScreen {
     PreparedOrder,
     ActionResult,
     People,
+    Memory,
     Capabilities,
     Apps,
     Activity,

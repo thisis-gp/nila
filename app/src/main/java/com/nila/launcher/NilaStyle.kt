@@ -46,6 +46,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Surface for anything that asks before a Commit action runs. */
 internal val CommitInk = Color(0xFF321F19)
+/** The one left and right edge for screen content, headers and avatars. */
+internal val ScreenGutter = 20.dp
 internal val CardRadius = 18.dp
 internal val CardPadding = 16.dp
 internal val PrimaryActionHeight = 52.dp

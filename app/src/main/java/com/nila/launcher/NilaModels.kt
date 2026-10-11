@@ -292,7 +292,7 @@ class NilaBrain(
     suspend fun respond(input: String): NilaResponse {
         // "photos I took on Dec 18 2024": searched on the phone itself, by the day the user named.
         photoSearch(input, java.time.LocalDate.now())?.let { return it }
-        askedAbout(input)?.let { return NilaResponse.Text(personSummary(it, facts())) }
+        myNilaAnswer(input)?.let { return it }
         // "when was my last blood test": answered from My NILA's records, not taken as a new visit.
         if (isHealthQuestion(input)) return withContext(llm) { healthAnswer(input) }
         // "last week I went to the hospital": offer the health tracker, with the day the user said.
@@ -306,6 +306,13 @@ class NilaBrain(
         val resolved = withFavourite(input, facts())
             ?: return NilaResponse.Text("I don't know your $who's favourite yet. Tell me, like \"my $who loves butter chicken\".")
         return answerFor(resolved)
+    }
+
+    /** A question about the user or their people, answered from My NILA, never from phone notes. */
+    private fun myNilaAnswer(text: String): NilaResponse? {
+        val about = askedAbout(text) ?: return null
+        val known = facts()
+        return NilaResponse.Text(if (askedName(text)) nameAnswer(known) else personSummary(about, known))
     }
 
     /**
@@ -408,6 +415,7 @@ class NilaBrain(
             // Any wording, follow-up or language: Gemma restates it as one plain command the rules understand.
             rewrite(input)?.let { command ->
                 engine.calculate(command)?.let { return@withContext answer("rewrite:calculator", it) }
+                myNilaAnswer(command)?.let { return@withContext done("rewrite:my-nila", it) }
                 val routed = engine.route(command)
                 if (routed is NilaIntent.Call) return@withContext answer("rewrite:${routed.call.capabilityId}", engine.execute(routed))
             }
@@ -731,6 +739,8 @@ class NilaBrain(
             turn on the flashlight | turn off the flashlight
             open the camera | take a selfie | record a video | record my voice
             schedule <title> <day> at <time> | remind me to <task> at <time> | remind me to <task> every month on the <day> | take a note that <text> | show my notes
+            what do you know about <me or the person> | what is my name
+            Questions about the user's own details, name, likes, diet or family become "what do you know about ..." or "what is my name", never "show my notes". Use "show my notes" only when the user says notes.
             call <name or number> | tell <name> <message>
             take me to <place> | <things> near me | search for <query>
             order food <cooked dish or meal from a restaurant> | shop groceries <item to buy from a store>

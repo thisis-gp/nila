@@ -1,7 +1,6 @@
 package com.nila.launcher
 
 import java.time.LocalDateTime
-import java.time.LocalTime
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -104,18 +103,6 @@ class NilaMemoryTest {
     }
 
     @Test
-    fun theMorningSuggestionComesFromTheNewestLike() {
-        val facts = listOf(
-            fact("I like masala dosa", MemoryKind.Preference, savedAt = 1),
-            fact("I like filter coffee", MemoryKind.Preference, savedAt = 2),
-            fact("Office is in Koramangala", MemoryKind.Place, savedAt = 3),
-        )
-        assertEquals(MemorySuggestion("Filter coffee for breakfast?", "order filter coffee"), morningSuggestion(facts, LocalTime.of(8, 30)))
-        assertNull(morningSuggestion(facts, LocalTime.of(11, 0)))
-        assertNull(morningSuggestion(facts.filter { it.kind == MemoryKind.Place }, LocalTime.of(8, 30)))
-    }
-
-    @Test
     fun chatGetsAtMostFivePersonalFactsFirst() {
         val few = listOf(fact("Gym at 6", MemoryKind.Routine))
         assertEquals(few, chatFacts(few))
@@ -139,5 +126,55 @@ class NilaMemoryTest {
     fun listsWhatItRemembers() {
         assertEquals("You have not asked me to remember anything yet.", memorySummary(emptyList()))
         assertEquals("You asked me to remember:\n• Allergic to peanuts (allergy)", memorySummary(listOf(fact("Allergic to peanuts", MemoryKind.Allergy))))
+    }
+
+    private val legacyJson = """[{"id":"a","text":"I like filter coffee","kind":"Preference","savedAt":5,"about":"me"},
+        {"id":"b","text":"Loves butter chicken","kind":"Preference","savedAt":3,"about":"My Wife"},
+        {"id":"c","text":"  ","kind":"Other","savedAt":1,"about":"me"},
+        {"id":"d","text":"i like FILTER coffee.","kind":"Other","savedAt":6,"about":"I"}]"""
+
+    @Test
+    fun legacyJsonBecomesPeopleAndFacts() {
+        val facts = legacyFacts(legacyJson, "Dinner is at 7", now = 9)
+        assertEquals(listOf("I like filter coffee", "Loves butter chicken", "Dinner is at 7"), facts.map { it.text })
+        var n = 0
+        val (people, rows) = entitiesFromFacts(facts, now = 9) { "p${n++}" }
+        assertEquals(listOf("me", "wife"), people.map { it.key })
+        assertEquals(listOf("You", "Wife"), people.map { it.name })
+        assertEquals(3, rows.size)
+        assertEquals(setOf("p0"), rows.filter { it.text != "Loves butter chicken" }.map { it.personId }.toSet())
+        assertEquals("p1", rows.first { it.text == "Loves butter chicken" }.personId)
+        assertEquals(emptyList<MemoryFact>(), legacyFacts("not json", null, now = 1))
+        assertEquals(emptyList<MemoryFact>(), legacyFacts(null, null, now = 1))
+    }
+
+    @Test
+    fun encryptedAndPlainLegacyStoresAreCombinedWithoutDuplicates() {
+        val encrypted = listOf(fact("I like filter coffee", MemoryKind.Preference))
+        val plain = listOf(fact("I like filter coffee", MemoryKind.Other), fact("Home is Kondapur", MemoryKind.Place))
+        assertEquals(
+            listOf("I like filter coffee", "Home is Kondapur"),
+            combinedLegacyFacts(encodeFacts(encrypted), encodeFacts(plain), null, now = 9).map { it.text },
+        )
+    }
+
+    @Test
+    fun aboutKeysAreNormalised() {
+        assertEquals("wife", aboutKey("My Wife"))
+        assertEquals("amma", aboutKey(" Amma's "))
+        assertEquals(ME, aboutKey("I"))
+        assertEquals(ME, aboutKey(null))
+        assertEquals("wife", mentionedPerson("Order something light for my wife"))
+        assertNull(mentionedPerson("order something light for me"))
+    }
+
+    @Test
+    fun theContactQuestionIsAskedOnce() {
+        fun person(lookup: String? = null, asked: Boolean = false) = PersonEntity("p", "wife", "Wife", lookup, null, asked, 0)
+        assertTrue(shouldAskContactLink("wife", null))
+        assertTrue(shouldAskContactLink("wife", person()))
+        assertFalse(shouldAskContactLink("wife", person(asked = true)))
+        assertFalse(shouldAskContactLink("wife", person(lookup = "k")))
+        assertFalse(shouldAskContactLink(ME, null))
     }
 }

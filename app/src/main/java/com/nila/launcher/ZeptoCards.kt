@@ -126,7 +126,7 @@ private val addressNumber = Regex("""\b\d+[a-z]?\b""", RegexOption.IGNORE_CASE)
 private fun pincodeOf(line: String) = pincode.findAll(line).lastOrNull()?.value
 private fun addressNumberOf(line: String) = addressNumber.findAll(line).map { it.value.lowercase() }
     .firstOrNull { it != pincodeOf(line) }
-private fun words(line: String) = line.lowercase().split(Regex("""[^\p{L}\p{N}]+""")).filter { it.length > 1 }.toSet()
+private fun addressWords(line: String) = line.lowercase().split(Regex("""[^\p{L}\p{N}]+""")).filter { it.length > 1 }.toSet()
 
 /**
  * The Zepto saved address that is the address chosen in NILA: both have the same pincode and share at least
@@ -135,10 +135,10 @@ private fun words(line: String) = line.lowercase().split(Regex("""[^\p{L}\p{N}]+
  */
 internal fun matchAddress(nila: FoodAddress, zepto: List<SavedAddress>): SavedAddress? {
     val pin = pincodeOf(nila.line)
-    val nilaWords = words(nila.line)
+    val nilaWords = addressWords(nila.line)
     if (nilaWords.isEmpty()) return null
     return zepto
-        .map { saved -> saved to (words(saved.addressLine) intersect nilaWords).size }
+        .map { saved -> saved to (addressWords(saved.addressLine) intersect nilaWords).size }
         .filter { (saved, shared) ->
             val savedPin = pincodeOf(saved.addressLine)
             val numbersMatch = addressNumberOf(nila.line)?.let { number ->

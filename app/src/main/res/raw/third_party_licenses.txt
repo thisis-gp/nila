@@ -3,3 +3,6 @@ Brand icons: Font Awesome Free Brands, CC BY 4.0, https://fontawesome.com
 
 Icons are provided through the MIT-licensed Compose Icons Android vector packages:
 https://github.com/composablehorizons/compose-icons
+
+Food photos (biryani, salad): Unsplash, used under the Unsplash License, https://unsplash.com/license
+Photo IDs 1563379926898-05f4575a45d8 (biryani) and 1512621776951-a57141f2eefd (salad).

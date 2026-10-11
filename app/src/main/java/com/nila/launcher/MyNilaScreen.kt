@@ -7,10 +7,16 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +31,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -77,6 +86,8 @@ internal enum class MyNilaTab(val label: String) { People("People"), Health("Hea
 internal fun MyNilaScreen(
     facts: List<MemoryFact>,
     onForgetFact: (String) -> Unit,
+    onEditFact: (String, String) -> Unit,
+    onAddFact: (text: String, about: String) -> Unit,
     onForgetAll: () -> Unit,
     health: HealthStore,
     readReport: suspend (ByteArray) -> ReportRead,
@@ -85,6 +96,8 @@ internal fun MyNilaScreen(
     draft: HealthPrompt?,
     onDraftUsed: () -> Unit,
     onBack: () -> Unit,
+    onSideDrag: (Float) -> Unit,
+    onSideDragEnd: (Float) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -172,31 +185,19 @@ internal fun MyNilaScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Ink).safeDrawingPadding().padding(horizontal = 20.dp, vertical = 12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    Column(
+        Modifier.fillMaxSize().background(Ink).safeDrawingPadding().padding(horizontal = ScreenGutter, vertical = 12.dp)
+            .sideSwipe(onDrag = onSideDrag, onEnd = onSideDragEnd),
+    ) {
+        Box(Modifier.padding(top = 8.dp).offset(x = (-4).dp)) {
             RoundButton(LucideR.drawable.lucide_ic_chevron_left, "Back", { if (open != null) open = null else onBack() })
-            Column(Modifier.padding(start = 12.dp)) {
-                SerifTitle("My NILA", size = 30.sp)
-                Text("About you and your people · encrypted on this phone", color = Muted, fontSize = 12.sp)
-            }
         }
-        // Four tabs don't fit a phone row: it scrolls.
-        Row(Modifier.padding(vertical = 16.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MyNilaTab.entries.forEach { t ->
-                val on = t == tab
-                Text(
-                    t.label,
-                    color = if (on) Ink else Paper,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    modifier = Modifier.clip(RoundedCornerShape(50)).background(if (on) Lime else Panel)
-                        .clickable { tab = t; open = null }.padding(horizontal = 18.dp, vertical = 9.dp),
-                )
-            }
-        }
+        SerifTitle("My NILA", size = 38.sp, modifier = Modifier.padding(top = 12.dp))
+        Text("Stored only on this phone, encrypted", color = Muted, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(top = 4.dp))
+        SegmentedTabs(tab, Modifier.padding(top = 20.dp, bottom = 16.dp)) { tab = it; open = null }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             when {
-                tab == MyNilaTab.People -> PeopleTab(facts, onForgetFact, onForgetAll)
+                tab == MyNilaTab.People -> PeopleTab(facts, onForgetFact, onEditFact, onAddFact, onForgetAll)
                 open != null -> HealthDetail(
                     health = health,
                     record = open!!,
@@ -214,8 +215,9 @@ internal fun MyNilaScreen(
                     records,
                     reading = reading,
                     problem = problem,
-                    onUpload = { pick.launch(arrayOf("image/*", HealthStore.PDF)) },
-                    onPhoto = ::takePhoto,
+                    onPhoto = { pick.launch(arrayOf("image/*")) },
+                    onPdf = { pick.launch(arrayOf(HealthStore.PDF)) },
+                    onCamera = ::takePhoto,
                     onOpen = { open = it },
                 )
             }
@@ -225,32 +227,140 @@ internal fun MyNilaScreen(
 
 // ---- People ------------------------------------------------------------------
 
+private val SelectedSegment = Lime.copy(alpha = 0.16f)
+private val AvatarSize = 44.dp
+private val AvatarGap = 14.dp
+private val RowMinHeight = 52.dp
+private val EmptyMascotSize = 108.dp
+
+/** The People | Health records | Fitness switch: one rounded track, the chosen segment lifted and ticked. */
 @Composable
-private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit, onForgetAll: () -> Unit) {
-    if (facts.isEmpty()) {
-        NilaCard {
-            Text("Nothing yet", color = Paper, fontWeight = FontWeight.Bold)
-            Text("Just chat: \"my wife loves butter chicken\", \"Amma is allergic to peanuts\", \"I'm vegetarian on Tuesdays\".", color = Muted, fontSize = 13.sp)
+private fun SegmentedTabs(selected: MyNilaTab, modifier: Modifier = Modifier, onSelect: (MyNilaTab) -> Unit) {
+    Row(modifier.fillMaxWidth().clip(RoundedCornerShape(50)).background(Panel).padding(4.dp)) {
+        MyNilaTab.entries.forEach { t ->
+            val on = t == selected
+            Row(
+                Modifier.weight(1f).clip(RoundedCornerShape(50)).background(if (on) SelectedSegment else Color.Transparent)
+                    .clickable { onSelect(t) }.padding(vertical = 10.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (on) Icon(painterResource(LucideR.drawable.lucide_ic_check), null, tint = Lime, modifier = Modifier.size(14.dp))
+                Text(t.label, color = if (on) Lime else Muted, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(start = if (on) 5.dp else 0.dp))
+            }
         }
-        return
     }
-    factsByPerson(facts).forEach { (about, known) ->
-        Surface(color = CardInk, shape = RoundedCornerShape(CardRadius), modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(36.dp).background(Panel, CircleShape), contentAlignment = Alignment.Center) {
-                        Text(aboutLabel(about).take(1), color = Lime, fontWeight = FontWeight.Bold)
-                    }
-                    Text(aboutLabel(about), color = Paper, fontWeight = FontWeight.Bold, fontSize = 17.sp, modifier = Modifier.padding(start = 12.dp))
+}
+
+/** What the bottom sheet is open on: an existing fact, a new one for [about], or the user's name. */
+private data class SheetTarget(val fact: MemoryFact?, val about: String, val isName: Boolean = false)
+
+@Composable
+private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit, onEditFact: (String, String) -> Unit, onAddFact: (String, String) -> Unit, onForgetAll: () -> Unit) {
+    var sheet by remember { mutableStateOf<SheetTarget?>(null) }
+    val name = userName(facts)
+    val nameFact = facts.firstOrNull(::isNameFact)
+    val shown = facts.filterNot(::isNameFact)
+    val people = factsByPerson(shown).toMutableList().also { if (it.none { p -> p.first == ME }) it.add(0, ME to emptyList()) }
+    if (shown.isEmpty() && name == null) {
+        EmptyState(
+            MascotMood.Listening,
+            "Nothing yet. Tell me in chat, like \"my wife loves butter chicken\".",
+            "Add something NILA should know",
+            onAction = { sheet = SheetTarget(null, ME) },
+        )
+    } else {
+        people.forEach { (about, known) ->
+            val isMe = about == ME
+            val title = if (isMe) name ?: "You" else aboutLabel(about)
+            Row(
+                Modifier.fillMaxWidth().padding(top = 8.dp).then(if (isMe) Modifier.clip(RoundedCornerShape(12.dp)).clickable { sheet = SheetTarget(nameFact, ME, isName = true) } else Modifier),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(AvatarSize).background(if (isMe) Lime else CardInk, CircleShape), contentAlignment = Alignment.Center) {
+                    Text(title.take(1).uppercase(), color = if (isMe) Ink else Paper, fontWeight = FontWeight.Bold, fontSize = 17.sp)
                 }
-                known.forEach { fact ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(fact.text, color = Paper, fontSize = 15.sp)
-                            Text(fact.kind.label, color = Muted, fontSize = 12.sp)
-                        }
-                        TextAction("Forget", onClick = { onForgetFact(fact.id) }, color = Muted)
-                    }
+                Column(Modifier.weight(1f).padding(start = AvatarGap)) {
+                    Text(title, color = Paper, fontWeight = FontWeight.Bold, fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text((if (isMe) "You · " else "") + knownCount(known.size), color = Muted, fontSize = 13.sp, maxLines = 1)
+                }
+            }
+            known.forEach { fact -> FactRow(fact) { sheet = SheetTarget(fact, about) } }
+            AddRow { sheet = SheetTarget(null, about) }
+        }
+        ForgetEverything(factCount = shown.size, peopleCount = people.count { it.second.isNotEmpty() }, onForgetAll = onForgetAll)
+    }
+    sheet?.let { target ->
+        FactSheet(
+            target,
+            onDismiss = { sheet = null },
+            onSave = { text ->
+                when {
+                    target.isName -> if (target.fact != null) onEditFact(target.fact.id, NAME_PREFIX + text) else onAddFact(NAME_PREFIX + text, ME)
+                    target.fact != null -> onEditFact(target.fact.id, text)
+                    else -> onAddFact(text, target.about)
+                }
+                sheet = null
+            },
+            onForget = { id -> onForgetFact(id); sheet = null },
+        )
+    }
+}
+
+@Composable
+private fun FactRow(fact: MemoryFact, onClick: () -> Unit) {
+    val tag = factTag(fact.kind)
+    Column(
+        Modifier.fillMaxWidth().heightIn(min = RowMinHeight).clickable(onClick = onClick).padding(start = AvatarSize + AvatarGap, top = 10.dp, bottom = 10.dp),
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(factLine(fact.text), color = Paper, fontSize = 16.sp, lineHeight = 21.sp)
+        if (tag != null) {
+            val color = if (fact.kind == MemoryKind.Allergy) Orange else Muted
+            Row(Modifier.padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                val icon = if (fact.kind == MemoryKind.Allergy) LucideR.drawable.lucide_ic_triangle_alert else LucideR.drawable.lucide_ic_leaf
+                Icon(painterResource(icon), contentDescription = null, tint = color, modifier = Modifier.size(13.dp))
+                Text(tag, color = color, fontSize = 12.sp, modifier = Modifier.padding(start = 5.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun AddRow(onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = RowMinHeight).clickable(onClick = onClick).padding(start = AvatarSize + AvatarGap),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(painterResource(LucideR.drawable.lucide_ic_plus), contentDescription = null, tint = Lime, modifier = Modifier.size(18.dp))
+        Text("Add something NILA should know", color = Lime, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 10.dp))
+    }
+}
+
+/** A mascot, one short line and at most one action: what a tab shows before it has anything. */
+@Composable
+internal fun EmptyState(mood: MascotMood, line: String, action: String? = null, onAction: () -> Unit = {}, note: String? = null) {
+    Column(Modifier.fillMaxWidth().padding(top = 32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        NilaMascot(mood = mood, size = EmptyMascotSize)
+        Text(line, color = Paper, fontSize = 16.sp, lineHeight = 22.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 12.dp))
+        action?.let { PrimaryAction(it, onAction) }
+        note?.let { Text(it, color = Muted, fontSize = 12.sp, lineHeight = 17.sp, textAlign = TextAlign.Center) }
+    }
+}
+
+/** A quiet link at the bottom; it asks before anything is cleared. */
+@Composable
+private fun ForgetEverything(factCount: Int, peopleCount: Int, onForgetAll: () -> Unit) {
+    var asking by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        TextAction("Forget everything", onClick = { asking = !asking }, color = Muted)
+        if (asking) {
+            NilaCard(color = CommitInk) {
+                Text("Forget $factCount ${if (factCount == 1) "fact" else "facts"} about $peopleCount ${if (peopleCount == 1) "person" else "people"}?", color = Paper, fontWeight = FontWeight.Bold)
+                Text("NILA won't remember any of it. This can't be undone.", color = Muted, fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TextAction("Keep it", onClick = { asking = false }, color = Paper)
+                    TextAction("Forget everything", onClick = { asking = false; onForgetAll() }, color = Orange)
                 }
             }
         }
@@ -261,40 +371,77 @@ private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit, o
     }, color = Orange)
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FactSheet(target: SheetTarget, onDismiss: () -> Unit, onSave: (String) -> Unit, onForget: (String) -> Unit) {
+    val start = if (target.isName) target.fact?.let { userName(listOf(it)) }.orEmpty() else target.fact?.text.orEmpty()
+    var text by remember(target) { mutableStateOf(start) }
+    val title = when {
+        target.isName -> "Your name"
+        target.fact != null -> "What NILA knows"
+        else -> "Add something NILA should know"
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = CardInk, contentColor = Paper) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = ScreenGutter).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            SerifTitle(title, size = 24.sp)
+            target.fact?.takeIf { !target.isName }?.let { Text(it.text, color = Muted, fontSize = 14.sp, lineHeight = 20.sp) }
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                placeholder = { Text(if (target.isName) "Your name" else "For example: Amma likes filter coffee", color = Muted) },
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Paper, unfocusedTextColor = Paper, focusedBorderColor = Lime, unfocusedBorderColor = Stroke, cursorColor = Lime),
+            )
+            PrimaryAction("Save", onClick = { onSave(text.trim()) }, enabled = text.isNotBlank())
+            target.fact?.takeIf { !target.isName }?.let {
+                TextAction("Forget this", onClick = { onForget(it.id) }, color = Orange, modifier = Modifier.align(Alignment.CenterHorizontally))
+            }
+        }
+    }
+}
+
 // ---- Health ------------------------------------------------------------------
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HealthTab(
     records: List<HealthRecord>,
     reading: Boolean,
     problem: String?,
-    onUpload: () -> Unit,
     onPhoto: () -> Unit,
+    onPdf: () -> Unit,
+    onCamera: () -> Unit,
     onOpen: (HealthRecord) -> Unit,
 ) {
+    var adding by remember { mutableStateOf(false) }
+    if (adding) {
+        ModalBottomSheet(onDismissRequest = { adding = false }, containerColor = CardInk, contentColor = Paper) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = ScreenGutter).padding(bottom = 24.dp)) {
+                SerifTitle("Add a report", size = 24.sp, modifier = Modifier.padding(bottom = 8.dp))
+                SheetChoice(LucideR.drawable.lucide_ic_image, "Photo") { adding = false; onPhoto() }
+                SheetChoice(LucideR.drawable.lucide_ic_file_text, "PDF") { adding = false; onPdf() }
+                SheetChoice(LucideR.drawable.lucide_ic_camera, "Camera") { adding = false; onCamera() }
+            }
+        }
+    }
     if (reading) {
         NilaCard {
-            SectionLabel("Reading your report", color = Lime)
+            CardLabel("Reading your report", color = Lime)
             Text("NILA is reading it on this phone. Nothing is sent online.", color = Paper, fontSize = 14.sp)
         }
+    } else if (records.isEmpty()) {
+        EmptyState(MascotMood.Sleeping, "No health records yet. Add a report and NILA files it with its date and values.", "Add a report", onAction = { adding = true }, note = HEALTH_DISCLAIMER)
     } else {
-        PrimaryAction("Upload a report photo or PDF", onClick = onUpload)
-        TextAction("Take a photo of the report", onClick = onPhoto)
+        PrimaryAction("Add a report", onClick = { adding = true })
     }
     problem?.let { Text(it, color = Orange, fontSize = 13.sp) }
-    Text("NILA reads the report and saves what it says. It is not a doctor: check every value with yours.", color = Muted, fontSize = 12.sp)
-    if (records.isEmpty() && !reading) {
-        NilaCard {
-            Text("No health records yet", color = Paper, fontWeight = FontWeight.Bold)
-            Text("Upload last week's report and NILA will file it with its date, hospital and values.", color = Muted, fontSize = 13.sp)
-        }
-        return
-    }
+    if (records.isEmpty()) return
     records.forEach { record ->
         Surface(color = CardInk, shape = RoundedCornerShape(CardRadius), modifier = Modifier.fillMaxWidth().clickable { onOpen(record) }) {
             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    SectionLabel(record.kind.label + if (record.about != ME) " · ${aboutLabel(record.about)}" else "", color = Lime)
+                    CardLabel(record.kind.label + if (record.about != ME) " · ${aboutLabel(record.about)}" else "", color = Lime)
                     Text(record.title, color = Paper, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(
                         listOf(eventWhen(record.date, null).substringBefore(","), record.place).filter(String::isNotBlank).joinToString(" · "),
@@ -307,7 +454,23 @@ private fun HealthTab(
             }
         }
     }
+    Text(HEALTH_DISCLAIMER, color = Muted, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
 }
+
+private const val HEALTH_DISCLAIMER = "NILA reads the report and saves what it says. It is not a doctor: check every value with yours."
+
+@Composable
+private fun SheetChoice(icon: Int, label: String, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = RowMinHeight).clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
+        Icon(painterResource(icon), contentDescription = null, tint = Muted, modifier = Modifier.size(20.dp))
+        Text(label, color = Paper, fontSize = 16.sp, modifier = Modifier.padding(start = 16.dp))
+    }
+}
+
+/** A small sentence-case heading for a card or section. */
+@Composable
+internal fun CardLabel(text: String, modifier: Modifier = Modifier, color: Color = Muted) =
+    Text(text, color = color, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = modifier)
 
 @Composable
 private fun HealthDetail(
