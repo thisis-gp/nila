@@ -220,6 +220,7 @@ class ReminderReceiver : BroadcastReceiver() {
 class ReminderBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action in RESCHEDULE_ON) NilaReminders(context).rescheduleAll()
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED) StepSampleReceiver.schedule(context)
     }
 
     private companion object {

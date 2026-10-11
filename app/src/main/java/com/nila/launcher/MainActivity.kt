@@ -423,7 +423,18 @@ private fun NilaApp(resumeVersion: Int) {
         scope.launch {
             delay(550) // a visible thinking beat, so a reply doesn't feel like a canned instant lookup
             val normalized = prompt.lowercase()
-            val response = if (normalized.contains("what do you remember")) {
+            val response = if (asksForSteps(prompt)) {
+                val today = java.time.LocalDate.now()
+                val store = FitnessStore(context)
+                val baselineExists = store.steps()?.day == today
+                if (hasStepPermission(context)) sampleSteps(context)
+                val state = store.steps()
+                StepsAnswer(
+                    today = if (!baselineExists || !hasStepPermission(context)) null else stepsToday(state)?.takeIf { state?.day == today },
+                    week = lastDays(state, today),
+                    trackingStarted = hasStepPermission(context) && !baselineExists,
+                )
+            } else if (normalized.contains("what do you remember")) {
                 NilaResponse.Text(memorySummary(facts))
             } else if (Regex("""\b(show|read|list|open|what are)\b.*\bnotes?\b""").containsMatchIn(prompt.lowercase())) {
                 NilaResponse.Text(notesSummary(context))
@@ -994,6 +1005,30 @@ private fun ResponseView(
             action = "Upload the report",
         ) { MyNilaRequests.pending = response }
         is PhotoSearch -> PhotoSearchCard(response)
+        is FitnessLogged -> {
+            var saved by remember(response.entry.id) { mutableStateOf(false) }
+            NilaCard {
+                SectionLabel(if (saved) "Saved to My NILA · Fitness" else "Fitness entry", color = Lime)
+                Text(entryLine(response.entry), color = Paper, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text(eventWhen(response.entry.date, null).substringBefore(",") + " · on this phone", color = Muted, fontSize = 12.sp)
+                if (!saved) PrimaryAction("Save to Fitness", onClick = {
+                    FitnessStore(context).add(response.entry)
+                    saved = true
+                })
+            }
+        }
+        is StepsAnswer -> NilaCard {
+            SectionLabel("Steps", color = Lime)
+            Text(
+                when {
+                    response.trackingStarted -> "Step tracking started just now. Ask again later to see today's count."
+                    response.today != null -> "%,d steps today".format(response.today)
+                    else -> "NILA can't read the step counter. Allow physical activity in Settings › Phone access."
+                },
+                color = Paper, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+            )
+            if (response.week.any { it.second > 0 }) Text("Last 7 days: %,d steps".format(response.week.sumOf { it.second }), color = Muted, fontSize = 13.sp)
+        }
         is NilaResponse.Remember -> NilaCard {
             SectionLabel("Saved to My NILA", color = Lime)
             Text(

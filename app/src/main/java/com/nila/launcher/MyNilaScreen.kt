@@ -66,7 +66,7 @@ internal object MyNilaRequests {
     var pending by mutableStateOf<HealthPrompt?>(null)
 }
 
-internal enum class MyNilaTab(val label: String) { People("People"), Health("Health"), Reminders("Reminders"), Access("Phone access") }
+internal enum class MyNilaTab(val label: String) { People("People"), Health("Health"), Reminders("Reminders"), Fitness("Fitness"), Access("Phone access") }
 
 /**
  * My NILA: its own space for everything NILA knows about the user and their people, and their health
@@ -212,6 +212,7 @@ internal fun MyNilaScreen(
                     },
                     onDeleted = { open = null },
                 )
+                tab == MyNilaTab.Fitness -> FitnessTab()
                 else -> HealthTab(
                     records,
                     reading = reading,
