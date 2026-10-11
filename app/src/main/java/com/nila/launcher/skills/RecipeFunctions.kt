@@ -22,9 +22,10 @@ object RecipeFunctions {
     private const val COUNT = "count"
     private const val GROUP_BY = "groupBy"
 
-    fun evaluate(fn: JsonObject, items: List<Item>, clock: Clock): FnValue {
+    /** [back] evaluates over the period that many periods ago, for "less than September" comparisons. */
+    fun evaluate(fn: JsonObject, items: List<Item>, clock: Clock, back: Int = 0): FnValue {
         val name = fn.string("fn").orEmpty()
-        val inPeriod = inPeriod(items, fn.string("period"), clock)
+        val inPeriod = inPeriod(items, fn.string("period"), clock, back)
         val field = fn.string("field")
         return when (name) {
             COUNT -> FnValue.Number(inPeriod.size.toDouble())
@@ -34,20 +35,21 @@ object RecipeFunctions {
         }
     }
 
-    /** Items dated within the current [period]; no period (or "all") keeps every item, dated or not. */
-    fun inPeriod(items: List<Item>, period: String?, clock: Clock): List<Item> {
+    /** Items dated within the current [period], or [back] periods earlier; no period (or "all") keeps every item. */
+    fun inPeriod(items: List<Item>, period: String?, clock: Clock, back: Int = 0): List<Item> {
         val today = LocalDate.now(clock)
-        val start = when (period) {
-            "day" -> today
-            "week" -> today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-            "month" -> today.withDayOfMonth(1)
-            "year" -> today.withDayOfYear(1)
+        val shift = back.toLong()
+        val (start, end) = when (period) {
+            "day" -> today.minusDays(shift).let { it to it }
+            "week" -> today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)).minusWeeks(shift).let { it to it.plusWeeks(1).minusDays(1) }
+            "month" -> today.withDayOfMonth(1).minusMonths(shift).let { it to it.plusMonths(1).minusDays(1) }
+            "year" -> today.withDayOfYear(1).minusYears(shift).let { it to it.plusYears(1).minusDays(1) }
             else -> return items
         }
         return items.filter { item ->
             val millis = item.number(DATE_FIELD)?.toLong() ?: return@filter false
             val day = Instant.ofEpochMilli(millis).atZone(clock.zone).toLocalDate()
-            !day.isBefore(start) && !day.isAfter(today)
+            !day.isBefore(start) && !day.isAfter(end)
         }
     }
 
