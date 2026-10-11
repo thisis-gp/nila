@@ -149,6 +149,14 @@ private fun NilaApp(resumeVersion: Int) {
     // Free both native models when this screen goes away, so recreating it never leaves old engines open.
     DisposableEffect(brain) { onDispose { brain.close() } }
     val turns = remember { mutableStateListOf<Turn>() }
+    // Any reminder, not only the monthly card's, asks for notifications the first time: a silent reminder is no reminder.
+    val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) turns += Turn("My NILA", NilaResponse.Text("Notifications are off for NILA, so reminders can't show. Turn them on in Android settings."))
+    }
+    fun addReminder(reminder: NilaReminder) {
+        reminders.add(reminder)
+        if (needsNotificationPermission(context)) askNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+    }
     var input by remember { mutableStateOf("") }
     val installedApps = remember(context, resumeVersion) { loadInstalledApps(context) }
     val launcherPreferences = remember(context) { context.getSharedPreferences("nila_launcher", Context.MODE_PRIVATE) }
@@ -588,7 +596,8 @@ private fun NilaApp(resumeVersion: Int) {
                                 health = health,
                                 readReport = brain::readReport,
                                 // A report that asks for a follow-up becomes a My NILA reminder on that day.
-                                onSaved = { record -> followUpReminder(record)?.let(reminders::add) },
+                                // No follow-up (any more): its reminder goes too.
+                                onSaved = { record -> followUpReminder(record)?.let(::addReminder) ?: reminders.remove("followup-${record.id}") },
                                 onDeleted = { record -> reminders.remove("followup-${record.id}") },
                                 reminders = reminders,
                                 draft = MyNilaRequests.pending,
@@ -690,11 +699,14 @@ private fun MonthlyReminderCard(reminder: MonthlyReminder, context: Context, onR
         NilaReminders(context).add(monthlyReminderOf(reminder, java.time.LocalDateTime.now()))
         saved = true
         onResult("Done. My NILA will remind you every month on ${dayLabel(reminder)}. See it in My NILA › Reminders.")
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) ask.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        if (needsNotificationPermission(context)) ask.launch(android.Manifest.permission.POST_NOTIFICATIONS)
     }
 }
+
+/** Android 13 and newer need permission before any notification shows. */
+internal fun needsNotificationPermission(context: Context) =
+    android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+        ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
 private val MascotTapSize = 40.dp
 private val HeaderMascotSize = 34.dp
 private val WorkingMascotSize = 28.dp

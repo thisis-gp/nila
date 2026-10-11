@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import java.time.LocalDateTime
 import java.time.YearMonth
 import java.time.ZoneId
@@ -17,7 +18,8 @@ import org.json.JSONObject
 
 /**
  * A My NILA reminder: once on [at] (a health follow-up), or every month on [monthlyDay] at [at]'s time
- * (the electricity bill). A day after the 28th repeats on the last day of the month.
+ * (the electricity bill). A day the month doesn't have is its last day: the 30th is the 28th in February.
+ * [due] is when the alarm is set to fire, so a reminder missed while the phone was off fires at the next start.
  */
 data class NilaReminder(
     val id: String,
@@ -25,15 +27,13 @@ data class NilaReminder(
     val text: String,
     val at: LocalDateTime,
     val monthlyDay: Int? = null,
+    val due: LocalDateTime? = null,
 )
-
-private const val LAST_SAFE_DAY = 28
 
 /** The next time a reminder fires after [now]: [NilaReminder.at] itself, or the next month's day for a monthly one. */
 internal fun nextFiring(reminder: NilaReminder, now: LocalDateTime): LocalDateTime? {
     val day = reminder.monthlyDay ?: return reminder.at.takeIf { it.isAfter(now) }
-    fun inMonth(month: YearMonth) =
-        (if (day > LAST_SAFE_DAY) month.atEndOfMonth() else month.atDay(minOf(day, month.lengthOfMonth()))).atTime(reminder.at.toLocalTime())
+    fun inMonth(month: YearMonth) = month.atDay(minOf(day, month.lengthOfMonth())).atTime(reminder.at.toLocalTime())
     val thisMonth = inMonth(YearMonth.from(now))
     return if (thisMonth.isAfter(now)) thisMonth else inMonth(YearMonth.from(now).plusMonths(1))
 }
@@ -71,48 +71,60 @@ internal class NilaReminders(context: Context) {
 
     fun all(): List<NilaReminder> = prefs.getString(LIST, null)?.let(::decode).orEmpty().sortedBy { nextFiring(it, LocalDateTime.now()) ?: it.at }
 
-    fun add(reminder: NilaReminder): List<NilaReminder> {
-        val list = all().filterNot { it.id == reminder.id } + reminder
-        write(list)
-        schedule(reminder)
-        return list
-    }
+    fun add(reminder: NilaReminder): List<NilaReminder> =
+        (all().filterNot { it.id == reminder.id } + schedule(reminder)).also(::write)
 
     fun remove(id: String): List<NilaReminder> {
         alarms().cancel(pending(id))
         return all().filterNot { it.id == id }.also(::write)
     }
 
-    /** After a restart Android has forgotten every alarm: put them all back. */
-    fun rescheduleAll() = all().forEach(::schedule)
+    /**
+     * After a restart or a clock change Android's alarms are gone or wrong: a reminder whose time passed
+     * meanwhile notifies now (once), and every reminder is set again for its next time.
+     */
+    fun rescheduleAll(now: LocalDateTime = LocalDateTime.now()) {
+        val kept = all().mapNotNull { reminder ->
+            if (missed(reminder, now)) notifyReminder(appContext, reminder)
+            if (reminder.monthlyDay == null && nextFiring(reminder, now) == null) null else schedule(reminder, now)
+        }
+        write(kept)
+    }
 
     /** Called when a reminder fires: a monthly one moves to next month, a one-off one is done. */
     fun fired(id: String) {
         val reminder = all().firstOrNull { it.id == id } ?: return
-        if (reminder.monthlyDay != null) schedule(reminder) else write(all().filterNot { it.id == id })
+        write(all().filterNot { it.id == id } + listOfNotNull(reminder.takeIf { it.monthlyDay != null }?.let { schedule(it) }))
     }
 
     fun find(id: String) = all().firstOrNull { it.id == id }
 
-    private fun schedule(reminder: NilaReminder) {
-        val next = nextFiring(reminder, LocalDateTime.now()) ?: return
+    /** Sets the alarm for the reminder's next time and returns it with that time as [NilaReminder.due]. */
+    private fun schedule(reminder: NilaReminder, now: LocalDateTime = LocalDateTime.now()): NilaReminder {
+        val next = nextFiring(reminder, now) ?: return reminder.copy(due = null)
         val millis = next.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
         alarms().setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, millis, pending(reminder.id))
+        return reminder.copy(due = next)
     }
 
     private fun alarms() = appContext.getSystemService(AlarmManager::class.java)
 
+    // Each reminder's intent has its own data URI, so two reminders never share a PendingIntent
+    // (a request code from hashCode could collide and one alarm would replace the other).
     private fun pending(id: String) = PendingIntent.getBroadcast(
         appContext,
-        id.hashCode(),
-        Intent(appContext, ReminderReceiver::class.java).setAction(ACTION).putExtra(EXTRA_ID, id),
+        0,
+        Intent(appContext, ReminderReceiver::class.java).setAction(ACTION).setData(Uri.parse("nila-reminder:$id")).putExtra(EXTRA_ID, id),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
     private fun write(list: List<NilaReminder>) {
         prefs.edit().putString(LIST, JSONArray().apply {
             list.forEach { r ->
-                put(JSONObject().put("id", r.id).put("title", r.title).put("text", r.text).put("at", r.at.toString()).put("monthlyDay", r.monthlyDay ?: 0))
+                put(
+                    JSONObject().put("id", r.id).put("title", r.title).put("text", r.text).put("at", r.at.toString())
+                        .put("monthlyDay", r.monthlyDay ?: 0).put("due", r.due?.toString() ?: ""),
+                )
             }
         }.toString()).apply()
     }
@@ -122,7 +134,10 @@ internal class NilaReminders(context: Context) {
         return (0 until list.length()).mapNotNull { i ->
             val o = list.optJSONObject(i) ?: return@mapNotNull null
             runCatching {
-                NilaReminder(o.getString("id"), o.optString("title"), o.optString("text"), LocalDateTime.parse(o.getString("at")), o.optInt("monthlyDay").takeIf { it in 1..31 })
+                NilaReminder(
+                    o.getString("id"), o.optString("title"), o.optString("text"), LocalDateTime.parse(o.getString("at")),
+                    o.optInt("monthlyDay").takeIf { it in 1..31 }, o.optString("due").takeIf { it.isNotBlank() }?.let(LocalDateTime::parse),
+                )
             }.getOrNull()
         }
     }
@@ -136,36 +151,56 @@ internal class NilaReminders(context: Context) {
     }
 }
 
-/** Shows a My NILA reminder as a notification; tapping it opens NILA. */
+/** A reminder whose alarm time passed without it firing (the phone was off, or the clock moved forward). */
+internal fun missed(reminder: NilaReminder, now: LocalDateTime): Boolean = reminder.due?.let { !it.isAfter(now) } ?: false
+
+/**
+ * Shows a My NILA reminder as a notification; tapping it opens NILA. The lock screen shows only
+ * "My NILA reminder": the title can be health details.
+ */
+internal fun notifyReminder(context: Context, reminder: NilaReminder) {
+    val manager = context.getSystemService(NotificationManager::class.java) ?: return
+    manager.createNotificationChannel(NotificationChannel(NilaReminders.CHANNEL, "My NILA reminders", NotificationManager.IMPORTANCE_HIGH))
+    val open = PendingIntent.getActivity(
+        context,
+        0,
+        Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT),
+        PendingIntent.FLAG_IMMUTABLE,
+    )
+    val onLockScreen = Notification.Builder(context, NilaReminders.CHANNEL)
+        .setSmallIcon(android.R.drawable.ic_popup_reminder)
+        .setContentTitle("My NILA reminder")
+        .build()
+    val notification = Notification.Builder(context, NilaReminders.CHANNEL)
+        .setSmallIcon(android.R.drawable.ic_popup_reminder)
+        .setContentTitle(reminder.title)
+        .setContentText(reminder.text)
+        .setVisibility(Notification.VISIBILITY_PRIVATE)
+        .setPublicVersion(onLockScreen)
+        .setContentIntent(open)
+        .setAutoCancel(true)
+        .build()
+    runCatching { manager.notify(reminder.id, 0, notification) }
+}
+
 class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val reminders = NilaReminders(context)
         val id = intent.getStringExtra(NilaReminders.EXTRA_ID) ?: return
         val reminder = reminders.find(id) ?: return
-        val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        manager.createNotificationChannel(NotificationChannel(NilaReminders.CHANNEL, "My NILA reminders", NotificationManager.IMPORTANCE_HIGH))
-        val open = PendingIntent.getActivity(
-            context,
-            0,
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
-        val notification = Notification.Builder(context, NilaReminders.CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_popup_reminder)
-            .setContentTitle(reminder.title)
-            .setContentText(reminder.text)
-            .setContentIntent(open)
-            .setAutoCancel(true)
-            .build()
-        runCatching { manager.notify(id.hashCode(), notification) }
+        notifyReminder(context, reminder)
         reminders.fired(id)
     }
 }
 
-/** Puts My NILA's reminders back after the phone restarts. */
+/** Puts My NILA's reminders back after the phone restarts or its clock or time zone changes. */
 class ReminderBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED) NilaReminders(context).rescheduleAll()
+        if (intent.action in RESCHEDULE_ON) NilaReminders(context).rescheduleAll()
+    }
+
+    private companion object {
+        val RESCHEDULE_ON = setOf(Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED)
     }
 }
 

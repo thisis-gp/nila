@@ -22,7 +22,7 @@ fun spokenText(response: NilaResponse): String? = when (response) {
     is NilaResponse.NeedsConfirmation -> "Please check the details and confirm. Nothing happens until you do."
     is Timer -> "Timer started."
     is CalendarEvent -> "${response.title} is ready. Tap Add to calendar to save it."
-    is MonthlyReminder -> "${response.title}, every month. Tap Add to calendar to save it."
+    is MonthlyReminder -> "${response.title}, every month. Tap Remind me every month to turn it on."
     is Call -> "Tap Call to open the dialer for ${response.who}."
     is Message -> "Tap Write to open Messages to ${response.who}."
     else -> null

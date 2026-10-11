@@ -19,6 +19,16 @@ class NilaRemindersTest {
         // The 31st means the last day, so February is not skipped.
         val rent = bill.copy(monthlyDay = 31)
         assertEquals(LocalDateTime.of(2027, 2, 28, 10, 0), nextFiring(rent, LocalDateTime.of(2027, 2, 1, 0, 0)))
+        // The 30th is the 30th in a 31-day month, not the 31st.
+        assertEquals(LocalDateTime.of(2027, 5, 30, 10, 0), nextFiring(bill.copy(monthlyDay = 30), LocalDateTime.of(2027, 5, 1, 0, 0)))
+    }
+
+    @Test
+    fun aReminderDueWhileThePhoneWasOffIsMissed() {
+        val bill = NilaReminder("b", "Pay the electricity bill", "", LocalDateTime.of(2026, 11, 5, 10, 0), monthlyDay = 5, due = LocalDateTime.of(2026, 11, 5, 10, 0))
+        assertEquals(true, missed(bill, LocalDateTime.of(2026, 11, 5, 18, 0)))
+        assertEquals(false, missed(bill, LocalDateTime.of(2026, 11, 5, 9, 0)))
+        assertEquals(false, missed(bill.copy(due = null), LocalDateTime.of(2026, 11, 5, 18, 0)))
     }
 
     @Test
