@@ -57,6 +57,13 @@ class ZeptoCardsTest {
         // A 6-digit flat number starting with 0 is not a pincode.
         val flat = SavedAddress("z4", "home", "Flat 012345, Vishnu Homes, Kondapur, Hyderabad 500084")
         assertEquals(flat, matchAddress(FoodAddress("s9", "Home", "Flat 012345, Vishnu Homes, Kondapur, Hyderabad 500084"), listOf(flat)))
+        // A neighbouring flat can share every other word and the pincode, but is still a different address.
+        assertNull(
+            matchAddress(
+                FoodAddress("s9", "Home", "Flat 503, Vishnu Homes, Kondapur, Hyderabad 500084"),
+                listOf(SavedAddress("z5", "home", "Flat 504, Vishnu Homes, Kondapur, Hyderabad 500084")),
+            ),
+        )
     }
 
     @Test

@@ -662,6 +662,7 @@ private fun AgentSpace(
     onVoiceRequest: (String) -> Unit,
     onListenStart: () -> Unit,
     onClose: () -> Unit,
+    onOpenCart: (() -> Unit)?,
     context: Context,
     prepare: (Choice) -> NilaResponse.Confirmation,
     confirm: (String) -> Unit,

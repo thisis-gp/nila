@@ -84,13 +84,35 @@ internal fun paiseText(paise: Long) = if (paise % 100 == 0L) "₹${paise / 100}"
 /** Sum of a Zepto cart in paise. */
 internal fun cartTotalPaise(items: List<CartItem>) = items.sumOf { it.priceInPaisa.toLong() * it.quantity }
 
+/** The best value across providers, normalized per litre or kilo when pack sizes differ. */
+internal fun cheapestLine(item: String, groups: List<ProductProviderGroup>): String {
+    val offers = groups.flatMap { group -> group.items.map { group.providerName to it } }
+    fun rupees(product: PickableProduct) = product.price.filter { it.isDigit() || it == '.' }.toDoubleOrNull()
+    val perUnit = offers.mapNotNull { (provider, product) ->
+        val price = rupees(product) ?: return@mapNotNull null
+        val (unit, amount) = normalizedSize(product.detail) ?: return@mapNotNull null
+        Triple(provider, product, price / amount * 1_000 to unit)
+    }
+    perUnit.minByOrNull { it.third.first }?.let { (provider, product, value) ->
+        val unit = if (value.second == "ml") "litre" else "kg"
+        val perUnitPrice = "%.0f".format(value.first)
+        return "Best value for \"$item\": $provider · ₹$perUnitPrice per $unit (${product.detail.substringBefore(" · ")} at ${product.price})"
+    }
+    val cheapest = offers.minByOrNull { (_, product) -> rupees(product) ?: Double.MAX_VALUE }
+        ?: return "Options for \"$item\" — tap + to add:"
+    return "Cheapest for \"$item\": ${cheapest.first} · ${cheapest.second.price}"
+}
+
 /** The same Zepto order: every line and quantity unchanged. */
 internal fun sameZeptoCart(a: List<CartItem>, b: List<CartItem>) =
     a.associate { it.productVariantId to it.quantity } == b.associate { it.productVariantId to it.quantity }
 
 // An Indian pincode never starts with 0; the last one in a line is the pincode, not a flat or plot number.
 private val pincode = Regex("""\b[1-9]\d{5}\b""")
+private val addressNumber = Regex("""\b\d+[a-z]?\b""", RegexOption.IGNORE_CASE)
 private fun pincodeOf(line: String) = pincode.findAll(line).lastOrNull()?.value
+private fun addressNumberOf(line: String) = addressNumber.findAll(line).map { it.value.lowercase() }
+    .firstOrNull { it != pincodeOf(line) }
 private fun words(line: String) = line.lowercase().split(Regex("""[^\p{L}\p{N}]+""")).filter { it.length > 1 }.toSet()
 
 /**
@@ -106,7 +128,10 @@ internal fun matchAddress(nila: FoodAddress, zepto: List<SavedAddress>): SavedAd
         .map { saved -> saved to (words(saved.addressLine) intersect nilaWords).size }
         .filter { (saved, shared) ->
             val savedPin = pincodeOf(saved.addressLine)
-            if (pin != null && savedPin != null) pin == savedPin && shared * 2 >= nilaWords.size else shared * 5 >= nilaWords.size * 4
+            val numbersMatch = addressNumberOf(nila.line)?.let { number ->
+                addressNumberOf(saved.addressLine)?.let { it == number } ?: true
+            } ?: true
+            numbersMatch && if (pin != null && savedPin != null) pin == savedPin && shared * 2 >= nilaWords.size else shared * 5 >= nilaWords.size * 4
         }
         .maxByOrNull { (_, shared) -> shared }
         ?.first
@@ -170,7 +195,7 @@ internal class GroceryFlow(
      */
     suspend fun start(item: String): NilaResponse = step {
         val nila = instamart.nilaAddress()
-        address?.takeIf { nila?.id == nilaAddress?.id }?.let { return@step products(it, item) }
+        address?.takeIf { nila == nilaAddress }?.let { return@step products(it, item) }
         nilaAddress = nila
         val saved = zepto { it.listSavedAddresses() }
         val match = nila?.let { matchAddress(it, saved) ?: addToZepto(it) }
@@ -242,11 +267,8 @@ internal class GroceryFlow(
         )
         instamart.cart() // syncs Instamart's steppers with its real cart
         val instamartGroup = instamart.group(item, instamart.search(parsed.searchQuery, parsed.desiredSize), scope, onProblem)
-        val cheapest = listOf(zeptoGroup, instamartGroup)
-            .flatMap { group -> group.items.map { group.providerName to it } }
-            .minByOrNull { (_, product) -> product.price.filter { it.isDigit() || it == '.' }.toDoubleOrNull() ?: Double.MAX_VALUE }
-            ?.let { (provider, product) -> "Cheapest: $provider · ${product.price}" }
-        return GroceryCard.Products(at, item, listOf(zeptoGroup, instamartGroup), cheapest).also { lastProducts = it }
+        val groups = listOf(zeptoGroup, instamartGroup)
+        return GroceryCard.Products(at, item, groups, cheapestLine(item, groups)).also { lastProducts = it }
     }
 
     suspend fun cart(): NilaResponse = step { loadCart() }
