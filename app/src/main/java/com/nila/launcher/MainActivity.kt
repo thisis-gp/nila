@@ -58,6 +58,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -136,7 +137,7 @@ private fun NilaApp(resumeVersion: Int) {
     // Gemma 4 E2B and FunctionGemma load in the background; until then NILA answers with its rules.
     // What the user asked NILA to remember; read by chat, food, groceries and the morning suggestion.
     val memory = remember { NilaMemory(context.applicationContext) }
-    var facts by remember { mutableStateOf(memory.facts()) }
+    val facts by memory.factsFlow.collectAsState()
     val health = remember { HealthStore(context.applicationContext) }
     LaunchedEffect(health) { withContext(Dispatchers.IO) { health.sweep() } }
     val reminders = remember { NilaReminders(context.applicationContext) }
@@ -268,7 +269,7 @@ private fun NilaApp(resumeVersion: Int) {
             override fun track(orderId: String?) =
                 runFood("Track order") { foodFlow.track(orderId) }
             override fun rememberDish(dish: String) {
-                facts = memory.save("I like $dish", MemoryKind.Preference)
+                scope.launch { memory.save("I like $dish", MemoryKind.Preference) }
             }
         }
     }
@@ -460,7 +461,7 @@ private fun NilaApp(resumeVersion: Int) {
                     else -> performNow(context, routed)
                 }
             }
-            if (response is NilaResponse.Remember) facts = memory.save(response.fact, response.kind, response.about)
+            if (response is NilaResponse.Remember) memory.save(response.fact, response.kind, response.about)
             turns[pendingIndex] = Turn(prompt, response)
             if (speakReply) spokenText(response)?.let(lakshmi::speak)
             speakReply = false
@@ -469,9 +470,15 @@ private fun NilaApp(resumeVersion: Int) {
             delay(900) // the dock head visibly "speaks" for a beat right after a reply lands
             justReplied = false
             // After the reply is on screen: keep any personal detail the message carried, and say so.
-            if (response !is NilaResponse.Remember) brain.learn(prompt)?.let { learned ->
-                facts = memory.save(learned.fact, learned.kind, learned.about)
-                turns += Turn("My NILA", learned)
+            val learned = if (response !is NilaResponse.Remember) brain.learn(prompt) else null
+            learned?.let {
+                memory.save(it.fact, it.kind, it.about)
+                turns += Turn("My NILA", it)
+            }
+            // Someone close came up and isn't linked to a contact yet: ask once, in chat.
+            val named = listOfNotNull((response as? NilaResponse.Remember)?.about, learned?.about, mentionedPerson(prompt)).filter { it != ME }.distinct()
+            named.firstOrNull { memory.claimContactAsk(it) }?.let { about ->
+                turns += Turn("My NILA", LinkContact(about, withContext(Dispatchers.IO) { suggestContacts(context, about) }))
             }
         }
     }
@@ -594,7 +601,7 @@ private fun NilaApp(resumeVersion: Int) {
                                 grocery = groceryActions,
                                 forget = { saved ->
                                     // Undo for an automatic save: the fact goes, and the card says so instead of offering Forget again.
-                                    facts = memory.forget(saved.fact, saved.about)
+                                    scope.launch { memory.forget(saved.fact, saved.about) }
                                     val index = turns.indexOfFirst { it.response === saved }
                                     if (index >= 0) turns[index] = turns[index].copy(response = NilaResponse.Text("Forgotten: ${saved.fact}"))
                                 },
@@ -602,8 +609,8 @@ private fun NilaApp(resumeVersion: Int) {
                             NilaScreen.Home -> Unit
                             NilaScreen.MyNila -> MyNilaScreen(
                                 facts = facts,
-                                onForgetFact = { id -> facts = memory.delete(id) },
-                                onForgetAll = { facts = memory.clear() },
+                                onForgetFact = { id -> scope.launch { memory.delete(id) } },
+                                onForgetAll = { scope.launch { memory.clear() } },
                                 health = health,
                                 readReport = brain::readReport,
                                 // A report that asks for a follow-up becomes a My NILA reminder on that day.
@@ -618,6 +625,8 @@ private fun NilaApp(resumeVersion: Int) {
                                 onOpen = ::open,
                                 onBack = ::closeOverlay,
                                 onChooseDefaultHome = ::chooseDefaultHome,
+                                onForgetFact = { id -> scope.launch { memory.delete(id) } },
+                                onForgetAll = { scope.launch { memory.clear() } },
                                 accounts = accountsRevision.let { listOf(
                                     ServiceAccount(
                                         name = "Swiggy",
@@ -1055,6 +1064,7 @@ private fun ResponseView(
             )
             if (response.week.any { it.second > 0 }) Text("Last 7 days: %,d steps".format(response.week.sumOf { it.second }), color = Muted, fontSize = 13.sp)
         }
+        is LinkContact -> LinkContactCard(response, context)
         is NilaResponse.Remember -> NilaCard {
             SectionLabel("Saved to My NILA", color = Lime)
             Text(

@@ -72,7 +72,7 @@ internal class InstamartShop(private val context: Context) {
         val address = addressId() ?: return emptyList()
         val result = call("search_products", JSONObject().put("query", query).put("addressId", address)) ?: return emptyList()
         val wanted = desiredSize?.let(::normalizedSize)
-        val facts = memory.facts()
+        val facts = memory.loadFacts()
         return parseInstamart(result)
             .sortedWith(
                 compareByDescending<InstamartItem> { sharesPreferenceWord(it.name, facts) }.thenByDescending { item ->
