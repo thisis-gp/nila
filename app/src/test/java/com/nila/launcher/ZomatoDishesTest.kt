@@ -51,4 +51,11 @@ class ZomatoDishesTest {
         assertEquals("Zomato: $NO_ANSWER", zomatoLine(ZomatoLookup(false, ZomatoShop("X", emptyList(), NO_ANSWER)), "Butter Chicken", "₹1").text)
         assertEquals(199.5, priceRupees("₹199.50")!!, 0.0)
     }
+
+    @Test
+    fun addressFailureIsDifferentFromNoMatchingAddress() {
+        assertEquals(ZomatoAddress.Failed, addressResult(answered = false, id = null))
+        assertEquals(ZomatoAddress.Empty, addressResult(answered = true, id = null))
+        assertEquals(ZomatoAddress.Found("42"), addressResult(answered = true, id = "42"))
+    }
 }

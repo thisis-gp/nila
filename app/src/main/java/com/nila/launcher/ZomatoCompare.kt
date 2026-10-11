@@ -42,6 +42,12 @@ data class ZomatoDish(val name: String, val price: Int)
 /** The same shop on Zomato: its dishes for what the user asked, cheapest first, or why there are none ([gap]). */
 data class ZomatoShop(val name: String, val dishes: List<ZomatoDish>, val gap: String? = null)
 
+internal sealed interface ZomatoAddress {
+    data class Found(val id: String) : ZomatoAddress
+    data object Empty : ZomatoAddress
+    data object Failed : ZomatoAddress
+}
+
 /**
  * Prices the user's Swiggy cart on Zomato through Zomato's MCP server. Every step is read-only except
  * [total], which creates a Zomato cart (never checks out) and runs only from the user's tap.
@@ -58,13 +64,10 @@ internal class ZomatoCompare(private val context: Context) {
     // At most three Zomato calls at once: the dish list looks up several shops in parallel.
     private val calls = Semaphore(MAX_PARALLEL_CALLS)
     private val clientLock = Mutex()
-    /** True when the last call failed (network, sign-in), as opposed to Zomato answering with nothing. */
-    @Volatile private var lastFailed = false
-
     private suspend fun call(tool: String, args: JSONObject = JSONObject()): JSONObject? = calls.withPermit {
-        val session = ZomatoAuth.currentSession(context) ?: return@withPermit null.also { lastFailed = true }
+        val session = ZomatoAuth.currentSession(context) ?: return@withPermit null
         val c = clientLock.withLock { client ?: McpClient(ENDPOINT, session.accessToken).also { client = it } }
-        withContext(Dispatchers.IO) { c.callTool(tool, args) }.also { lastFailed = it == null }
+        withContext(Dispatchers.IO) { c.callTool(tool, args) }
     }
 
     suspend fun quote(address: FoodAddress, restaurant: FoodRestaurant, cart: FoodCartView): ZomatoComparison {
@@ -109,11 +112,11 @@ internal class ZomatoCompare(private val context: Context) {
         )
     }
 
-    private suspend fun addressIdFor(address: FoodAddress): String? = addressLock.withLock {
-        addressIds[address.id]?.let { return it }
-        val saved = call("get_saved_addresses_for_user")?.optJSONArray("addresses") ?: return null
-        lastFailed = false
-        closestAddress(address, saved)?.pick("address_id")?.also { addressIds[address.id] = it }
+    private suspend fun addressIdFor(address: FoodAddress): ZomatoAddress = addressLock.withLock {
+        addressIds[address.id]?.let { return ZomatoAddress.Found(it) }
+        return addressLookup(address, call("get_saved_addresses_for_user")).also { result ->
+            if (result is ZomatoAddress.Found) addressIds[address.id] = result.id
+        }
     }
 
     /**
@@ -126,7 +129,11 @@ internal class ZomatoCompare(private val context: Context) {
         fun gap(reason: String) = ZomatoShop(restaurantName, emptyList(), reason)
         // A failed call is "Zomato didn't answer", never "Not on Zomato", and is not cached: the next look tries again.
         val unanswered = gap(NO_ANSWER)
-        val addressId = addressIdFor(address) ?: return if (lastFailed) unanswered else gap("No Zomato address near ${address.label}")
+        val addressId = when (val result = addressIdFor(address)) {
+            ZomatoAddress.Failed -> return unanswered
+            ZomatoAddress.Empty -> return gap("No Zomato address near ${address.label}")
+            is ZomatoAddress.Found -> result.id
+        }
         val results = call("get_restaurants_for_keyword", JSONObject().put("address_id", addressId).put("keyword", restaurantName).put("page_size", SEARCH_SIZE))
             ?: return unanswered
         val found = allObjects(results).firstOrNull { it.has("res_id") && sameRestaurant(restaurantName, it.pick("name").orEmpty()) }
@@ -173,6 +180,18 @@ internal class ZomatoCompare(private val context: Context) {
         const val SEARCH_SIZE = 5
         const val MAX_PARALLEL_CALLS = 3
     }
+}
+
+internal fun addressLookup(address: FoodAddress, response: JSONObject?): ZomatoAddress {
+    val saved = response?.optJSONArray("addresses")
+    val id = saved?.let { closestAddress(address, it)?.pick("address_id") }
+    return addressResult(response != null && saved != null, id)
+}
+
+internal fun addressResult(answered: Boolean, id: String?): ZomatoAddress = when {
+    !answered -> ZomatoAddress.Failed
+    id == null -> ZomatoAddress.Empty
+    else -> ZomatoAddress.Found(id)
 }
 
 /** A Zomato address on the same pincode, else in the same area. Never just "any address in the city". */
