@@ -406,7 +406,7 @@ private fun DeliverTo(address: SavedAddress?, prefix: String = "To", onChange: (
 @Composable
 private fun GroceryAddressesCard(card: GroceryCard.Addresses, actions: GroceryActions) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        StepHeader(1, "Where should Zepto deliver?", ZEPTO_SOURCE)
+        StepHeader(1, "Where should I deliver?", ZEPTO_SOURCE)
         Text(card.note ?: "Zepto prices and stock depend on the nearest store, so the cart stays with this address.", color = if (card.note != null) Orange else Muted, fontSize = 13.sp)
         if (card.addresses.isEmpty()) {
             NilaCard { Text("No saved Zepto address yet. Add one in the Zepto app, then ask again.", color = Paper) }
