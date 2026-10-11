@@ -48,8 +48,9 @@ class AppRuntime(
         return DataResult.Items(raw.map { RulesEngine.apply(rules, it) })
     }
 
-    fun value(fn: JsonObject): FnValue = when (val data = items(keyOf(fn.string("of")))) {
-        is DataResult.Items -> RecipeFunctions.evaluate(fn, data.items, clock)
+    /** [back] reads the same value that many periods ago, for the screen's comparison line. */
+    fun value(fn: JsonObject, back: Int = 0): FnValue = when (val data = items(keyOf(fn.string("of")))) {
+        is DataResult.Items -> RecipeFunctions.evaluate(fn, data.items, clock, back)
         is DataResult.Denied -> FnValue.Unsupported(DENIED)
     }
 
