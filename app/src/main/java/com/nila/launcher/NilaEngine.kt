@@ -221,6 +221,13 @@ class NilaEngine(
             label = "Flashlight",
         ),
         CapabilityDescriptor(
+            id = "set_reminder",
+            description = "A one-time reminder at a time the user says, sent as a notification by My NILA.",
+            params = listOf(Param("text", ParamType.STRING)),
+            permission = PermissionClass.PREPARE,
+            label = "Reminder",
+        ),
+        CapabilityDescriptor(
             id = "monthly_reminder",
             description = "A reminder that repeats every month, like paying the electricity bill. Give what to do, the day of the month and the time if said.",
             params = listOf(
@@ -383,6 +390,8 @@ class NilaEngine(
 
         // "every month" is a repeating calendar reminder, not an alarm or a one-off event.
         monthlyReminderArgs(input)?.let { return NilaIntent.Call(ToolCall("monthly_reminder", it)) }
+        // Any other reminder is a one-time notification; NILA asks for what or when if either is missing.
+        if (oneOffReminder(input, java.time.LocalDateTime.of(today(), now())) != null) return NilaIntent.Call(ToolCall("set_reminder", mapOf("text" to input)))
 
         // Everyday phone actions. Each reads its values from the user's words.
         // Checked before "timer": "stop the timer" controls the running one, it does not start a new one.
@@ -487,6 +496,8 @@ class NilaEngine(
                 ?: NilaResponse.Text("I can pause, resume or stop the timer, or tell you how much time is left.")
             "add_note" -> Note(args["text"] as String)
             "call_contact" -> Call(args["who"] as String)
+            "set_reminder" -> oneOffReminder(args["text"] as String, java.time.LocalDateTime.of(today(), now()))
+                ?: NilaResponse.Text("What should I remind you about, and when?")
             "monthly_reminder" -> {
                 val day = args["day"] as Int?
                 val hour = args["hour"] as Int?

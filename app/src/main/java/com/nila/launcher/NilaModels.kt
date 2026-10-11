@@ -290,6 +290,8 @@ class NilaBrain(
      * becomes "order butter chicken" before anything routes it. Unknown favourites are asked for, never guessed.
      */
     suspend fun respond(input: String): NilaResponse {
+        // "photos I took on Dec 18 2024": searched on the phone itself, by the day the user named.
+        photoSearch(input, java.time.LocalDate.now())?.let { return it }
         askedAbout(input)?.let { return NilaResponse.Text(personSummary(it, facts())) }
         // "when was my last blood test": answered from My NILA's records, not taken as a new visit.
         if (isHealthQuestion(input)) return withContext(llm) { healthAnswer(input) }
@@ -400,6 +402,7 @@ class NilaBrain(
         if (keyword is NilaIntent.Call) return@withContext answer("rules:${keyword.call.capabilityId}", engine.execute(keyword))
         // "photos I took on Dec 18 2024": searched on the phone itself only after explicit commands had first refusal.
         photoSearch(input, java.time.LocalDate.now())?.let { return@withContext answer("photos", it) }
+        fitnessEntry(input, java.time.LocalDate.now())?.let { return@withContext answer("fitness", FitnessLogged(it)) }
         if (!engine.isSmallTalk(input)) {
             // Any wording, follow-up or language: Gemma restates it as one plain command the rules understand.
             rewrite(input)?.let { command ->
@@ -723,7 +726,7 @@ class NilaBrain(
             set a timer for <n> minutes | pause the timer | resume the timer | stop the timer | how much time is left
             turn on the flashlight | turn off the flashlight
             open the camera | take a selfie | record a video | record my voice
-            schedule <title> <day> at <time> | remind me to <task> every month on the <day> | take a note that <text> | show my notes
+            schedule <title> <day> at <time> | remind me to <task> at <time> | remind me to <task> every month on the <day> | take a note that <text> | show my notes
             call <name or number> | tell <name> <message>
             take me to <place> | <things> near me | search for <query>
             order food <cooked dish or meal from a restaurant> | shop groceries <item to buy from a store>

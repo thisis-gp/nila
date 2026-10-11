@@ -423,7 +423,18 @@ private fun NilaApp(resumeVersion: Int) {
         scope.launch {
             delay(550) // a visible thinking beat, so a reply doesn't feel like a canned instant lookup
             val normalized = prompt.lowercase()
-            val response = if (normalized.contains("what do you remember")) {
+            val response = if (asksForSteps(prompt)) {
+                val today = java.time.LocalDate.now()
+                val store = FitnessStore(context)
+                val baselineExists = store.steps()?.day == today
+                if (hasStepPermission(context)) sampleSteps(context)
+                val state = store.steps()
+                StepsAnswer(
+                    today = if (!baselineExists || !hasStepPermission(context)) null else stepsToday(state)?.takeIf { state?.day == today },
+                    week = lastDays(state, today),
+                    trackingStarted = hasStepPermission(context) && !baselineExists,
+                )
+            } else if (normalized.contains("what do you remember")) {
                 NilaResponse.Text(memorySummary(facts))
             } else if (Regex("""\b(show|read|list|open|what are)\b.*\bnotes?\b""").containsMatchIn(prompt.lowercase())) {
                 NilaResponse.Text(notesSummary(context))
@@ -596,10 +607,8 @@ private fun NilaApp(resumeVersion: Int) {
                                 health = health,
                                 readReport = brain::readReport,
                                 // A report that asks for a follow-up becomes a My NILA reminder on that day.
-                                // No follow-up (any more): its reminder goes too.
-                                onSaved = { record -> followUpReminder(record)?.let(::addReminder) ?: reminders.remove("followup-${record.id}") },
+                                onSaved = { record -> followUpReminder(record)?.let(::addReminder) },
                                 onDeleted = { record -> reminders.remove("followup-${record.id}") },
-                                reminders = reminders,
                                 draft = MyNilaRequests.pending,
                                 onDraftUsed = { MyNilaRequests.pending = null },
                                 onBack = ::closeOverlay,
@@ -698,15 +707,42 @@ private fun MonthlyReminderCard(reminder: MonthlyReminder, context: Context, onR
         if (saved) return@ActionCard
         NilaReminders(context).add(monthlyReminderOf(reminder, java.time.LocalDateTime.now()))
         saved = true
-        onResult("Done. My NILA will remind you every month on ${dayLabel(reminder)}. See it in My NILA › Reminders.")
+        onResult("Done. My NILA will remind you every month on ${dayLabel(reminder)}. Stop it from the notification when it comes.")
         if (needsNotificationPermission(context)) ask.launch(android.Manifest.permission.POST_NOTIFICATIONS)
     }
 }
-
 /** Android 13 and newer need permission before any notification shows. */
 internal fun needsNotificationPermission(context: Context) =
     android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
         ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+
+/** A one-time reminder: one tap and My NILA notifies at that time, even when NILA is closed. */
+@Composable
+private fun OneOffReminderCard(reminder: OneOffReminder, context: Context, onResult: (String) -> Unit) {
+    var saved by remember { mutableStateOf(false) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) onResult("Saved, but notifications are off for NILA. Turn them on in Android settings to be reminded.")
+    }
+    val time = "%s, %d:%02d %s".format(
+        eventWhen(reminder.at.toLocalDate(), null).substringBefore(","),
+        (reminder.at.hour + 11) % 12 + 1, reminder.at.minute, if (reminder.at.hour < 12) "am" else "pm",
+    )
+    ActionCard(
+        label = "Reminder",
+        title = reminder.title,
+        detail = "$time\nMy NILA sends a notification then, even when NILA is closed.",
+        action = if (saved) "Reminder set" else "Remind me",
+    ) {
+        if (saved) return@ActionCard
+        NilaReminders(context).add(NilaReminder(java.util.UUID.randomUUID().toString(), reminder.title, "Your reminder from My NILA.", reminder.at))
+        saved = true
+        onResult("Done. I'll remind you: ${reminder.title}, $time.")
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) ask.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+    }
+}
+
 private val MascotTapSize = 40.dp
 private val HeaderMascotSize = 34.dp
 private val WorkingMascotSize = 28.dp
@@ -994,6 +1030,30 @@ private fun ResponseView(
             action = "Upload the report",
         ) { MyNilaRequests.pending = response }
         is PhotoSearch -> PhotoSearchCard(response)
+        is FitnessLogged -> {
+            var saved by remember(response.entry.id) { mutableStateOf(false) }
+            NilaCard {
+                SectionLabel(if (saved) "Saved to My NILA · Fitness" else "Fitness entry", color = Lime)
+                Text(entryLine(response.entry), color = Paper, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text(eventWhen(response.entry.date, null).substringBefore(",") + " · on this phone", color = Muted, fontSize = 12.sp)
+                if (!saved) PrimaryAction("Save to Fitness", onClick = {
+                    FitnessStore(context).add(response.entry)
+                    saved = true
+                })
+            }
+        }
+        is StepsAnswer -> NilaCard {
+            SectionLabel("Steps", color = Lime)
+            Text(
+                when {
+                    response.trackingStarted -> "Step tracking started just now. Ask again later to see today's count."
+                    response.today != null -> "%,d steps today".format(response.today)
+                    else -> "NILA can't read the step counter. Allow physical activity in Settings › Phone access."
+                },
+                color = Paper, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+            )
+            if (response.week.any { it.second > 0 }) Text("Last 7 days: %,d steps".format(response.week.sumOf { it.second }), color = Muted, fontSize = 13.sp)
+        }
         is NilaResponse.Remember -> NilaCard {
             SectionLabel("Saved to My NILA", color = Lime)
             Text(
@@ -1043,6 +1103,7 @@ private fun ResponseView(
                 .onFailure { addTurn("Action result", NilaResponse.Text("No calendar app is available.")) }
         }
         is MonthlyReminder -> MonthlyReminderCard(response, context) { addTurn("Action result", NilaResponse.Text(it)) }
+        is OneOffReminder -> OneOffReminderCard(response, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is Call -> CallCard(response.who, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is NilaResponse.Alarm -> ActionCard(
             label = "Alarm",

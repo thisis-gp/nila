@@ -74,6 +74,7 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
         NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, accounts)
         NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
+        NilaScreen.PhoneAccess -> Page("PHONE ACCESS", onOpen, onBack) { PhoneAccessTab() }
         NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps, NilaScreen.MyNila -> Unit
     }
 }
@@ -236,6 +237,7 @@ private fun SettingsScreen(
         SettingsRow(LucideR.drawable.lucide_ic_house, "Home screen", "Make NILA your phone's home", onClick = onChooseDefaultHome)
         SettingsRow(LucideR.drawable.lucide_ic_languages, "Voice languages", "English · हिंदी · മലയാളം") { onOpen(NilaScreen.Languages) }
         SettingsRow(LucideR.drawable.lucide_ic_lock, "Permissions", "Microphone, location, contacts") { onOpen(NilaScreen.Permissions) }
+        SettingsRow(LucideR.drawable.lucide_ic_lock, "Phone access", "Photos, steps, contacts and more") { onOpen(NilaScreen.PhoneAccess) }
     }
 
     SettingsGroup("Accounts") {

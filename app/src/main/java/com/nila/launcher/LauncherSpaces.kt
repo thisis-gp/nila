@@ -297,7 +297,15 @@ internal fun launchInstalledApp(context: Context, packageName: String) {
     }
 }
 
+private const val WALLPAPER_PREFS = "nila_launcher"
+private const val PHONE_WALLPAPER = "phone_wallpaper"
+
+/** True once the user chose a wallpaper from Home; until then Home shows NILA's olive design. */
+internal fun usesPhoneWallpaper(context: Context) =
+    context.getSharedPreferences(WALLPAPER_PREFS, Context.MODE_PRIVATE).getBoolean(PHONE_WALLPAPER, false)
+
 internal fun changeWallpaper(context: Context) {
+    context.getSharedPreferences(WALLPAPER_PREFS, Context.MODE_PRIVATE).edit().putBoolean(PHONE_WALLPAPER, true).apply()
     runCatching { context.startActivity(Intent(Intent.ACTION_SET_WALLPAPER)) }
         .onFailure { android.widget.Toast.makeText(context, "No wallpaper picker is available.", android.widget.Toast.LENGTH_SHORT).show() }
 }
