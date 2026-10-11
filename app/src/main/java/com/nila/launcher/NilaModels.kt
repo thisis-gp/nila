@@ -124,6 +124,14 @@ fun claimsAction(reply: String): Boolean = Regex(
         """|(?i)^\s*(alarm|reminder) (set|scheduled)\b""",
 ).containsMatchIn(reply)
 
+/**
+ * True when a reply is Gemma's own tool-call syntax leaked onto the text channel instead of a real
+ * structured call, e.g. "<|tool_call>call:remember_fact{fact:...}". Seen on-device when the SDK's tool-call
+ * parser didn't recognize the model's output; the raw tokens must never reach the user.
+ */
+fun looksLikeRawToolCall(reply: String): Boolean =
+    reply.startsWith("<|") || Regex("""^\s*call:\w+\{""").containsMatchIn(reply)
+
 /** Cleans Gemma's rewrite: first line, no quotes, labels or final full stop. Null for CHAT or nothing. */
 fun cleanCommand(raw: String): String? {
     val line = raw.lineSequence().map { it.trim() }.firstOrNull { it.isNotBlank() } ?: return null
@@ -470,7 +478,12 @@ class NilaBrain(
             act(proposed.name, proposed.arguments, input)?.let { return it }
         }
         val reply = response.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim()
-            .takeIf { it.isNotBlank() }?.let { if (claimsAction(it)) NO_ACTION_TAKEN.also { Log.i(TAG, "replaced a reply that claimed an action") } else it }
+            .takeIf { it.isNotBlank() }
+            // Gemma occasionally emits its own tool-call syntax on the text channel instead of a real
+            // structured call ("<|tool_call>call:remember_fact{...}"); never show that raw syntax to the user.
+            ?.also { if (looksLikeRawToolCall(it)) Log.i(TAG, "dropped a reply that leaked raw tool-call syntax") }
+            ?.takeUnless { looksLikeRawToolCall(it) }
+            ?.let { if (claimsAction(it)) NO_ACTION_TAKEN.also { Log.i(TAG, "replaced a reply that claimed an action") } else it }
             ?: return null
         return NilaResponse.Text(reply)
     }
