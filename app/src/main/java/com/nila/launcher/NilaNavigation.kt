@@ -11,12 +11,13 @@ enum class NilaScreen {
     Food,
     PreparedOrder,
     ActionResult,
-    Memory,
+    People,
     Capabilities,
     Apps,
     Activity,
     Settings,
     Languages,
+    MyNila,
 }
 
 class NilaNavigation(start: NilaScreen) {

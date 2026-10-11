@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Android 11 and older. My NILA holds personal details: it stays on this phone, never in a cloud backup. -->
+<!-- Android 11 and older. My NILA's personal and health data never enters cloud backup. -->
 <full-backup-content>
     <exclude domain="sharedpref" path="nila_memory.xml" />
     <exclude domain="sharedpref" path="nila_memory_secure.xml" />
+    <exclude domain="sharedpref" path="nila_health.xml" />
+    <exclude domain="file" path="health/" />
 </full-backup-content>
