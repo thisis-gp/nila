@@ -291,6 +291,8 @@ class NilaBrain(
      */
     suspend fun respond(input: String): NilaResponse {
         askedAbout(input)?.let { return NilaResponse.Text(personSummary(it, facts())) }
+        // "when was my last blood test": answered from My NILA's records, not taken as a new visit.
+        if (isHealthQuestion(input)) return withContext(llm) { healthAnswer(input) }
         // "last week I went to the hospital": offer the health tracker, with the day the user said.
         if (isHealthMention(input)) {
             val kind = healthKindFor(input)
@@ -512,6 +514,11 @@ class NilaBrain(
         } ?: coerceArgs(arguments, capability)
         val call = ToolCall(capability.id, args)
         if (!numbersGrounded(call.args, input)) return null.also { Log.i(TAG, "rejected ungrounded numbers for ${call.capabilityId}") }
+        // A fact a model proposes must be the user's own words: chat once saved "Priya is vegetarian and
+        // allergic to peanuts" (pulled from other people's facts) for "Priya cant eat gluten" on the iQOO 15.
+        if (capability.id == REMEMBER && !groundedFact(call.args["fact"] as? String ?: "", input)) {
+            return null.also { trace("rejected ungrounded fact") }
+        }
         val check = checkCall(call, engine.capabilities)
         trace("check=${check::class.simpleName}")
         return when (check) {
