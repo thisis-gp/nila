@@ -94,4 +94,49 @@ class RecipeRepairTest {
         assertEquals("test-app-storage", (data.getValue("items") as JsonObject).string("store"))
         assertEquals(null, (data.getValue("txns") as JsonObject).string("store"))
     }
+
+    // Patterns seen in the PC eval of Gemma 4 E2B (ledger, Task 6).
+
+    @Test
+    fun closesJsonTheModelLeftOpen() {
+        val fixed = RecipeRepair.extractJson("""{"components":[{"id":"root","component":"Text","text":"x"}]""")
+        assertEquals(1, (fixed?.get("components") as JsonArray).size)
+        assertNull(RecipeRepair.extractJson("""{"components":[{"id":"root","text":"unfinished"""))
+    }
+
+    @Test
+    fun addsTheRowAListPointsAtButNeverDefined() {
+        val items = RecipeRepair.repair(recipe("""[{"id":"root","component":"Column","children":["form","list"]},
+            {"id":"form","component":"Form","fields":["t"],"submit":{"action":"storage.add"}},
+            {"id":"t","component":"Input","label":"Title","field":"title","type":"text"},
+            {"id":"list","component":"List","items":"/items","template":"row"}]"""))
+        assertEquals(emptyList<RecipeError>(), RecipeValidator.validate(items))
+        val row = items.components().single { it.string("id") == "row" }
+        assertEquals("ItemRow" to "title", row.string("component") to row.string("titleField"))
+
+        val txns = RecipeRepair.repair(recipe(
+            """[{"id":"root","component":"List","items":"/txns","template":"row"}]""",
+            data = """{"txns":{"provider":"transactions"}}""",
+            permissions = """["transactions.read"]""",
+        ))
+        assertEquals(emptyList<RecipeError>(), RecipeValidator.validate(txns))
+        assertEquals("TxnRow", txns.components().single { it.string("id") == "row" }.string("component"))
+    }
+
+    @Test
+    fun splitsAFieldWrittenIntoAPath() {
+        val fixed = RecipeRepair.repair(recipe("""[{"id":"root","component":"StatTile","label":"Sleep",
+            "value":{"fn":"sum","of":"/items.sleepHours","period":"week"}}]"""))
+        assertEquals(emptyList<RecipeError>(), RecipeValidator.validate(fixed))
+        val value = fixed.components().single().getValue("value") as JsonObject
+        assertEquals("/items" to "sleepHours", value.string("of") to value.string("field"))
+    }
+
+    @Test
+    fun dropsOptionalPropsWithValuesOutsideTheirList() {
+        val fixed = RecipeRepair.repair(recipe("""[{"id":"root","component":"Text","text":"x","style":"heading"}]"""))
+        assertNull(fixed.components().single()["style"])
+        assertEquals(emptyList<RecipeError>(), RecipeValidator.validate(fixed))
+    }
 }
+
