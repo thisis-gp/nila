@@ -426,7 +426,8 @@ class NilaBrain(
                 val routed = engine.route(command)
                 if (routed is NilaIntent.Call) return@withContext answer("rewrite:${routed.call.capabilityId}", engine.execute(routed))
             }
-            // Stock FunctionGemma scored 4.7% on NILA's 12 tools (training eval); with Gemma 4 loaded, chat picks the tool.
+            // The fine-tuned router scored 90% off-device, but on the phone (int8, LiteRT-LM's prompt format) it sent
+            // "wake me at 7" to call_contact. Until it's measured on-device it only runs when Gemma isn't loaded.
             if (assistant == null) modelRoute(input)?.let { return@withContext answer("functiongemma", it) }
         }
         // Small talk ("what can you do", "hi", "who are you") is already a known, deterministic case —
@@ -505,12 +506,14 @@ class NilaBrain(
             model.createConversation(
                 ConversationConfig(
                     systemInstruction = Contents.of("You are a model that can do function calling with the following functions"),
-                    tools = (engine.capabilities.values + CHAT_TOOL).map { tool(CapabilityTool(it)) },
+                    // Exactly the tools it was fine-tuned on (training/functiongemma/make_dataset.py): more tools than it saw drops accuracy.
+                    tools = (engine.capabilities.values.filter { it.id in ROUTER_TOOLS } + CHAT_TOOL).map { tool(CapabilityTool(it)) },
                     automaticToolCalling = false,
                 ),
             ).use { it.sendMessage(input) }
-        }.getOrNull() ?: return null
+        }.onFailure { trace("router failed: ${it::class.simpleName}: ${it.message?.take(200)}") }.getOrNull() ?: return null
         val proposed = response.toolCalls.firstOrNull()
+        if (proposed == null) trace("router text: ${response.toString().take(160)}")
         // Argument names only: values can carry what the user said.
         Log.i(TAG, "functiongemma tool=${proposed?.name} args=${proposed?.arguments?.keys}")
         trace("functiongemma tool=${proposed?.name} args=${proposed?.arguments?.keys}")
@@ -724,6 +727,12 @@ class NilaBrain(
          * An escape hatch for FunctionGemma, which otherwise tends to pick some tool for every input
          * ("hi" became search_food on the iQOO 15). Choosing it hands the message to Gemma.
          */
+        /** The tools the router was fine-tuned on; "chat" is added separately as CHAT_TOOL. */
+        val ROUTER_TOOLS = setOf(
+            "create_alarm", "remove_alarm", "open_app", "remember_fact", "search_food", "search_groceries",
+            "get_directions", "set_timer", "flashlight", "create_event", "add_note", "open_camera", "call_contact",
+        )
+
         val CHAT_TOOL = CapabilityDescriptor(
             id = "chat",
             description = "Talk with the user: greetings, questions about NILA or anything else, small talk, opinions, or any request the other functions cannot do",
