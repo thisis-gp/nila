@@ -1042,6 +1042,7 @@ private fun ResponseView(
                 })
             }
         }
+        is FileSearch -> FileSearchCard(response)
         is StepsAnswer -> NilaCard {
             SectionLabel("Steps", color = Lime)
             Text(

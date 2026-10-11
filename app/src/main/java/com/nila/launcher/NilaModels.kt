@@ -342,7 +342,7 @@ class NilaBrain(
      */
     private suspend fun understand(input: String): NilaResponse? = withContext(llm) {
         if (engine.calculate(input) != null || engine.isSmallTalk(input)) return@withContext null
-        if (engine.route(input) is NilaIntent.Call) return@withContext null
+        if (engine.route(input) is NilaIntent.Call || fileSearch(input) != null) return@withContext null
         val model = assistant ?: return@withContext null
         val today = java.time.LocalDate.now()
         val raw = runCatching {
@@ -400,6 +400,7 @@ class NilaBrain(
             return@withContext answer("rules+gemma:$REMEMBER", rememberWithKind(input, engine.execute(keyword)))
         }
         if (keyword is NilaIntent.Call) return@withContext answer("rules:${keyword.call.capabilityId}", engine.execute(keyword))
+        fileSearch(input)?.let { return@withContext answer("files", it) }
         // "photos I took on Dec 18 2024": searched on the phone itself only after explicit commands had first refusal.
         photoSearch(input, java.time.LocalDate.now())?.let { return@withContext answer("photos", it) }
         fitnessEntry(input, java.time.LocalDate.now())?.let { return@withContext answer("fitness", FitnessLogged(it)) }
