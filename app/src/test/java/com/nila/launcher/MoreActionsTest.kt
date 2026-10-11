@@ -80,4 +80,18 @@ class MoreActionsTest {
         assertEquals("call_contact", tool("call Mom"))
         assertEquals("set_timer", tool("start a timer for 5 minutes"))
     }
+
+    @Test
+    fun whereIsAPlaceShowsTheRouteNotASearch() {
+        assertEquals("get_directions", tool("where is meghana biriyani"))
+        assertEquals("get_directions", tool("Where's Truffles?"))
+        assertEquals("get_directions", tool("how far is the airport"))
+        assertEquals("Meghana Biriyani", directionsTo("where is Meghana Biriyani?"))
+    }
+
+    @Test
+    fun whereIsMyThingIsNotAPlace() {
+        assertNull(directionsTo("where is my phone"))
+        assertNull(directionsTo("where is my order"))
+    }
 }

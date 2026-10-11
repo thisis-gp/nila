@@ -39,6 +39,8 @@ data class HealthRecord(
     val followUp: LocalDate? = null,
     /** Read by the on-device model, not typed by the user: shown with a "check every value" banner. */
     val unverified: Boolean = false,
+    /** The values read from the report, so the record can show them as a list. */
+    val findings: List<ReportFinding> = emptyList(),
 )
 
 /** Newest first, so last week's visit is at the top. */
@@ -189,7 +191,7 @@ internal class HealthStore(context: Context) {
 }
 
 /** One value from a report, as printed on it: "Haemoglobin 11.2 g/dL, low". */
-data class ReportFinding(val name: String, val value: String, val unit: String = "", val flag: String = "")
+data class ReportFinding(val name: String, val value: String, val unit: String = "", val flag: String = "", val range: String = "")
 
 /** What Gemma read from a report photo. Every field is what the paper says, or blank when it doesn't say. */
 data class ReportReading(
@@ -198,7 +200,7 @@ data class ReportReading(
     val date: LocalDate?,
     val place: String,
     val findings: List<ReportFinding>,
-    val followUpDays: Int?,
+    val followUp: LocalDate?,
     val summary: String,
 )
 
@@ -211,27 +213,67 @@ internal fun parseReportReading(raw: String): ReportReading? {
     val end = raw.lastIndexOf('}')
     if (start < 0 || end <= start) return null
     val o = runCatching { JSONObject(raw.substring(start, end + 1)) }.getOrNull() ?: return null
-    val findings = o.optJSONArray("findings")?.let { a ->
-        (0 until a.length()).mapNotNull { i ->
-            val f = a.optJSONObject(i) ?: return@mapNotNull null
-            val name = f.optString("name").trim()
-            val value = f.optString("value").trim()
-            if (name.isBlank() || value.isBlank()) null
-            else ReportFinding(name, value, f.optString("unit").trim(), f.optString("flag").trim().lowercase().takeIf { it in setOf("high", "low", "normal") }.orEmpty())
-        }
-    }.orEmpty()
+    val findings = o.optJSONArray("findings")?.let(::findingsFrom).orEmpty()
     return ReportReading(
         kind = HealthKind.entries.firstOrNull { it.name.equals(o.optString("kind").trim(), ignoreCase = true) } ?: HealthKind.Report,
         title = o.optString("title").trim(),
-        date = o.optString("date").trim().let { runCatching { LocalDate.parse(it) }.getOrNull() },
+        date = parseReportDate(o.optString("date")),
         place = o.optString("place").trim(),
         findings = findings,
-        followUpDays = o.optInt("follow_up_days", -1).takeIf { it in 1..MAX_FOLLOW_UP_DAYS },
+        followUp = parseReportDate(o.optString("follow_up")),
         summary = o.optString("summary").trim(),
     )
 }
 
-private const val MAX_FOLLOW_UP_DAYS = 366
+/** A malformed or nameless finding is skipped: a bare number is never shown. */
+private fun findingsFrom(a: JSONArray): List<ReportFinding> = (0 until a.length()).mapNotNull { i ->
+    val f = a.optJSONObject(i) ?: return@mapNotNull null
+    val name = f.optString("name").trim()
+    val value = f.optString("value").trim()
+    if (name.isBlank() || value.isBlank()) null
+    else ReportFinding(name, value, f.optString("unit").trim(), f.optString("flag").trim().lowercase().takeIf { it in setOf("high", "low", "normal") }.orEmpty(), f.optString("range").trim())
+}
+
+private fun findingsJson(findings: List<ReportFinding>) = JSONArray().apply {
+    findings.forEach { put(JSONObject().put("name", it.name).put("value", it.value).put("unit", it.unit).put("flag", it.flag).put("range", it.range)) }
+}
+
+private val MonthNames = listOf("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+private val IsoDate = Regex("""(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)""")
+private val DayMonthNameYear = Regex("""(?<!\d)(\d{1,2})(?:st|nd|rd|th)?[\s-]+([A-Za-z]{3,9})\.?,?[\s-]+(\d{4})(?!\d)""")
+private val MonthNameDayYear = Regex("""\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})(?!\d)""")
+private val DayFirstNumeric = Regex("""(?<!\d)(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})(?!\d)""")
+
+/**
+ * A date written on a report: "2027-01-04", "04 Jan 2027", "4 January 2027", "Jan 4, 2027" or "04/01/2027"
+ * (day first, as in India). Null when the text holds no complete date, so a date is never invented.
+ */
+internal fun parseReportDate(text: String): LocalDate? {
+    fun date(year: String, month: Int, day: String) = runCatching { LocalDate.of(year.toInt(), month, day.toInt()) }.getOrNull()
+    fun month(name: String) = MonthNames.indexOf(name.take(3).lowercase()).takeIf { it >= 0 }?.plus(1)
+    IsoDate.find(text)?.let { m -> date(m.groupValues[1], m.groupValues[2].toInt(), m.groupValues[3])?.let { return it } }
+    DayMonthNameYear.find(text)?.let { m -> month(m.groupValues[2])?.let { mo -> date(m.groupValues[3], mo, m.groupValues[1])?.let { return it } } }
+    MonthNameDayYear.find(text)?.let { m -> month(m.groupValues[1])?.let { mo -> date(m.groupValues[3], mo, m.groupValues[2])?.let { return it } } }
+    DayFirstNumeric.find(text)?.let { m -> date(m.groupValues[3], m.groupValues[2].toInt(), m.groupValues[1])?.let { return it } }
+    return null
+}
+
+/** "2 high · 1 low": how many values the report marks out of range; blank when none are. */
+internal fun flagsSummary(findings: List<ReportFinding>): String =
+    listOf("high", "low").mapNotNull { flag -> findings.count { it.flag == flag }.takeIf { it > 0 }?.let { "$it $flag" } }.joinToString(" · ")
+
+/** The record with one more page: its file, its values (a value already listed is not repeated) and any follow-up or place it was missing. */
+internal fun withPage(record: HealthRecord, reading: ReportReading?, file: String): HealthRecord {
+    val known = record.findings.map { it.name.lowercase() }.toSet()
+    return record.copy(
+        files = record.files + file,
+        findings = record.findings + reading?.findings.orEmpty().filter { it.name.lowercase() !in known },
+        followUp = record.followUp ?: reading?.followUp,
+        place = record.place.ifBlank { reading?.place.orEmpty() },
+        // Values the model read on this page need the same check as the first page's.
+        unverified = record.unverified || reading != null,
+    )
+}
 
 /** Records as stored: a JSON list. */
 internal fun encodeRecords(records: List<HealthRecord>): String = JSONArray().apply {
@@ -239,7 +281,7 @@ internal fun encodeRecords(records: List<HealthRecord>): String = JSONArray().ap
         put(
             JSONObject().put("id", r.id).put("kind", r.kind.name).put("title", r.title).put("date", r.date.toString())
                 .put("place", r.place).put("notes", r.notes).put("files", JSONArray(r.files)).put("about", r.about)
-                .put("followUp", r.followUp?.toString() ?: "").put("unverified", r.unverified),
+                .put("followUp", r.followUp?.toString() ?: "").put("unverified", r.unverified).put("findings", findingsJson(r.findings)),
         )
     }
 }.toString()
@@ -261,6 +303,7 @@ internal fun decodeRecords(raw: String): List<HealthRecord> {
                 about = aboutKey(o.optString("about")),
                 followUp = o.optString("followUp").takeIf { it.isNotBlank() }?.let(LocalDate::parse),
                 unverified = o.optBoolean("unverified"),
+                findings = o.optJSONArray("findings")?.let(::findingsFrom).orEmpty(),
             )
         }.getOrNull()
     }
@@ -293,21 +336,18 @@ internal fun recordFrom(
         return HealthRecord(id, HealthKind.Report, "Report", fallbackDate, notes = "$why Open the photo to see it.", files = listOf(file))
     }
     val date = reading.date ?: fallbackDate
-    val lines = reading.findings.joinToString("\n") { f ->
-        "• ${f.name}: ${f.value}${if (f.unit.isNotBlank()) " ${f.unit}" else ""}${if (f.flag.isNotBlank() && f.flag != "normal") " (${f.flag})" else ""}"
-    }
+    // The values show as their own list and the record carries an unverified banner: notes keep the summary.
     val pagesNote = if (pages > 1) "\n\nNILA read page 1 of $pages. The other pages are in the PDF." else ""
-    val notes = listOf(reading.summary, lines).filter(String::isNotBlank).joinToString("\n\n") + pagesNote +
-        "\n\nUnverified: read by NILA on this phone. Check every value against the report and with your doctor."
     return HealthRecord(
         id = id,
         kind = reading.kind,
         title = reading.title.ifBlank { reading.kind.label },
         date = date,
         place = reading.place,
-        notes = notes.trim(),
+        notes = (reading.summary + pagesNote).trim(),
         files = listOf(file),
-        followUp = reading.followUpDays?.let { date.plusDays(it.toLong()) },
+        followUp = reading.followUp,
         unverified = true,
+        findings = reading.findings,
     )
 }

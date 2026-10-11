@@ -300,9 +300,14 @@ class NilaBrain(
             val kind = healthKindFor(input)
             return HealthPrompt(kind, kind.label, healthDate(input, java.time.LocalDate.now()))
         }
-        // A statement about the user or their people is answered and remembered (learn), never acted on.
-        if (isPersonalStatement(input)) return withContext(llm) { chat(input) } ?: NilaResponse.Text("Got it.")
+        // A statement about the user or their people is remembered (learn), never acted on. When it is saved the
+        // card is the whole answer; a chat reply would only offer to save what is already saved.
+        if (isPersonalStatement(input)) return learn(input) ?: withContext(llm) { chat(input) } ?: NilaResponse.Text("Got it.")
+        // "order Kavya's favourite": a cousin or friend NILA filed by name.
+        withNamedFavourite(input, facts())?.let { return answerFor(it) }
         val who = favouriteOf(input) ?: return understand(input) ?: answerFor(input)
+        // Several cousins with favourites: ask which one rather than guess.
+        whichPersonQuestion(who, facts())?.let { return NilaResponse.Text(it) }
         val resolved = withFavourite(input, facts())
             ?: return NilaResponse.Text("I don't know your $who's favourite yet. Tell me, like \"my $who loves butter chicken\".")
         return answerFor(resolved)
@@ -312,7 +317,7 @@ class NilaBrain(
     private fun myNilaAnswer(text: String): NilaResponse? {
         val about = askedAbout(text) ?: return null
         val known = facts()
-        return NilaResponse.Text(if (askedName(text)) nameAnswer(known) else personSummary(about, known))
+        return NilaResponse.Private(if (askedName(text)) nameAnswer(known) else personSummary(about, known))
     }
 
     /**
@@ -321,6 +326,8 @@ class NilaBrain(
      */
     suspend fun learn(input: String): NilaResponse.Remember? = withContext(llm) {
         val readAsFact = learnNext.also { learnNext = false }
+        // "my cousin likes cricket": the plain shapes are saved by rule, so they never fall through to chat.
+        learnRule(input)?.let { return@withContext it }
         if (!readAsFact && !mightBePersonal(input)) return@withContext null
         if (favouriteOf(input) != null || askedAbout(input) != null) return@withContext null
         // "remember that …" was already saved by the rules.
@@ -379,8 +386,8 @@ class NilaBrain(
     /** Answers from My NILA's health records only; with none, says so instead of guessing. */
     private fun healthAnswer(input: String): NilaResponse {
         val records = healthRecords()
-        if (records.isEmpty()) return NilaResponse.Text("There are no health records in My NILA yet. Upload a report in My NILA › Health and I can answer from it.")
-        val model = assistant ?: return NilaResponse.Text("My NILA has ${records.size} health records. Open My NILA › Health to see them.")
+        if (records.isEmpty()) return NilaResponse.Private("There are no health records in My NILA yet. Upload a report in My NILA › Health and I can answer from it.")
+        val model = assistant ?: return NilaResponse.Private("My NILA has ${records.size} health records. Open My NILA › Health to see them.")
         val reply = runCatching {
             model.createConversation(
                 ConversationConfig(
@@ -389,7 +396,7 @@ class NilaBrain(
                 ),
             ).use { it.sendMessage(input) }.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim()
         }.getOrNull()
-        return NilaResponse.Text(reply?.takeIf(String::isNotBlank) ?: "Open My NILA › Health to see your records.")
+        return NilaResponse.Private(reply?.takeIf(String::isNotBlank) ?: "Open My NILA › Health to see your records.")
     }
 
     private suspend fun answerFor(input: String): NilaResponse = withContext(llm) {
@@ -419,7 +426,8 @@ class NilaBrain(
                 val routed = engine.route(command)
                 if (routed is NilaIntent.Call) return@withContext answer("rewrite:${routed.call.capabilityId}", engine.execute(routed))
             }
-            // Stock FunctionGemma scored 4.7% on NILA's 12 tools (training eval); with Gemma 4 loaded, chat picks the tool.
+            // The fine-tuned router scored 90% off-device, but on the phone (int8, LiteRT-LM's prompt format) it sent
+            // "wake me at 7" to call_contact. Until it's measured on-device it only runs when Gemma isn't loaded.
             if (assistant == null) modelRoute(input)?.let { return@withContext answer("functiongemma", it) }
         }
         // Small talk ("what can you do", "hi", "who are you") is already a known, deterministic case —
@@ -498,12 +506,14 @@ class NilaBrain(
             model.createConversation(
                 ConversationConfig(
                     systemInstruction = Contents.of("You are a model that can do function calling with the following functions"),
-                    tools = (engine.capabilities.values + CHAT_TOOL).map { tool(CapabilityTool(it)) },
+                    // Exactly the tools it was fine-tuned on (training/functiongemma/make_dataset.py): more tools than it saw drops accuracy.
+                    tools = (engine.capabilities.values.filter { it.id in ROUTER_TOOLS } + CHAT_TOOL).map { tool(CapabilityTool(it)) },
                     automaticToolCalling = false,
                 ),
             ).use { it.sendMessage(input) }
-        }.getOrNull() ?: return null
+        }.onFailure { trace("router failed: ${it::class.simpleName}: ${it.message?.take(200)}") }.getOrNull() ?: return null
         val proposed = response.toolCalls.firstOrNull()
+        if (proposed == null) trace("router text: ${response.toString().take(160)}")
         // Argument names only: values can carry what the user said.
         Log.i(TAG, "functiongemma tool=${proposed?.name} args=${proposed?.arguments?.keys}")
         trace("functiongemma tool=${proposed?.name} args=${proposed?.arguments?.keys}")
@@ -694,9 +704,9 @@ class NilaBrain(
              "title": a short title, like "Blood test" or "Fever check-up",
              "date": the date printed on it as YYYY-MM-DD, or "" if none,
              "place": the hospital, lab or doctor printed on it, or "",
-             "findings": [{"name": test name, "value": the value exactly as printed, "unit": its unit or "", "flag": "high" or "low" or "normal" or "" as the report marks it}],
-             "follow_up_days": days until a follow-up the document asks for, or 0,
-             "summary": one or two plain sentences on what the document says}
+             "findings": [{"name": test name, "value": the value exactly as printed, "unit": its unit or "", "flag": "high" or "low" or "normal" or "" as the report marks it, "range": the normal range printed beside it, or ""}],
+             "follow_up": the follow-up date the document asks for, copied exactly as printed (like "04 Jan 2027"), or "" if it prints none,
+             "summary": one or two plain sentences on the test, what was found and the follow-up. Never name any person: no patient and no doctor}
             Copy names, values and dates exactly as printed. Never guess a value that is not on the page. Give no medical advice.
         """.trimIndent()
 
@@ -717,6 +727,12 @@ class NilaBrain(
          * An escape hatch for FunctionGemma, which otherwise tends to pick some tool for every input
          * ("hi" became search_food on the iQOO 15). Choosing it hands the message to Gemma.
          */
+        /** The tools the router was fine-tuned on; "chat" is added separately as CHAT_TOOL. */
+        val ROUTER_TOOLS = setOf(
+            "create_alarm", "remove_alarm", "open_app", "remember_fact", "search_food", "search_groceries",
+            "get_directions", "set_timer", "flashlight", "create_event", "add_note", "open_camera", "call_contact",
+        )
+
         val CHAT_TOOL = CapabilityDescriptor(
             id = "chat",
             description = "Talk with the user: greetings, questions about NILA or anything else, small talk, opinions, or any request the other functions cannot do",
@@ -743,6 +759,7 @@ class NilaBrain(
             Questions about the user's own details, name, likes, diet or family become "what do you know about ..." or "what is my name", never "show my notes". Use "show my notes" only when the user says notes.
             call <name or number> | tell <name> <message>
             take me to <place> | <things> near me | search for <query>
+            "where is <place>" or "how far is <place>" -> take me to <place>, even when the place is a restaurant: "where is meghana biryani" -> take me to meghana biryani.
             order food <cooked dish or meal from a restaurant> | shop groceries <item to buy from a store>
             Cooked dishes and meals are food: biryani, pizza, dosa, a paneer roll, dinner, lunch.
             Things you cook with or keep at home are groceries: milk, eggs, bread, fruit, bananas, vegetables, rice, atta, oil, sugar, snacks, soap, detergent.

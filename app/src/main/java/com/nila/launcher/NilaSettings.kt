@@ -19,6 +19,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -68,6 +70,14 @@ internal fun SettingsScreen(
     val people = factsByPerson(facts).size
     val context = LocalContext.current
     val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty() }
+    val prefs = remember(context) { context.getSharedPreferences("nila_launcher", android.content.Context.MODE_PRIVATE) }
+    // Turning the lock on needs nothing; turning it off needs the phone's lock first (unless the phone has none).
+    fun toggleLock() {
+        if (!MyNilaLock.enabled) return MyNilaLock.setEnabled(prefs, true)
+        val activity = context as? androidx.fragment.app.FragmentActivity
+        if (activity == null || MyNilaLock.support(context) != LockSupport.Ready) return MyNilaLock.setEnabled(prefs, false)
+        MyNilaLock.authenticate(activity) { ok -> if (ok) MyNilaLock.setEnabled(prefs, false) }
+    }
     Column(Modifier.fillMaxSize().background(Ink).safeDrawingPadding().padding(horizontal = ScreenGutter, vertical = 12.dp)) {
         RoundButton(LucideR.drawable.lucide_ic_chevron_left, "Back", onBack)
         SerifTitle("Settings", size = 34.sp, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp))
@@ -86,6 +96,13 @@ internal fun SettingsScreen(
                 "My NILA",
                 if (facts.isEmpty()) "Nothing remembered yet" else "${plural(people, "person", "people")}, ${plural(facts.size, "fact", "facts")}",
                 onClick = { onOpen(NilaScreen.MyNila) },
+            )
+            SettingsRow(
+                LucideR.drawable.lucide_ic_lock,
+                "Lock My NILA",
+                "Ask for your fingerprint or PIN to open it",
+                onClick = ::toggleLock,
+                end = { Switch(checked = MyNilaLock.enabled, onCheckedChange = { toggleLock() }, colors = SwitchDefaults.colors(checkedTrackColor = Lime, checkedThumbColor = Ink)) },
             )
             SettingsRow(LucideR.drawable.lucide_ic_smartphone, "Phone access", "Photos, files, contacts", onClick = { onOpen(NilaScreen.PhoneAccess) })
             SettingsRow(LucideR.drawable.lucide_ic_history, "Activity and approvals", "What NILA has done for you", onClick = { onOpen(NilaScreen.Activity) })

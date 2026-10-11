@@ -36,6 +36,8 @@ dependencies {
 
     implementation("androidx.activity:activity-compose:1.12.0")
     implementation("androidx.security:security-crypto:1.1.0")
+    implementation("androidx.biometric:biometric:1.1.0")
+    implementation("androidx.fragment:fragment-ktx:1.8.9")
     // Memory: Room on SQLCipher, so people and facts are encrypted at rest.
     implementation("androidx.room:room-runtime:2.8.5")
     implementation("androidx.room:room-ktx:2.8.5")

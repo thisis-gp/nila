@@ -48,6 +48,27 @@ internal fun suggestContacts(context: Context, about: String): List<ContactChoic
     }.getOrDefault(emptyList())
 }
 
+/**
+ * The one card for a saved fact: what was saved, and, when a contact link is wanted, [suggestions] to link in the same
+ * card. For a relation that can be several people ("cousin") [who] is non-null: the people it might be, asked every time.
+ */
+internal data class SavedMoment(
+    val saved: NilaResponse.Remember,
+    val suggestions: List<ContactChoice>?,
+    val who: List<WhoChoice>? = null,
+) : NilaResponse
+
+/** Someone a "cousin" or "friend" fact may be about: a person NILA already filed under it ([known]) or a contact. */
+internal data class WhoChoice(val name: String, val lookupKey: String?, val known: Boolean = false)
+
+/** The chip label: "Kavya · Cousin" for someone NILA already knows under [relation], the contact's name otherwise. */
+internal fun whoLabel(choice: WhoChoice, relation: String): String =
+    if (choice.known) "${choice.name} · ${aboutLabel(relation)}" else choice.name
+
+/** Up to three people to offer: those already known under the relation first, then contacts, each person once. */
+internal fun whoChoices(known: List<WhoChoice>, contacts: List<ContactChoice>): List<WhoChoice> =
+    (known + contacts.map { WhoChoice(it.name, it.lookupKey) }).distinctBy { pickedPersonKey(it.name, it.lookupKey) }.take(SUGGESTION_LIMIT)
+
 /** A thumbnail URI for the contact behind [lookupKey]; null without READ_CONTACTS or a photo. */
 internal fun contactPhotoUri(context: Context, lookupKey: String): String? {
     if (!canReadContacts(context)) return null

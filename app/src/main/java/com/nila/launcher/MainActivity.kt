@@ -9,7 +9,6 @@ import android.provider.AlarmClock
 import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -60,6 +59,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -93,6 +93,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import androidx.fragment.app.FragmentActivity
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import java.time.LocalTime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -100,8 +105,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.composables.icons.lucide.R as LucideR
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     private var resumeVersion by mutableIntStateOf(0)
+    private val screenOff = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = MyNilaLock.onScreenOff(System.currentTimeMillis())
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Edge-to-edge hands the keyboard inset to Compose; safeDrawingPadding in NilaApp applies it once.
@@ -115,7 +123,21 @@ class MainActivity : ComponentActivity() {
         // keyboard AND Compose's imePadding() pads again on top of that,
         // double-counting the inset and leaving dead space above the keyboard.
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        ContextCompat.registerReceiver(this, screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED)
         setContent { NilaApp(resumeVersion) }
+    }
+    // Checked before the first frame back, so My NILA never flashes open after the screen turned off.
+    override fun onStart() {
+        super.onStart()
+        MyNilaLock.onStart(System.currentTimeMillis())
+    }
+    override fun onStop() {
+        MyNilaLock.onStop(System.currentTimeMillis())
+        super.onStop()
+    }
+    override fun onDestroy() {
+        unregisterReceiver(screenOff)
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -187,6 +209,10 @@ private fun NilaApp(resumeVersion: Int) {
     if (screen != NilaScreen.Home && screen != NilaScreen.MyNila) overlayScreen = screen
     // 0 = home, 1 = My NILA fully open; dragged by the finger, then settled with a spring.
     val sidePanel = remember { Animatable(0f) }
+    LaunchedEffect(launcherPreferences) { MyNilaLock.load(launcherPreferences) }
+    val lockSupport = remember(resumeVersion, MyNilaLock.enabled) { MyNilaLock.support(context) }
+    val myNilaLocked = MyNilaLock.enabled && !MyNilaLock.unlocked && lockSupport == LockSupport.Ready
+    val activity = context as FragmentActivity
     var panelDragging by remember { mutableStateOf(false) }
     val panelWidth = with(LocalDensity.current) { LocalConfiguration.current.screenWidthDp.dp.toPx() }
 
@@ -445,7 +471,7 @@ private fun NilaApp(resumeVersion: Int) {
                     trackingStarted = hasStepPermission(context) && !baselineExists,
                 )
             } else if (normalized.contains("what do you remember")) {
-                NilaResponse.Text(memorySummary(facts))
+                NilaResponse.Private(memorySummary(facts))
             } else if (Regex("""\b(show|read|list|open|what are)\b.*\bnotes?\b""").containsMatchIn(prompt.lowercase())) {
                 NilaResponse.Text(notesSummary(context))
             } else {
@@ -471,7 +497,19 @@ private fun NilaApp(resumeVersion: Int) {
                 }
             }
             if (response is NilaResponse.Remember) memory.save(response.fact, response.kind, response.about)
-            turns[pendingIndex] = Turn(prompt, response)
+            // A saved fact about someone close asks, in the same card, which contact they are (once per person).
+            // A cousin or friend can be several people, so the card asks every time which one it was.
+            suspend fun savedMoment(saved: NilaResponse.Remember) = when {
+                saved.about != ME && isManyRelation(saved.about) -> SavedMoment(
+                    saved,
+                    suggestions = null,
+                    who = whoChoices(memory.knownAs(saved.about), withContext(Dispatchers.IO) { suggestContacts(context, saved.about) }),
+                )
+                saved.about != ME && memory.claimContactAsk(saved.about) -> SavedMoment(saved, withContext(Dispatchers.IO) { suggestContacts(context, saved.about) })
+                else -> SavedMoment(saved, null)
+            }
+            val shown = if (response is NilaResponse.Remember) savedMoment(response) else response
+            turns[pendingIndex] = Turn(prompt, shown)
             if (speakReply) spokenText(response)?.let(lakshmi::speak)
             speakReply = false
             isThinking = false
@@ -482,12 +520,11 @@ private fun NilaApp(resumeVersion: Int) {
             val learned = if (response !is NilaResponse.Remember) brain.learn(prompt) else null
             learned?.let {
                 memory.save(it.fact, it.kind, it.about)
-                turns += Turn("My NILA", it)
+                turns += Turn(SAVED_TURN, savedMoment(it))
             }
             // Someone close came up and isn't linked to a contact yet: ask once, in chat.
-            val named = listOfNotNull((response as? NilaResponse.Remember)?.about, learned?.about, mentionedPerson(prompt)).filter { it != ME }.distinct()
-            named.firstOrNull { memory.claimContactAsk(it) }?.let { about ->
-                turns += Turn("My NILA", LinkContact(about, withContext(Dispatchers.IO) { suggestContacts(context, about) }))
+            mentionedPerson(prompt)?.takeIf { memory.claimContactAsk(it) }?.let { about ->
+                turns += Turn(SAVED_TURN, LinkContact(about, withContext(Dispatchers.IO) { suggestContacts(context, about) }))
             }
         }
     }
@@ -517,6 +554,12 @@ private fun NilaApp(resumeVersion: Int) {
         if (!panelDragging) sidePanel.animateTo(if (screen == NilaScreen.MyNila) 1f else 0f, PanelSpring)
     }
 
+    // The system prompt opens once the panel has settled open; cancelling leaves the locked state, which has its own Unlock button.
+    LaunchedEffect(screen, myNilaLocked) {
+        if (screen != NilaScreen.MyNila || !myNilaLocked) return@LaunchedEffect
+        snapshotFlow { sidePanel.value >= 1f && !panelDragging }.first { it }
+        MyNilaLock.unlock(activity)
+    }
     BackHandler(enabled = navigation.canGoBack) { closeOverlay() }
     // "Add to My NILA" on a chat card opens My NILA's health form, prefilled.
     LaunchedEffect(MyNilaRequests.pending) { if (MyNilaRequests.pending != null) open(NilaScreen.MyNila) }
@@ -544,7 +587,7 @@ private fun NilaApp(resumeVersion: Int) {
                     isThinking -> MascotMood.Thinking
                     justReplied -> MascotMood.Talking
                     lastResponse is NilaResponse.Choices || lastResponse is NilaResponse.Confirmation -> MascotMood.Listening
-                    lastText.contains("could not", true) || lastText.contains("unavailable", true) || lastText.contains("No alarm", true) -> MascotMood.Error
+                    isErrorReply(lastText) -> MascotMood.Error
                     else -> MascotMood.Idle
                 }
                 Box(Modifier.fillMaxSize().graphicsLayer { translationX = sidePanel.value * size.width * HOME_PARALLAX }) {
@@ -573,7 +616,12 @@ private fun NilaApp(resumeVersion: Int) {
                             .background(Ink)
                             .pointerInput(Unit) {},
                     ) {
-                    MyNilaScreen(
+                    if (myNilaLocked) LockedMyNila(
+                        onUnlock = { MyNilaLock.unlock(activity) },
+                        onBack = ::closeOverlay,
+                        onSideDrag = ::dragPanel,
+                        onSideDragEnd = ::releasePanel,
+                    ) else MyNilaScreen(
                             facts = facts,
                             onForgetFact = { id -> scope.launch { memory.delete(id) } },
                             onEditFact = { id, text ->
@@ -584,8 +632,8 @@ private fun NilaApp(resumeVersion: Int) {
                             onForgetAll = { scope.launch { memory.clear() } },
                             health = health,
                             readReport = brain::readReport,
-                            // A report that asks for a follow-up becomes a My NILA reminder on that day.
-                            onSaved = { record -> followUpReminder(record)?.let(reminders::add) },
+                            // "Set a reminder" on a report's follow-up date.
+                            onSetReminder = { record -> followUpReminder(record)?.let(::addReminder) },
                             onDeleted = { record -> reminders.remove("followup-${record.id}") },
                             draft = MyNilaRequests.pending,
                             onDraftUsed = { MyNilaRequests.pending = null },
@@ -756,7 +804,10 @@ private fun NilaApp(resumeVersion: Int) {
 }
 
 /** Turns NILA adds on its own (a provider follow-up, an action's result) carry a label, not something the person said. */
-private val FollowUpLabels = setOf("Zepto", "Zepto tools result", "Action result", "Prepared action", "My NILA")
+private val FollowUpLabels = setOf("Zepto", "Zepto tools result", "Action result", "Prepared action")
+
+/** Marks a memory card NILA adds by itself; it carries its own headline, so no label is shown above it. */
+private const val SAVED_TURN = "My NILA"
 
 internal fun isFollowUpTurn(label: String): Boolean = label in FollowUpLabels
 
@@ -772,6 +823,7 @@ private fun MonthlyReminderCard(reminder: MonthlyReminder, context: Context, onR
         if (!granted) onResult("Saved, but notifications are off for NILA. Turn them on in Android settings to be reminded.")
     }
     ActionCard(
+        icon = LucideR.drawable.lucide_ic_bell,
         label = "Monthly reminder",
         title = reminder.title,
         detail = "Every month on ${dayLabel(reminder)} at %02d:%02d. First: %s.\nMy NILA notifies you, even when NILA is closed."
@@ -802,6 +854,7 @@ private fun OneOffReminderCard(reminder: OneOffReminder, context: Context, onRes
         (reminder.at.hour + 11) % 12 + 1, reminder.at.minute, if (reminder.at.hour < 12) "am" else "pm",
     )
     ActionCard(
+        icon = LucideR.drawable.lucide_ic_bell,
         label = "Reminder",
         title = reminder.title,
         detail = "$time\nMy NILA sends a notification then, even when NILA is closed.",
@@ -817,12 +870,7 @@ private fun OneOffReminderCard(reminder: OneOffReminder, context: Context, onRes
     }
 }
 
-private val MascotTapSize = 40.dp
-private val HeaderMascotSize = 34.dp
-private val WorkingMascotSize = 28.dp
 private val EmptyMascotSize = 72.dp
-private val FoodRequestSize = 14.sp
-private val PromptMinHeight = 48.dp
 private val ProductImageSize = 60.dp
 private val OptionImageSize = 52.dp
 private const val BUSY_CARD_ALPHA = 0.35f
@@ -853,11 +901,7 @@ private fun AgentSpace(
     addTurn: (String, NilaResponse) -> Unit,
 ) {
     val lastWasConfirmation = turns.lastOrNull()?.response is NilaResponse.Confirmation
-    val lastText = (turns.lastOrNull()?.response as? NilaResponse.Text)?.value.orEmpty()
-    val lastWasError = !isThinking && (lastText.contains("could not", true) || lastText.contains("unavailable", true) || lastText.contains("No alarm", true))
     var celebrate by remember { mutableStateOf(false) }
-    // Model load status is debug info: hidden until the mascot is tapped.
-    var showStatus by remember { mutableStateOf(false) }
     // Why voice failed, shown in the listening state. A transcript is sent at once, like a typed message:
     // waiting for "Use this request" made every voice request take two steps, and commit actions still ask.
     var notice by remember { mutableStateOf<String?>(null) }
@@ -876,14 +920,7 @@ private fun AgentSpace(
         notice = null
     }
     val focusManager = LocalFocusManager.current
-    val mood = when {
-        celebrate -> MascotMood.Celebrate
-        isThinking -> MascotMood.Thinking
-        lastWasError -> MascotMood.Error
-        voice.state == VoiceState.LISTENING || input.isNotBlank() -> MascotMood.Listening
-        turns.isEmpty() -> MascotMood.Idle
-        else -> MascotMood.Talking
-    }
+    val freshMood = if (celebrate) MascotMood.Celebrate else MascotMood.Talking
     val listState = rememberLazyListState()
     // Bring the newest turn into view when it is added, when its reply lands and when listening hands back the screen.
     LaunchedEffect(turns.size, isThinking, voiceShown) {
@@ -898,27 +935,11 @@ private fun AgentSpace(
         }
     }
 
-    // One mascot on screen: the body shows it while listening, working or empty, the header the rest of the time.
-    val bodyHasMascot = voiceShown || isThinking || turns.isEmpty()
     Column(
         Modifier.fillMaxSize().padding(horizontal = ScreenGutter, vertical = 12.dp),
     ) {
         TopAction(onBack = onClose) {
             onOpenCart?.let { RoundButton(LucideR.drawable.lucide_ic_shopping_cart, "Your carts", it) }
-            if (!bodyHasMascot) Box(
-                Modifier.size(MascotTapSize).clip(CircleShape)
-                    .clickable(onClickLabel = if (showStatus) "Hide model status" else "Show model status") { showStatus = !showStatus },
-                contentAlignment = Alignment.Center,
-            ) { NilaMascot(mood = mood, size = HeaderMascotSize) }
-        }
-        AnimatedVisibility(visible = showStatus && !bodyHasMascot) {
-            Text(
-                modelStatus,
-                color = Muted,
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-            )
         }
         if (voiceShown) {
             ListeningTurn(voice = voice, notice = notice, modifier = Modifier.weight(1f))
@@ -928,21 +949,24 @@ private fun AgentSpace(
             contentPadding = PaddingValues(vertical = 22.dp),
             verticalArrangement = Arrangement.spacedBy(28.dp),
         ) {
-            if (turns.isEmpty()) item { EmptyAgent(suggestion, onSubmit) }
+            if (turns.isEmpty()) item { EmptyAgent(modelStatus, suggestion, onSubmit, onInput) }
             itemsIndexed(turns) { index, turn ->
-                val busy = index == turns.lastIndex && isThinking
+                val latest = index == turns.lastIndex
+                val busy = latest && isThinking
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     TurnHeading(turn)
-                    when {
-                        busy && (turn.response is NilaResponse.Food || turn.response is NilaResponse.Grocery) -> {
-                            // Keep the booking card on screen while Swiggy answers, faded so taps wait.
-                            WorkingOnIt()
-                            Box(Modifier.alpha(BUSY_CARD_ALPHA)) {
-                                ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, grocery = grocery, forget = forget, addTurn = addTurn)
+                    CompositionLocalProvider(LocalFreshReplyMood provides if (latest) freshMood else null) {
+                        when {
+                            busy && (turn.response is NilaResponse.Food || turn.response is NilaResponse.Grocery) -> {
+                                // Keep the booking card on screen while Swiggy answers, faded so taps wait.
+                                ThinkingLine()
+                                Box(Modifier.alpha(BUSY_CARD_ALPHA)) {
+                                    ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, grocery = grocery, forget = forget, addTurn = addTurn)
+                                }
                             }
+                            busy -> ThinkingLine()
+                            else -> ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, grocery = grocery, forget = forget, addTurn = addTurn)
                         }
-                        busy -> WorkingOnIt()
-                        else -> ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, grocery = grocery, forget = forget, addTurn = addTurn)
                     }
                 }
             }
@@ -986,80 +1010,34 @@ private fun AgentSpace(
     }
 }
 
-/** What the person asked, as the layer's serif headline; NILA's own follow-ups get a small label instead. */
+/** What the person asked, as a small plain line; NILA's own follow-ups carry no line of their own. */
 @Composable
 private fun TurnHeading(turn: Turn) {
     when {
-        isFollowUpTurn(turn.user) -> SectionLabel(turn.user)
-        // The booking sheet brings its own serif title, so the request is only a quiet echo above it.
-        turn.response is NilaResponse.Food || turn.response is NilaResponse.Grocery -> Text(turn.user, color = Muted, fontSize = FoodRequestSize, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        else -> RequestHeadline(turn.user)
+        turn.user == SAVED_TURN || isFollowUpTurn(turn.user) -> Unit
+        else -> UserLine(turn.user)
     }
 }
 
 @Composable
-private fun RequestHeadline(request: String) {
-    val key = requestKeyPhrase(request)
-    val styled = buildAnnotatedString {
-        if (key == null) append(request) else {
-            append(request.substring(0, key.first))
-            withStyle(SpanStyle(color = Lime)) { append(request.substring(key)) }
-            append(request.substring(key.last + 1))
-        }
-    }
-    Text(styled, color = Paper, fontFamily = FontFamily.Serif, fontSize = HeadlineSize, lineHeight = HeadlineSize * 1.12f)
-}
-
-@Composable
-private fun WorkingOnIt() {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        NilaMascot(mood = MascotMood.Thinking, size = WorkingMascotSize)
-        SectionLabel("Working on it…", color = Lime)
-    }
-}
-
-@Composable
-private fun EmptyAgent(suggestion: MemorySuggestion?, onSubmit: (String) -> Unit) {
+private fun EmptyAgent(modelStatus: String, suggestion: MemorySuggestion?, onSubmit: (String) -> Unit, onInput: (String) -> Unit) {
+    // Model load status is debug info: hidden until the mascot is tapped.
+    var showStatus by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(top = 24.dp)) {
-        NilaMascot(mood = MascotMood.Idle, size = EmptyMascotSize)
-        Text("Say it naturally, or type it", color = Muted, fontSize = 12.sp)
-        Text(
-            buildAnnotatedString {
-                append("What would you like to ")
-                withStyle(SpanStyle(color = Lime)) { append("get done") }
-                append("?")
-            },
-            color = Paper,
-            fontFamily = FontFamily.Serif,
-            fontSize = 36.sp,
-            lineHeight = 39.sp,
-        )
-        DemoPrompts(suggestion, onSubmit)
-    }
-}
-
-/** The fixed examples, led by one suggestion from memory when there is one; it sends its own request when tapped. */
-@Composable
-private fun DemoPrompts(suggestion: MemorySuggestion?, onSubmit: (String) -> Unit) {
-    val examples = listOf(
-        "Find dinner under ₹800",
-        "What is 18% of 4250?",
-        "Set an alarm for 6:30 am",
-        "Open YouTube",
-    ).map { MemorySuggestion("“$it”", it) }
-    val prompts = listOfNotNull(suggestion) + examples
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
-        SectionLabel("Try asking")
-        prompts.forEach { prompt ->
-            val fromMemory = prompt == suggestion
-            Box(
-                Modifier.heightIn(min = PromptMinHeight).clip(CircleShape).background(Panel)
-                    .border(1.dp, if (fromMemory) Lime else Stroke, CircleShape)
-                    .clickable { onSubmit(prompt.request) }.padding(horizontal = 16.dp),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                Text(prompt.label, color = if (fromMemory) Lime else Paper, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-            }
+        Box(
+            Modifier.clip(CircleShape).clickable(onClickLabel = if (showStatus) "Hide model status" else "Show model status") { showStatus = !showStatus },
+        ) { NilaMascot(mood = MascotMood.Idle, size = EmptyMascotSize) }
+        if (showStatus) Text(modelStatus, color = Muted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+        Text("What can I do for you?", color = Paper, fontFamily = FontFamily.Serif, fontSize = 34.sp, lineHeight = 38.sp)
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(top = 10.dp),
+        ) {
+            suggestion?.let { SuggestionChip(it.label, { onSubmit(it.request) }, accent = Lime) }
+            SuggestionChip("Order dinner", { onSubmit("Order dinner") })
+            SuggestionChip("Remind me…", { onInput("Remind me to ") })
+            SuggestionChip("What's on today", { onSubmit("What's on today") })
         }
     }
 }
@@ -1096,7 +1074,9 @@ private fun ResponseView(
         // Confirmation is this card only: the iQOO 15 loan devices have fingerprint locked for the hackathon.
         is NilaResponse.NeedsConfirmation -> CommitCard(response) { confirm(response.token) }
         is NilaResponse.Text -> AnswerCard(response.value)
+        is NilaResponse.Private -> PrivateAnswerCard(response.value)
         is HealthPrompt -> ActionCard(
+            icon = LucideR.drawable.lucide_ic_file,
             label = "My NILA · Health",
             title = "${response.title} · ${eventWhen(response.date, null).substringBefore(",")}",
             detail = "Upload the report's photo or PDF: NILA reads it on this phone and files it. It stays encrypted here.",
@@ -1129,25 +1109,8 @@ private fun ResponseView(
             if (response.week.any { it.second > 0 }) Text("Last 7 days: %,d steps".format(response.week.sumOf { it.second }), color = Muted, fontSize = 13.sp)
         }
         is LinkContact -> LinkContactCard(response, context)
-        is NilaResponse.Remember -> NilaCard {
-            SectionLabel("Saved to My NILA", color = Lime)
-            Text(
-                if (response.about == ME) "I'll remember: ${response.fact}" else "${aboutLabel(response.about)}: ${response.fact}",
-                color = Paper,
-                fontSize = 15.sp,
-                lineHeight = 22.sp,
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("${response.kind.label} · on this phone, encrypted", color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                Text(
-                    "Forget",
-                    color = Lime,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.clickable { forget(response) }.padding(start = 12.dp, top = 6.dp, bottom = 6.dp),
-                )
-            }
-        }
+        is SavedMoment -> SavedMomentCard(response, context)
+        is NilaResponse.Remember -> SavedMomentCard(SavedMoment(response, null), context)
         // Only reached if a dismissal was not confirmed through the card; it is never sent without confirmation.
         is NilaResponse.DismissAlarm -> AnswerCard("This alarm was not turned off.")
         // Torch, Camera and Note are done in performNow before they reach the chat.
@@ -1156,12 +1119,14 @@ private fun ResponseView(
         is Message -> MessageCard(response, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is Timer -> TimerCard()
         is NoteSaved -> ActionCard(
+            icon = LucideR.drawable.lucide_ic_file,
             label = "Notes",
             title = "Saved to your notes",
             detail = "\"${response.text}\"\nSay \"show my notes\" to see them all.",
             action = "Add to Notes app",
         ) { addTurn("Action result", NilaResponse.Text(copyToNotesApp(context, response.text))) }
         is CalendarEvent -> ActionCard(
+            icon = LucideR.drawable.lucide_ic_calendar,
             label = "Calendar",
             title = response.title,
             detail = eventWhen(response.date, response.time) + "\nOpens your calendar to save it.",
@@ -1181,6 +1146,7 @@ private fun ResponseView(
         is OneOffReminder -> OneOffReminderCard(response, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is Call -> CallCard(response.who, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is NilaResponse.Alarm -> ActionCard(
+            icon = LucideR.drawable.lucide_ic_bell,
             label = "Alarm",
             title = "%02d:%02d".format(response.hour, response.minute),
             detail = "Ready to ask Android to set this alarm.",
@@ -1199,6 +1165,7 @@ private fun ResponseView(
                 .onFailure { addTurn("Action result", NilaResponse.Text("No alarm application is available.")) }
         }
         is NilaResponse.OpenApp -> ActionCard(
+            icon = LucideR.drawable.lucide_ic_smartphone,
             label = "Open app",
             title = response.name,
             detail = "This experience is better in its full interface.",
@@ -1210,18 +1177,24 @@ private fun ResponseView(
                 .onFailure { addTurn("Action result", NilaResponse.Text("${response.name} could not be opened.")) }
         }
         is NilaResponse.Navigate -> ActionCard(
+            icon = LucideR.drawable.lucide_ic_map,
             label = "Directions",
             title = response.destination,
             detail = "Opens Google Maps for live turn-by-turn directions.",
             action = "Open Maps",
         ) { openGoogleMaps(context, response.destination, addTurn) }
-        is NilaResponse.RouteCard -> NilaCard {
-            SourceLabel(response.source)
-            SerifTitle(response.destination)
+        is NilaResponse.RouteCard -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             // OSRM has no live traffic: Bengaluru drives took far longer in Google Maps, so say so plainly.
-            Text("%.1f km · about %.0f min without traffic".format(response.distanceKm, response.durationMin), color = Paper, fontSize = 14.sp)
-            Text("Live traffic time is in Maps · © OpenStreetMap contributors", color = Muted, fontSize = 10.sp)
-            PrimaryAction("Open Maps for live traffic", { openGoogleMaps(context, response.destination, addTurn) }, Modifier.padding(top = 4.dp))
+            NilaLine("About %.0f min without traffic.".format(response.durationMin))
+            ResultCard(
+                icon = LucideR.drawable.lucide_ic_map,
+                title = "Directions",
+                actions = { ActionPill("Open Maps", { openGoogleMaps(context, response.destination, addTurn) }) },
+            ) {
+                Text(response.destination, color = Paper, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                SerifTitle("%.1f km".format(response.distanceKm), size = 24.sp)
+                Text("Live traffic time is in Maps · © OpenStreetMap contributors", color = Muted, fontSize = 10.sp)
+            }
         }
         is NilaResponse.Choices -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             SourceLabel(response.source, color = if (response.source.startsWith("LIVE")) Lime else Orange)
@@ -1271,12 +1244,36 @@ private fun ResponseView(
 
 private fun withEta(detail: String, eta: String) = if (eta.isNotBlank()) "$detail · $eta" else detail
 
-/** NILA's plain answer: calm text on a card, nothing to tap. */
+/** A personal answer: shown while My NILA is unlocked, otherwise a locked card whose Unlock button opens the phone's prompt. */
 @Composable
-private fun AnswerCard(text: String) {
-    if (text.isBlank()) return
-    NilaCard { Text(text, color = Paper, fontSize = 15.sp, lineHeight = 22.sp) }
+private fun PrivateAnswerCard(text: String) {
+    val context = LocalContext.current
+    val locked = MyNilaLock.enabled && !MyNilaLock.unlocked && remember(MyNilaLock.enabled) { MyNilaLock.support(context) } == LockSupport.Ready
+    if (locked) return ResultCard(
+        icon = LucideR.drawable.lucide_ic_lock,
+        title = "My NILA is locked",
+        actions = { ActionPill("Unlock", { (context as? FragmentActivity)?.let(MyNilaLock::unlock) }) },
+    ) { Text("Unlock it to see this answer.", color = Paper, fontSize = 15.sp, lineHeight = 22.sp) }
+    val lines = text.lines().filter(String::isNotBlank)
+    val items = lines.filter { it.startsWith(BULLET) }.map { it.removePrefix(BULLET) }
+    if (items.isEmpty()) return NilaLine(text)
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        NilaLine(lines.first().trimEnd(':'))
+        ResultCard(icon = LucideR.drawable.lucide_ic_user, title = "From My NILA") {
+            items.forEachIndexed { index, item ->
+                if (index > 0) HorizontalDivider(color = Stroke)
+                Text(item, color = Paper, fontSize = 14.sp, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp))
+            }
+            lines.lastOrNull()?.takeUnless { it.startsWith(BULLET) || it == lines.first() }
+                ?.let { Text(it, color = Muted, fontSize = 12.sp) }
+        }
+    }
 }
+
+private const val BULLET = "• "
+
+@Composable
+private fun AnswerCard(text: String) = NilaLine(text)
 
 /** The line every Commit card ends on, set apart like the prototype's "NILA will stop at this boundary". */
 @Composable
@@ -1445,13 +1442,11 @@ private fun ConfirmationCard(response: NilaResponse.Confirmation, onConfirm: () 
 
 /** One action card: what it is, the serif title, a calm line of detail and one lime button that works once. */
 @Composable
-private fun ActionCard(label: String, title: String, detail: String, action: String, onClick: () -> Unit) {
+private fun ActionCard(icon: Int, label: String, title: String, detail: String, action: String, onClick: () -> Unit) {
     val tap = rememberSingleTap(onClick)
-    NilaCard {
-        SectionLabel(label)
+    ResultCard(icon = icon, title = label, actions = { ActionPill(action, tap::fire, enabled = !tap.used) }) {
         SerifTitle(title)
         Text(detail, color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
-        PrimaryAction(action, tap::fire, Modifier.padding(top = 4.dp), enabled = !tap.used)
     }
 }
 
@@ -1706,7 +1701,7 @@ private fun CallCard(who: String, context: Context, report: (String) -> Unit) {
     val askContacts = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
     ) { granted -> if (granted) dialContact() else report("NILA needs contacts access to find $who. You can say the number instead.") }
-    ActionCard(label = "Call", title = who, detail = "Opens the dialer with the number. You press call.", action = "Call $who") {
+    ActionCard(icon = LucideR.drawable.lucide_ic_phone, label = "Call", title = who, detail = "Opens the dialer with the number. You press call.", action = "Call $who") {
         val number = phoneNumber(who)
         when {
             number != null -> dial(number)
@@ -1744,7 +1739,7 @@ private fun MessageCard(message: Message, context: Context, report: (String) -> 
     val askContacts = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
     ) { granted -> if (granted) composeForContact() else report("NILA needs contacts access to find ${message.who}. You can say the number instead.") }
-    ActionCard(label = "MESSAGE", title = "Message ${message.who}", detail = "\"${message.body}\"\nOpens Messages with this filled in. You press Send.", action = "Write") {
+    ActionCard(icon = LucideR.drawable.lucide_ic_message_square, label = "Message", title = "Message ${message.who}", detail = "\"${message.body}\"\nOpens Messages with this filled in. You press Send.", action = "Write") {
         val number = phoneNumber(message.who)
         when {
             number != null -> compose(number)
