@@ -118,5 +118,20 @@ class AppBuilderTest {
         // The plan stays free text: its title has spaces, which LiteRT-LM #3510 can break under constraints on device.
         assertEquals(listOf(null, RecipeSchema.FILL), model.schemas)
     }
+
+    @Test
+    fun retriesAnAppThatCannotAddWhatItShows() {
+        val tallyOnly = """{"components":[{"id":"root","component":"StatTile","label":"Glasses","value":{"fn":"count","of":"/items","period":"day"}}]}"""
+        val model = ScriptedModel(waterPlan, tallyOnly, waterScreen)
+        val result = AppBuilder(model).build("count my water") as BuildResult.Built
+        assertEquals(2, result.attempts)
+        assertTrue(model.requests.last(), "nothing adds to /items" in model.requests.last())
+    }
+
+    @Test
+    fun planPromptSendsHandEnteredMoneyToALog() {
+        // PC eval: "track my car fuel fill-ups" and "money I lent to friends" were planned onto bank transactions.
+        assertTrue("Money the user types in by hand, like fuel costs or loans to friends, is a log" in AppBuilderPrompts.PLAN_SYSTEM)
+    }
 }
 

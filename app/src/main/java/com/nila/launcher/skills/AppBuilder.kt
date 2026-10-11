@@ -41,7 +41,7 @@ class AppBuilder(private val model: RecipeModel) {
             val filled = RecipeRepair.extractJson(raw)
             errors = if (filled == null) listOf(NOT_JSON) else {
                 val recipe = RecipeRepair.repair(withScreen(skeleton, filled))
-                val problems = RecipeValidator.validate(recipe)
+                val problems = RecipeValidator.validate(recipe).ifEmpty { RecipeCompleteness.check(recipe) }
                 if (problems.isEmpty()) return BuildResult.Built(plan, recipe, attempt)
                 problems
             }

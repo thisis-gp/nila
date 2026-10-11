@@ -14,6 +14,7 @@ object AppBuilderPrompts {
         {"template": "<template>", "title": "<2-3 word app name>", "providers": ["<provider>"]}
         Templates:
         - money: spending, expenses, budgets and payments from the user's bank and UPI.
+          Money the user types in by hand, like fuel costs or loans to friends, is a log.
         - log: entries the user adds by hand, like books, workouts, weight, sleep or journal lines.
         - counter: counting something during the day, like glasses of water or cigarettes.
         - checklist: things to tick off, like packing, groceries, todos or daily habits.

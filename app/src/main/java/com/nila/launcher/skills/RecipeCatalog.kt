@@ -11,8 +11,18 @@ data class PropSpec(val kind: PropKind, val required: Boolean = false, val value
 
 data class ComponentSpec(val name: String, val props: Map<String, PropSpec>)
 
-/** Native data a recipe may read. [ownStore] providers keep per-app data; transactions are the phone's own. */
-data class ProviderSpec(val name: String, val permission: String, val ownStore: Boolean, val fields: List<String>)
+/**
+ * Native data a recipe may read. [ownStore] providers keep per-app data; transactions are the phone's own.
+ * A generated app must show every [mustShow] source and give the user a way to add to every [userAdds] one.
+ */
+data class ProviderSpec(
+    val name: String,
+    val permission: String,
+    val ownStore: Boolean,
+    val fields: List<String>,
+    val userAdds: Boolean = false,
+    val mustShow: Boolean = true,
+)
 
 /** Everything a recipe may name. The validator, the repair step and the model prompt are all built from this one list. */
 object RecipeCatalog {
@@ -33,8 +43,8 @@ object RecipeCatalog {
 
     val providers: Map<String, ProviderSpec> = listOf(
         ProviderSpec("transactions", "transactions.read", ownStore = false, fields = listOf("amount", "merchant", "category", "date")),
-        ProviderSpec("storage", "storage.local", ownStore = true, fields = emptyList()),
-        ProviderSpec("rules", "storage.local", ownStore = true, fields = emptyList()),
+        ProviderSpec("storage", "storage.local", ownStore = true, fields = emptyList(), userAdds = true),
+        ProviderSpec("rules", "storage.local", ownStore = true, fields = emptyList(), mustShow = false),
     ).associateBy { it.name }
 
     val permissions: Set<String> = providers.values.map { it.permission }.toSet()
