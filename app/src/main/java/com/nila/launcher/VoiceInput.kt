@@ -51,29 +51,6 @@ const val VOICE_SAMPLE_RATE = 16_000
 private const val MAX_CLIP_MS = 30_000
 private const val CHUNK_MS = 100
 
-/** The default: Gemma works out whether the speaker used English, Hindi or Malayalam. */
-val AUTO_LANGUAGE = VoiceLanguage("auto", "Auto: English, हिंदी or മലയാളം")
-
-// New key so a language chosen before Auto existed does not override the Auto default.
-private const val LANGUAGE_KEY = "language_v2"
-
-/** What the chip cycles through: Auto first, then a fixed language for when Auto guesses wrong. */
-val chipLanguages = listOf(AUTO_LANGUAGE) + voiceLanguages
-
-/** Short label on the language chip. */
-fun voiceChipLabel(tag: String) = when (tag) {
-    "hi-IN" -> "हि"
-    "ml-IN" -> "മ"
-    "en-IN" -> "EN"
-    else -> "Auto"
-}
-
-/** Next language when the chip is tapped. */
-fun nextVoiceLanguage(tag: String): String {
-    val index = chipLanguages.indexOfFirst { it.tag == tag }
-    return chipLanguages[(index + 1) % chipLanguages.size].tag
-}
-
 /** Wraps 16-bit mono PCM in a WAV header: the format LiteRT-LM's Content.AudioBytes reads (as in Google's AI Edge Gallery). */
 fun wav(pcm: ByteArray, sampleRate: Int = VOICE_SAMPLE_RATE): ByteArray =
     ByteBuffer.allocate(44 + pcm.size).order(ByteOrder.LITTLE_ENDIAN).apply {
@@ -149,26 +126,22 @@ enum class VoiceState { IDLE, LISTENING, UNDERSTANDING }
 /** Where one spoken request is: the agent screen's mic, chip and inline listening state all read it. */
 interface VoiceCapture {
     val state: VoiceState
-    val tag: String
-    val languageName: String
 
     /** Starts listening, or, while listening, stops and sends what was said. */
     fun toggle()
 
     /** Stops listening and drops whatever was being recorded or transcribed, e.g. when the person starts typing. */
     fun cancel()
-
-    fun nextLanguage()
 }
 
 /**
- * Records one spoken request at a time. The clip goes to [transcribe] (Gemma 4 E2B, on the phone) with the
- * chosen language as a hint, and the text goes to [onFinal], so voice gets the same rules as typing.
+ * Records one spoken request at a time. The clip goes to [transcribe] (Gemma 4 E2B, on the phone), which
+ * detects English, Hindi or Malayalam itself, and the text goes to [onFinal], so voice gets the same rules as typing.
  */
 @Composable
 fun rememberVoiceCapture(
-    /** [languageName] is null for Auto, so Gemma detects the language itself. */
-    transcribe: suspend (wav: ByteArray, languageName: String?) -> String?,
+    /** Gemma detects the language itself. */
+    transcribe: suspend (wav: ByteArray) -> String?,
     onFinal: (String) -> Unit,
     onMessage: (String) -> Unit,
     /** Called as recording starts, so NILA stops talking and the mic does not record Lakshmi. */
@@ -176,13 +149,10 @@ fun rememberVoiceCapture(
 ): VoiceCapture {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val prefs = remember { context.getSharedPreferences("nila_voice", Context.MODE_PRIVATE) }
-    var currentTag by remember { mutableStateOf(prefs.getString(LANGUAGE_KEY, null) ?: AUTO_LANGUAGE.tag) }
     var currentState by remember { mutableStateOf(VoiceState.IDLE) }
     var stopRequested by remember { mutableStateOf(false) }
     // Each recording gets a number; cancel() moves past it so a late transcript from it is ignored.
     val session = remember { AtomicInteger() }
-    val currentLanguageName = (chipLanguages.firstOrNull { it.tag == currentTag } ?: AUTO_LANGUAGE).name
     val latestFinal by rememberUpdatedState(onFinal)
     val latestMessage by rememberUpdatedState(onMessage)
 
@@ -199,7 +169,7 @@ fun rememberVoiceCapture(
                 return@launch latestMessage("I didn't hear anything. Tap the mic and try again, or type instead.")
             }
             currentState = VoiceState.UNDERSTANDING
-            val text = runCatching { transcribe(clip, currentLanguageName.takeUnless { currentTag == AUTO_LANGUAGE.tag }) }.getOrNull()?.trim()
+            val text = runCatching { transcribe(clip) }.getOrNull()?.trim()
             if (session.get() != mine) return@launch
             currentState = VoiceState.IDLE
             if (text.isNullOrBlank()) latestMessage("I couldn't understand that. Try again, or type instead.") else latestFinal(text)
@@ -211,8 +181,6 @@ fun rememberVoiceCapture(
 
     return object : VoiceCapture {
         override val state get() = currentState
-        override val tag get() = currentTag
-        override val languageName get() = currentLanguageName
 
         override fun toggle() {
             when {
@@ -229,38 +197,18 @@ fun rememberVoiceCapture(
             session.incrementAndGet()
             currentState = VoiceState.IDLE
         }
-
-        override fun nextLanguage() {
-            currentTag = nextVoiceLanguage(currentTag)
-            prefs.edit().putString(LANGUAGE_KEY, currentTag).apply()
-        }
     }
 }
 
-/** Language chip and mic for the agent's input bar. [onMic] starts listening, or stops it while listening. */
-private val LanguageChipMinHeight = 48.dp
+/** The mic for the agent's input bar: Gemma detects the language, so there is no language chip. [onMic] starts listening, or stops it while listening. */
 
 @Composable
 fun VoiceMic(voice: VoiceCapture, onMic: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        // The language chip only shows while idle: the listening layer carries the live status, so the field
-        // beside it never gets squeezed.
-        if (voice.state == VoiceState.IDLE) {
-            Box(
-                Modifier.heightIn(min = LanguageChipMinHeight).clip(CircleShape).clickable(onClick = voice::nextLanguage)
-                    .semantics { contentDescription = "Voice language: ${voice.languageName}. Tap to change." }
-                    .padding(horizontal = 8.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(voiceChipLabel(voice.tag), color = Muted, fontSize = 13.sp, maxLines = 1)
-            }
-        }
-        IconButton(onClick = onMic) {
-            Icon(
-                painterResource(LucideR.drawable.lucide_ic_mic),
-                contentDescription = if (voice.state == VoiceState.LISTENING) "Finish speaking" else "Speak",
-                tint = if (voice.state == VoiceState.IDLE) Paper else Lime,
-            )
-        }
+    IconButton(onClick = onMic) {
+        Icon(
+            painterResource(LucideR.drawable.lucide_ic_mic),
+            contentDescription = if (voice.state == VoiceState.LISTENING) "Finish speaking" else "Speak",
+            tint = if (voice.state == VoiceState.IDLE) Paper else Lime,
+        )
     }
 }

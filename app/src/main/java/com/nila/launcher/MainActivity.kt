@@ -744,8 +744,6 @@ private fun NilaApp(resumeVersion: Int) {
                                 onVoiceRequest = { speakReply = true; submit(it) },
                                 onListenStart = lakshmi::stop,
                                 onClose = ::closeOverlay,
-                                // Only a Zepto session that has searched or added something has a cart worth opening.
-                                onOpenCart = activeZeptoSession?.let { { submit("zepto cart") } },
                                 context = context,
                                 prepare = engine::prepare,
                                 confirm = { token ->
@@ -854,13 +852,12 @@ private fun AgentSpace(
     input: String,
     isThinking: Boolean,
     modelStatus: String,
-    transcribe: suspend (wav: ByteArray, languageName: String?) -> String?,
+    transcribe: suspend (wav: ByteArray) -> String?,
     onInput: (String) -> Unit,
     onSubmit: (String) -> Unit,
     onVoiceRequest: (String) -> Unit,
     onListenStart: () -> Unit,
     onClose: () -> Unit,
-    onOpenCart: (() -> Unit)?,
     context: Context,
     prepare: (Choice) -> NilaResponse.Confirmation,
     confirm: (String) -> Unit,
@@ -920,7 +917,6 @@ private fun AgentSpace(
         Modifier.fillMaxSize().padding(horizontal = ScreenGutter, vertical = 12.dp),
     ) {
         TopAction(onBack = onClose) {
-            onOpenCart?.let { RoundButton(LucideR.drawable.lucide_ic_shopping_cart, "Zepto cart", it) }
             if (!bodyHasMascot) Box(
                 Modifier.size(MascotTapSize).clip(CircleShape)
                     .clickable(onClickLabel = if (showStatus) "Hide model status" else "Show model status") { showStatus = !showStatus },

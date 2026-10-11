@@ -172,17 +172,12 @@ fun groundingText(input: String, lastTurn: Pair<String, String>?): String {
     return if (followUp) "$input ${lastTurn!!.first} ${lastTurn.second}" else input
 }
 
-/** Asks Gemma for a transcript only, in the language's own script, never an answer to the request. */
-fun transcriptionPrompt(languageName: String?) = if (languageName == null) {
-    // Auto: the speaker may use any of NILA's languages, or mix them in one sentence.
+/** Asks Gemma for a transcript only, in each language's own script, never an answer to the request. */
+// The speaker may use any of NILA's languages, or mix them in one sentence; Gemma detects which.
+const val TRANSCRIPTION_PROMPT =
     "Transcribe this speech exactly as spoken. The speaker uses English, Hindi or Malayalam, and may mix them. " +
         "Write each language in its own script: Malayalam in Malayalam script, Hindi in Devanagari, English in Latin letters. " +
         "Output only the transcript, with no answer, translation or notes. If there is no clear speech, output exactly: NONE"
-} else {
-    "Transcribe this speech exactly as spoken. The speaker most likely uses $languageName. " +
-        "Write it in that language's own script. Output only the transcript, with no answer, translation or notes. " +
-        "If there is no clear speech, output exactly: NONE"
-}
 
 /**
  * Null for a transcript that isn't something the person said: "NONE" for silence, or the labelled
@@ -414,13 +409,13 @@ class NilaBrain(
      * Turns a spoken WAV clip into text with Gemma 4 E2B on the phone. The text then takes the same path
      * as typing, so voice never skips the rules, checks or confirmations.
      */
-    suspend fun transcribe(wav: ByteArray, languageName: String?): String? = withContext(llm) {
+    suspend fun transcribe(wav: ByteArray): String? = withContext(llm) {
         val model = assistant ?: return@withContext null
         val start = SystemClock.elapsedRealtime()
         runCatching {
             model.createConversation(ConversationConfig(samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0))).use { conversation ->
                 conversation.sendMessage(
-                    Contents.of(Content.AudioBytes(wav), Content.Text(transcriptionPrompt(languageName))),
+                    Contents.of(Content.AudioBytes(wav), Content.Text(TRANSCRIPTION_PROMPT)),
                 ).contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim()
             }
         }.onFailure { Log.w(TAG, "transcribe failed", it) }.getOrNull()

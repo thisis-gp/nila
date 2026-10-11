@@ -375,7 +375,7 @@ private fun LanguagesScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = 
     LaunchedEffect(checks) { probeSpeechOutput(context) { output = it } }
 
     ScreenTitle("Speak in your\nlanguage.")
-    BodyText("Gemma 4 E2B listens to every language on this phone, with nothing sent online. Pick the language on the chip next to the mic. Typing always works too.")
+    BodyText("Gemma 4 E2B listens to every language on this phone, with nothing sent online. Just speak: it works out which language you used. Typing always works too.")
     voiceLanguages.forEach { language ->
         val speaking = output[language.tag]
         SectionCard(
