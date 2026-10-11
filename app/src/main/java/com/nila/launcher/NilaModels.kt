@@ -18,6 +18,7 @@ import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.tool
 import java.io.File
 import java.util.concurrent.Executors
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 
@@ -247,7 +248,7 @@ class NilaBrain(
         assistant = loadModel(ModelFiles.ASSISTANT, gpuFirst = true, audio = true) { assistantState = it }
     }
 
-    private fun loadModel(name: String, gpuFirst: Boolean, audio: Boolean, setState: (ModelState) -> Unit): Engine? {
+    private fun loadModel(name: String, gpuFirst: Boolean, audio: Boolean, vision: Boolean = false, setState: (ModelState) -> Unit): Engine? {
         val file = ModelFiles.find(context, name) ?: return null.also { setState(ModelState.MISSING) }
         setState(ModelState.LOADING)
         val backends = if (gpuFirst) listOf(Backend.GPU(), Backend.CPU()) else listOf(Backend.CPU())
@@ -258,6 +259,9 @@ class NilaBrain(
                     backend = backend,
                     // Gemma's audio encoder runs on the CPU, as in Google's AI Edge Gallery.
                     audioBackend = if (audio) Backend.CPU() else null,
+                    // Gemma 4 E2B also reads images (My NILA's report photos), but only the report reader loads
+                    // vision. On the CPU, like audio: on the GPU the iQOO 15 never finished loading the assistant.
+                    visionBackend = if (vision) Backend.CPU() else null,
                     cacheDir = context.cacheDir.absolutePath,
                 ),
             )
@@ -468,6 +472,36 @@ class NilaBrain(
     }
 
     /**
+     * Reads a medical report photo with Gemma 4 E2B on the phone and returns what it says, as JSON NILA
+     * parses itself. Vision loads only here, in its own CPU engine freed right after, so the assistant
+     * everyone uses stays lighter. Unavailable when the model can't load; Unreadable when its reply can't
+     * be read. NILA then saves the photo and says so, never made-up values.
+     * ponytail: a second engine per report costs a few seconds and RAM while reading; keep one warm if reports get frequent.
+     */
+    suspend fun readReport(jpeg: ByteArray): ReportRead = withContext(llm) {
+        val reader = loadModel(ModelFiles.ASSISTANT, gpuFirst = false, audio = false, vision = true) {} ?: return@withContext ReportRead.Unavailable
+        val start = SystemClock.elapsedRealtime()
+        try {
+            val reply = try {
+                reader.createConversation(ConversationConfig(samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0))).use { conversation ->
+                    conversation.sendMessage(Contents.of(Content.ImageBytes(jpeg), Content.Text(READ_REPORT)))
+                        .contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "readReport failed: ${e::class.java.simpleName}")
+                null
+            }
+            // Timing only: a report is health data and must never reach device logs.
+            Log.i(TAG, "readReport ms=${SystemClock.elapsedRealtime() - start} chars=${reply?.length ?: 0}")
+            reply?.let(::parseReportReading)?.let { ReportRead.Read(it) } ?: ReportRead.Unreadable
+        } finally {
+            runCatching { reader.close() }
+        }
+    }
+
+    /**
      * Turns a spoken WAV clip into text with Gemma 4 E2B on the phone. The text then takes the same path
      * as typing, so voice never skips the rules, checks or confirmations.
      */
@@ -551,6 +585,20 @@ class NilaBrain(
         const val TAG = "NilaBrain"
         const val HISTORY_TURNS = 4
         const val REMEMBER = "remember_fact"
+
+        /** For My NILA: read a report photo into fields, copying values exactly and leaving out what isn't printed. */
+        val READ_REPORT = """
+            This is a photo of a medical document: a lab report, a prescription, a discharge summary or a bill.
+            Reply with only one JSON object, no other text:
+            {"kind": "Report" or "Visit" or "Medicine" or "Reading" or "Note",
+             "title": a short title, like "Blood test" or "Fever check-up",
+             "date": the date printed on it as YYYY-MM-DD, or "" if none,
+             "place": the hospital, lab or doctor printed on it, or "",
+             "findings": [{"name": test name, "value": the value exactly as printed, "unit": its unit or "", "flag": "high" or "low" or "normal" or "" as the report marks it}],
+             "follow_up_days": days until a follow-up the document asks for, or 0,
+             "summary": one or two plain sentences on what the document says}
+            Copy names, values and dates exactly as printed. Never guess a value that is not on the page. Give no medical advice.
+        """.trimIndent()
 
         /** For My NILA: keep a lasting personal detail from an ordinary message, or nothing. */
         val LEARN = """

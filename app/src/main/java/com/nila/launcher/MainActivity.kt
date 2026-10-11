@@ -579,6 +579,8 @@ private fun NilaApp(resumeVersion: Int) {
                                 onForgetFact = { id -> facts = memory.delete(id) },
                                 onForgetAll = { facts = memory.clear() },
                                 health = health,
+                                readReport = brain::readReport,
+                                onSaved = {},
                                 draft = MyNilaRequests.pending,
                                 onDraftUsed = { MyNilaRequests.pending = null },
                                 onBack = ::closeOverlay,
@@ -941,8 +943,8 @@ private fun ResponseView(
         is HealthPrompt -> ActionCard(
             label = "My NILA · Health",
             title = "${response.title} · ${eventWhen(response.date, null).substringBefore(",")}",
-            detail = "Add it to your health tracker with a photo or PDF of the report. It stays encrypted on this phone.",
-            action = "Add to My NILA",
+            detail = "Upload the report's photo or PDF: NILA reads it on this phone and files it. It stays encrypted here.",
+            action = "Upload the report",
         ) { MyNilaRequests.pending = response }
         is NilaResponse.Remember -> NilaCard {
             SectionLabel("Saved to My NILA", color = Lime)
