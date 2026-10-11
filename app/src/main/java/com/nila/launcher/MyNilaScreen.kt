@@ -96,6 +96,8 @@ internal fun MyNilaScreen(
     draft: HealthPrompt?,
     onDraftUsed: () -> Unit,
     onBack: () -> Unit,
+    onSideDrag: (Float) -> Unit,
+    onSideDragEnd: (Float) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -183,15 +185,9 @@ internal fun MyNilaScreen(
         }
     }
 
-    var sideways by remember { mutableStateOf(0f) }
     Column(
         Modifier.fillMaxSize().background(Ink).safeDrawingPadding().padding(horizontal = ScreenGutter, vertical = 12.dp)
-            .pointerInput(open) {
-                detectHorizontalDragGestures(
-                    onDragStart = { sideways = 0f },
-                    onDragEnd = { if (sideways < -SWIPE_BACK_DP.dp.toPx()) onBack() },
-                ) { _, drag -> sideways += drag }
-            },
+            .sideSwipe(onDrag = onSideDrag, onEnd = onSideDragEnd),
     ) {
         Box(Modifier.padding(top = 8.dp).offset(x = (-4).dp)) {
             RoundButton(LucideR.drawable.lucide_ic_chevron_left, "Back", { if (open != null) open = null else onBack() })
@@ -236,7 +232,6 @@ private val AvatarSize = 44.dp
 private val AvatarGap = 14.dp
 private val RowMinHeight = 52.dp
 private val EmptyMascotSize = 108.dp
-private const val SWIPE_BACK_DP = 80
 
 /** The People | Health records | Fitness switch: one rounded track, the chosen segment lifted and ticked. */
 @Composable

@@ -146,6 +146,8 @@ internal fun HomeScreen(
     facts: List<MemoryFact>,
     onOpenMyNila: () -> Unit,
     onSuggestion: (String) -> Unit,
+    onSideDrag: (Float) -> Unit,
+    onSideDragEnd: (Float) -> Unit,
 ) {
     val context = LocalContext.current
     // NILA's olive look by default; the phone's wallpaper only after the user picks one by long-pressing Home.
@@ -191,13 +193,7 @@ internal fun HomeScreen(
     Box(
         Modifier.fillMaxSize()
             .pointerInput(Unit) { detectTapGestures(onLongPress = { onChangeWallpaper() }) }
-            .pointerInput(Unit) {
-                var sideways = 0f
-                detectHorizontalDragGestures(
-                    onDragStart = { sideways = 0f },
-                    onDragEnd = { if (sideways > SWIPE_SIDE_DP.dp.toPx()) onOpenMyNila() },
-                ) { _, dragAmount -> sideways += dragAmount }
-            }
+            .sideSwipe(onDrag = onSideDrag, onEnd = onSideDragEnd)
             .pointerInput(Unit) {
                 var dragged = 0f
                 detectVerticalDragGestures(
@@ -364,7 +360,6 @@ private fun HomeSuggestion(suggestion: MemorySuggestion, onYes: () -> Unit, onNo
 }
 
 private val SuggestionPhotoSize = 52.dp
-private const val SWIPE_SIDE_DP = 80
 
 private fun greetingFor(hour: Int) = when {
     hour < 12 -> "Good morning"
