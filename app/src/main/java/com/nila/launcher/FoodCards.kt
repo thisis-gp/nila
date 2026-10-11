@@ -1,6 +1,8 @@
 package com.nila.launcher
 
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -8,7 +10,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -33,8 +35,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -45,6 +48,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -53,11 +57,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.CancellationException
-import androidx.compose.runtime.mutableStateMapOf
 
 /** What the food cards can ask NILA to do next. Implemented in MainActivity. */
 internal interface FoodActions {
@@ -67,6 +70,8 @@ internal interface FoodActions {
     fun back(card: FoodCard)
     /** The same shop on Zomato with its prices for this request; null when Zomato isn't connected. */
     suspend fun zomatoShop(address: FoodAddress, restaurant: FoodRestaurant): ZomatoShop?
+    /** The same dish across Zomato near [address]; null when Zomato isn't connected. */
+    suspend fun zomatoNearby(address: FoodAddress): ZomatoNearby?
     fun lastResults(): FoodCard.Restaurants?
     fun lastMenu(): FoodCard?
     fun lastCart(): FoodCard.Cart?
@@ -641,6 +646,7 @@ private fun DishesCard(card: FoodCard.Dishes, actions: FoodActions) {
                 modifier = Modifier.clickable { showAll = true }.padding(vertical = 4.dp),
             )
         }
+        ZomatoNearbyBlock(card, actions)
         actions.lastResults()?.let { results -> BackLink("Browse restaurants instead") { actions.back(results) } }
     }
 }
@@ -1161,6 +1167,9 @@ private fun rememberZomatoShops(address: FoodAddress, restaurants: List<FoodRest
 internal data class ZomatoLineText(val text: String, val cheaperOnZomato: Boolean = false)
 
 /** Swiggy's price as a number, decimals kept: "₹199.50" is 199.5, not 199. */
+/** ₹ amount without a trailing ".0": 249.0 shows as 249, 249.5 as 249.5. */
+internal fun rupeeText(rupees: Double) = if (rupees % 1.0 == 0.0) rupees.toLong().toString() else "%.2f".format(rupees).trimEnd('0')
+
 internal fun priceRupees(price: String): Double? = Regex("""\d+(\.\d+)?""").find(price.replace(",", ""))?.value?.toDoubleOrNull()
 
 internal fun zomatoLine(lookup: ZomatoLookup, swiggyName: String, swiggyPrice: String): ZomatoLineText {
@@ -1223,3 +1232,83 @@ private fun ZomatoShopBlock(lookup: ZomatoLookup?, swiggyNames: List<String>) {
 
 /** Zomato's red, for its prices beside Swiggy's: a label colour, never the only signal (the text says which is cheaper). */
 private val ZomatoRed = Color(0xFFF0626E)
+
+
+/**
+ * The dish across Zomato, below Swiggy's list, the way groceries show Zepto beside Instamart: Zomato's shops
+ * with their matching dishes and prices, and which app has it cheapest. Zomato orders open in its app.
+ */
+@Composable
+private fun ZomatoNearbyBlock(card: FoodCard.Dishes, actions: FoodActions) {
+    val context = LocalContext.current
+    var loading by remember(card.address.id, card.query) { mutableStateOf(true) }
+    var nearby by remember(card.address.id, card.query) { mutableStateOf<ZomatoNearby?>(null) }
+    LaunchedEffect(card.address.id, card.query) {
+        nearby = runCatching { actions.zomatoNearby(card.address) }
+            .getOrElse { if (it is CancellationException) throw it else ZomatoNearby(emptyList(), NO_ANSWER) }
+        loading = false
+    }
+    val result = nearby
+    if (!loading && result == null) return // Zomato isn't connected: Swiggy alone, as before.
+    val zomatoMin = result?.shops?.minOfOrNull { it.dishes.first().price }
+    // Only the same dish is compared across apps: "Chicken Biryani" against "Chicken Biryani", never against "Egg Biryani".
+    val swiggyByDish = card.dishes.mapNotNull { dish ->
+        priceRupees(dish.item.chosenSize?.price ?: dish.item.price)?.let { dishKey(dish.item.name) to it }
+    }.groupBy({ it.first }, { it.second }).mapValues { (_, prices) -> prices.min() }
+    val sameDish = result?.shops.orEmpty().flatMap { it.dishes }
+        .mapNotNull { dish -> swiggyByDish[dishKey(dish.name)]?.let { Triple(dish.name.substringBefore(" · "), dish.price, it) } }
+        .minByOrNull { it.second }
+    Column(Modifier.fillMaxWidth().padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SourceLabel(
+            "Zomato · live" + (zomatoMin?.let { " · cheapest of the ${result.checked} we checked: ₹$it" } ?: ""),
+            color = ZomatoRed,
+        )
+        if (sameDish != null) {
+            val (name, zomato, swiggy) = sameDish
+            val swiggyText = rupeeText(swiggy)
+            Text(
+                when {
+                    zomato < swiggy -> "$name: ₹$zomato on Zomato, ₹$swiggyText on Swiggy"
+                    zomato > swiggy -> "$name: ₹$swiggyText on Swiggy, ₹$zomato on Zomato"
+                    else -> "$name: ₹$zomato on both"
+                },
+                color = Paper,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        when {
+            loading -> Text("Checking Zomato for ${card.query}…", color = Muted, fontSize = 13.sp)
+            result?.gap != null -> Text(result.gap, color = Muted, fontSize = 13.sp)
+            else -> Surface(color = CardInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+                Column {
+                    result?.shops?.forEachIndexed { index, shop ->
+                        if (index > 0) HorizontalDivider(color = Panel)
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(shop.name, color = Paper, fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (shop.rating.isNotBlank()) RatingBadge(shop.rating)
+                            }
+                            if (shop.eta.isNotBlank()) Text(shop.eta, color = Muted, fontSize = 12.sp)
+                            shop.dishes.take(ZOMATO_DISHES_PER_SHOP).forEach { dish ->
+                                Row {
+                                    Text(dish.name, color = Paper, fontSize = 14.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("₹${dish.price}", color = Paper, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (result?.shops?.isNotEmpty() == true) {
+            TextAction("Order these on Zomato", onClick = {
+                val app = context.packageManager.getLaunchIntentForPackage(ZOMATO_PACKAGE)
+                runCatching { context.startActivity(app ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://www.zomato.com"))) }
+            }, color = ZomatoRed)
+        }
+    }
+}
+
+private const val ZOMATO_DISHES_PER_SHOP = 3
+private const val ZOMATO_PACKAGE = "com.application.zomato"

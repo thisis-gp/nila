@@ -1,7 +1,11 @@
 package com.nila.launcher
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -40,7 +44,11 @@ data class ZomatoGap(val reason: String) : ZomatoComparison
 data class ZomatoDish(val name: String, val price: Int)
 
 /** The same shop on Zomato: its dishes for what the user asked, cheapest first, or why there are none ([gap]). */
-data class ZomatoShop(val name: String, val dishes: List<ZomatoDish>, val gap: String? = null)
+data class ZomatoShop(val name: String, val dishes: List<ZomatoDish>, val gap: String? = null, val eta: String = "", val rating: String = "")
+
+/** Zomato's answer for a dish near an address: shops with that dish, cheapest first, or why there are none. */
+/** [checked] is how many Zomato shops were read, so the card can say "cheapest of the N we checked". */
+data class ZomatoNearby(val shops: List<ZomatoShop>, val gap: String? = null, val checked: Int = 0)
 
 internal sealed interface ZomatoAddress {
     data class Found(val id: String) : ZomatoAddress
@@ -57,6 +65,7 @@ internal class ZomatoCompare(private val context: Context) {
     // Per address and per shop, so scrolling back to a card never asks Zomato again.
     private val addressIds = ConcurrentHashMap<String, String>()
     private val shops = ConcurrentHashMap<String, ZomatoShop>()
+    private val nearbyCache = ConcurrentHashMap<String, ZomatoNearby>()
     private val addressLock = Mutex()
 
     val connected: Boolean get() = ZomatoAuth.currentSession(context) != null
@@ -138,17 +147,70 @@ internal class ZomatoCompare(private val context: Context) {
             ?: return unanswered
         val found = allObjects(results).firstOrNull { it.has("res_id") && sameRestaurant(restaurantName, it.pick("name").orEmpty()) }
             ?: return gap("Not on Zomato near ${address.label}").also { shops[key] = it }
-        val resId = found.pick("res_id")?.toLongOrNull() ?: return gap("Not on Zomato near ${address.label}").also { shops[key] = it }
-        val listing = (call("get_menu_items_listing", JSONObject().put("res_id", resId).put("address_id", addressId)) ?: return unanswered)
+        return when (val menu = menuOf(addressId, found, query, restaurantName)) {
+            MenuResult.Failed -> unanswered
+            MenuResult.Empty -> gap("No $query on its Zomato menu").also { shops[key] = it }
+            is MenuResult.Found -> menu.shop.also { shops[key] = it }
+        }
+    }
+
+    /**
+     * The dish across Zomato near [address], like the Swiggy dish list: Zomato has no dish search, so the shops
+     * it finds for the dish are read for their matching dishes, a few at a time. Read-only. One shop failing
+     * leaves the others; a failed search says so instead of "found nothing". Cached per address and dish.
+     */
+    suspend fun nearby(address: FoodAddress, query: String): ZomatoNearby {
+        val addressId = when (val result = addressIdFor(address)) {
+            ZomatoAddress.Failed -> return ZomatoNearby(emptyList(), NO_ANSWER)
+            ZomatoAddress.Empty -> return ZomatoNearby(emptyList(), "No Zomato address near ${address.label}")
+            is ZomatoAddress.Found -> result.id
+        }
+        val key = "$addressId|$query"
+        nearbyCache[key]?.let { return it }
+        val results = call("get_restaurants_for_keyword", JSONObject().put("address_id", addressId).put("keyword", query).put("page_size", SEARCH_SIZE))
+            ?: return ZomatoNearby(emptyList(), NO_ANSWER)
+        val found = allObjects(results).filter { it.has("res_id") && it.pick("name") != null }.distinctBy { it.pick("res_id") }.take(NEARBY_SHOPS)
+        if (found.isEmpty()) return ZomatoNearby(emptyList(), "Zomato found no $query near ${address.label}").also { nearbyCache[key] = it }
+        val menus = coroutineScope {
+            found.map { shop ->
+                async {
+                    try {
+                        menuOf(addressId, shop, query, shop.pick("name").orEmpty())
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        MenuResult.Failed
+                    }
+                }
+            }.awaitAll()
+        }
+        val shopsFound = menus.filterIsInstance<MenuResult.Found>().map { it.shop }.sortedBy { it.dishes.first().price }
+        return when {
+            shopsFound.isNotEmpty() -> ZomatoNearby(shopsFound, checked = found.size).also { nearbyCache[key] = it }
+            menus.all { it == MenuResult.Failed } -> ZomatoNearby(emptyList(), NO_ANSWER)
+            else -> ZomatoNearby(emptyList(), "Zomato's shops near ${address.label} don't list $query").also { nearbyCache[key] = it }
+        }
+    }
+
+    private sealed interface MenuResult {
+        data object Failed : MenuResult
+        data object Empty : MenuResult
+        data class Found(val shop: ZomatoShop) : MenuResult
+    }
+
+    /** One Zomato shop's dishes matching [query], priced; Empty when it lists none, Failed when Zomato didn't answer. */
+    private suspend fun menuOf(addressId: String, found: JSONObject, query: String, fallbackName: String): MenuResult {
+        val resId = found.pick("res_id")?.toLongOrNull() ?: return MenuResult.Empty
+        val listing = (call("get_menu_items_listing", JSONObject().put("res_id", resId).put("address_id", addressId)) ?: return MenuResult.Failed)
             .let { allObjects(it) }.filter { it.has("item_name") && it.has("variant_id") }
             .filter { mentionsDish(it.pick("item_name").orEmpty(), query) }
         val categories = listing.mapNotNull { it.optJSONArray("categories")?.optString(0) }.distinct()
-        if (categories.isEmpty()) return gap("No $query on its Zomato menu").also { shops[key] = it }
+        if (categories.isEmpty()) return MenuResult.Empty
         val wanted = listing.mapNotNull { it.pick("variant_id") }.toSet()
         val menu = call(
             "get_restaurant_menu_by_categories",
             JSONObject().put("res_id", resId).put("address_id", addressId).put("categories", JSONArray(categories)),
-        ) ?: return unanswered
+        ) ?: return MenuResult.Failed
         val dishes = allObjects(menu)
             .filter { it.pick("variant_id") in wanted }
             .mapNotNull { item ->
@@ -158,8 +220,15 @@ internal class ZomatoCompare(private val context: Context) {
             // Size variants share a name but not a price: keep each one.
             .distinctBy { it.name.lowercase() to it.price }
             .sortedBy { it.price }
-        if (dishes.isEmpty()) return gap("Zomato didn't price its $query").also { shops[key] = it }
-        return ZomatoShop(found.pick("name").orEmpty().ifBlank { restaurantName }, dishes).also { shops[key] = it }
+        if (dishes.isEmpty()) return MenuResult.Empty
+        return MenuResult.Found(
+            ZomatoShop(
+                name = found.pick("name").orEmpty().ifBlank { fallbackName },
+                dishes = dishes,
+                eta = found.pick("eta", "delivery_time").orEmpty(),
+                rating = found.pick("rating", "aggregate_rating").orEmpty(),
+            ),
+        )
     }
 
     /** Creates a Zomato cart for the same items to read its real total. Never checks out. */
@@ -178,6 +247,8 @@ internal class ZomatoCompare(private val context: Context) {
     private companion object {
         const val ENDPOINT = "https://mcp-server.zomato.com/mcp"
         const val SEARCH_SIZE = 5
+        // Each shop costs two menu calls, so the dish list reads the first few shops only.
+        const val NEARBY_SHOPS = 4
         const val MAX_PARALLEL_CALLS = 3
     }
 }
@@ -228,12 +299,22 @@ private fun dishSkeleton(word: String) = word.lowercase().filter { it.isLetter()
 
 private val notDishWords = setOf("order", "want", "need", "some", "from", "with", "please", "near", "best", "cheap", "food")
 
-/** True when [name] is one of the dishes [query] asks for: "Hyderabadi Chicken Biryani" for "biriyani". */
+/** True when [name] is the dish [query] asks for, its words in order: "Hyderabadi Chicken Biryani" for "biriyani". */
 internal fun mentionsDish(name: String, query: String): Boolean {
     val wanted = query.lowercase().split(Regex("""[^\p{L}]+""")).filter { it.length >= 4 && it !in notDishWords }.map(::dishSkeleton)
     if (wanted.isEmpty()) return false
     val words = name.lowercase().split(Regex("""[^\p{L}]+""")).filter { it.length >= 4 }.map(::dishSkeleton)
-    return wanted.any { w -> words.any { it == w } }
+    // In order, at most one word apart: "Butter Chicken Kulcha" and "Butter Paneer Chicken" are butter chicken,
+    // "Stir Fried Chicken in a Garlic Butter Sauce" is not.
+    fun matchesFrom(start: Int): Boolean {
+        if (words[start] != wanted.first()) return false
+        var at = start
+        for (w in wanted.drop(1)) {
+            at = (at + 1..minOf(at + 2, words.lastIndex)).firstOrNull { words[it] == w } ?: return false
+        }
+        return true
+    }
+    return words.indices.any(::matchesFrom)
 }
 
 /** "₹20 cheaper on Zomato", "₹15 cheaper on Swiggy" or "Same price on Zomato". */
