@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -91,7 +93,7 @@ internal fun MyNilaScreen(
     onForgetAll: () -> Unit,
     health: HealthStore,
     readReport: suspend (ByteArray) -> ReportRead,
-    onSaved: (HealthRecord) -> Unit,
+    onSetReminder: (HealthRecord) -> Unit,
     onDeleted: (HealthRecord) -> Unit,
     draft: HealthPrompt?,
     onDraftUsed: () -> Unit,
@@ -111,6 +113,9 @@ internal fun MyNilaScreen(
     // The day the chat mentioned ("last week"), used when the report prints no date of its own.
     var dateHint by remember { mutableStateOf(draft?.date ?: LocalDate.now()) }
     var photo by remember { mutableStateOf<File?>(null) }
+    // Set while the user adds another page to this record instead of a new report.
+    var pageFor by remember { mutableStateOf<HealthRecord?>(null) }
+    BackHandler(enabled = open != null) { open = null }
 
     /**
      * Encrypts the report, reads it and saves the record, all off the main thread. Leaving the screen
@@ -134,8 +139,10 @@ internal fun MyNilaScreen(
                     }
                 }
                 val result = page?.let { readReport(jpegOf(it.bitmap)) } ?: ReportRead.Unreadable
-                val record = recordFrom(
-                    (result as? ReportRead.Read)?.reading, stored, dateHint,
+                val report = (result as? ReportRead.Read)?.reading
+                val target = pageFor
+                val record = if (target != null) withPage(target, report, stored) else recordFrom(
+                    report, stored, dateHint,
                     unavailable = result == ReportRead.Unavailable, pages = page?.pages ?: 1,
                 )
                 val updated = withContext(Dispatchers.IO) { health.save(record) } ?: run {
@@ -144,7 +151,9 @@ internal fun MyNilaScreen(
                 }
                 records = updated
                 saved = true
-                onSaved(record)
+                if (target != null && report == null) problem = if (result == ReportRead.Unavailable) {
+                    "NILA's on-device reader isn't available right now, so the page was added without reading it."
+                } else "NILA couldn't read that page. It is added to the record."
                 open = record
             } catch (e: CancellationException) {
                 throw e
@@ -157,11 +166,15 @@ internal fun MyNilaScreen(
                     if (!saved) name?.let(health::discard)
                     capture?.delete()
                 }
+                pageFor = null
                 reading = false
             }
         }
     }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? -> uri?.let { readAndSave(it) } }
+    val pickPage = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) readAndSave(uri) else pageFor = null
+    }
     val shoot = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { taken ->
         val shot = photo ?: return@rememberLauncherForActivityResult
         // The plain capture is deleted right after it is encrypted, never on a timer.
@@ -198,19 +211,26 @@ internal fun MyNilaScreen(
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             when {
                 tab == MyNilaTab.People -> PeopleTab(facts, onForgetFact, onEditFact, onAddFact, onForgetAll)
+                tab == MyNilaTab.Fitness -> FitnessTab()
+                reading -> ReadingCard()
                 open != null -> HealthDetail(
                     health = health,
                     record = open!!,
+                    notice = problem,
+                    onSetReminder = onSetReminder,
+                    onAddPage = { pageFor = it; pickPage.launch(arrayOf("image/*", HealthStore.PDF)) },
                     onDelete = { record, done ->
                         scope.launch {
                             val updated = withContext(Dispatchers.IO) { health.delete(record.id) }
-                            if (updated != null) records = updated
+                            if (updated != null) {
+                                records = updated
+                                onDeleted(record)
+                            }
                             done(updated != null)
                         }
                     },
                     onDeleted = { open = null },
                 )
-                tab == MyNilaTab.Fitness -> FitnessTab()
                 else -> HealthTab(
                     records,
                     reading = reading,
@@ -218,7 +238,7 @@ internal fun MyNilaScreen(
                     onPhoto = { pick.launch(arrayOf("image/*")) },
                     onPdf = { pick.launch(arrayOf(HealthStore.PDF)) },
                     onCamera = ::takePhoto,
-                    onOpen = { open = it },
+                    onOpen = { problem = null; open = it },
                 )
             }
         }
@@ -270,6 +290,9 @@ private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit, o
             onAction = { sheet = SheetTarget(null, ME) },
         )
     } else {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextAction("+ Add", onClick = { sheet = SheetTarget(null, ME) })
+        }
         people.forEach { (about, known) ->
             val isMe = about == ME
             val title = if (isMe) name ?: "You" else personTitle(about, known)
@@ -286,7 +309,6 @@ private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit, o
                 }
             }
             known.forEach { fact -> FactRow(fact) { sheet = SheetTarget(fact, about) } }
-            AddRow { sheet = SheetTarget(null, about) }
         }
         ForgetEverything(factCount = shown.size, peopleCount = people.count { it.second.isNotEmpty() }, onForgetAll = onForgetAll)
     }
@@ -294,11 +316,12 @@ private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit, o
         FactSheet(
             target,
             onDismiss = { sheet = null },
-            onSave = { text ->
+            people = people.map { it.first },
+            onSave = { text, about ->
                 when {
                     target.isName -> if (target.fact != null) onEditFact(target.fact.id, NAME_PREFIX + text) else onAddFact(NAME_PREFIX + text, ME)
                     target.fact != null -> onEditFact(target.fact.id, text)
-                    else -> onAddFact(text, target.about)
+                    else -> onAddFact(text, about)
                 }
                 sheet = null
             },
@@ -323,17 +346,6 @@ private fun FactRow(fact: MemoryFact, onClick: () -> Unit) {
                 Text(tag, color = color, fontSize = 12.sp, modifier = Modifier.padding(start = 5.dp))
             }
         }
-    }
-}
-
-@Composable
-private fun AddRow(onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = RowMinHeight).clickable(onClick = onClick).padding(start = AvatarSize + AvatarGap),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(painterResource(LucideR.drawable.lucide_ic_plus), contentDescription = null, tint = Lime, modifier = Modifier.size(18.dp))
-        Text("Add something NILA should know", color = Lime, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 10.dp))
     }
 }
 
@@ -373,9 +385,11 @@ private fun ForgetEverything(factCount: Int, peopleCount: Int, onForgetAll: () -
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FactSheet(target: SheetTarget, onDismiss: () -> Unit, onSave: (String) -> Unit, onForget: (String) -> Unit) {
+private fun FactSheet(target: SheetTarget, people: List<String>, onDismiss: () -> Unit, onSave: (text: String, about: String) -> Unit, onForget: (String) -> Unit) {
     val start = if (target.isName) target.fact?.let { userName(listOf(it)) }.orEmpty() else target.fact?.text.orEmpty()
     var text by remember(target) { mutableStateOf(start) }
+    var person by remember(target) { mutableStateOf(aboutLabel(target.about)) }
+    val choosing = target.fact == null && !target.isName
     val title = when {
         target.isName -> "Your name"
         target.fact != null -> "What NILA knows"
@@ -385,6 +399,25 @@ private fun FactSheet(target: SheetTarget, onDismiss: () -> Unit, onSave: (Strin
         Column(Modifier.fillMaxWidth().padding(horizontal = ScreenGutter).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             SerifTitle(title, size = 24.sp)
             target.fact?.takeIf { !target.isName }?.let { Text(it.text, color = Muted, fontSize = 14.sp, lineHeight = 20.sp) }
+            if (choosing) {
+                OutlinedTextField(
+                    value = person,
+                    onValueChange = { person = it },
+                    label = { Text("Who is it about", color = Muted) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Paper, unfocusedTextColor = Paper, focusedBorderColor = Lime, unfocusedBorderColor = Stroke, cursorColor = Lime),
+                )
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    people.forEach { who ->
+                        Text(
+                            aboutLabel(who), color = if (aboutKey(person) == who) Ink else Paper, fontSize = 13.sp,
+                            modifier = Modifier.clip(RoundedCornerShape(50)).background(if (aboutKey(person) == who) Lime else Panel).clickable { person = aboutLabel(who) }.padding(horizontal = 14.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+            }
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
@@ -393,7 +426,7 @@ private fun FactSheet(target: SheetTarget, onDismiss: () -> Unit, onSave: (Strin
                 modifier = Modifier.fillMaxWidth(),
                 colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Paper, unfocusedTextColor = Paper, focusedBorderColor = Lime, unfocusedBorderColor = Stroke, cursorColor = Lime),
             )
-            PrimaryAction("Save", onClick = { onSave(text.trim()) }, enabled = text.isNotBlank())
+            PrimaryAction("Save", onClick = { onSave(text.trim(), if (choosing) aboutKey(person) else target.about) }, enabled = text.isNotBlank() && (!choosing || person.isNotBlank()))
             target.fact?.takeIf { !target.isName }?.let {
                 TextAction("Forget this", onClick = { onForget(it.id) }, color = Orange, modifier = Modifier.align(Alignment.CenterHorizontally))
             }
@@ -415,6 +448,7 @@ private fun HealthTab(
     onOpen: (HealthRecord) -> Unit,
 ) {
     var adding by remember { mutableStateOf(false) }
+    BackHandler(enabled = adding) { adding = false }
     if (adding) {
         ModalBottomSheet(onDismissRequest = { adding = false }, containerColor = CardInk, contentColor = Paper) {
             Column(Modifier.fillMaxWidth().padding(horizontal = ScreenGutter).padding(bottom = 24.dp)) {
@@ -425,30 +459,23 @@ private fun HealthTab(
             }
         }
     }
-    if (reading) {
-        NilaCard {
-            CardLabel("Reading your report", color = Lime)
-            Text("NILA is reading it on this phone. Nothing is sent online.", color = Paper, fontSize = 14.sp)
-        }
-    } else if (records.isEmpty()) {
+    if (records.isEmpty()) {
         EmptyState(MascotMood.Sleeping, "No health records yet. Add a report and NILA files it with its date and values.", "Add a report", onAction = { adding = true }, note = HEALTH_DISCLAIMER)
-    } else {
-        PrimaryAction("Add a report", onClick = { adding = true })
+        problem?.let { Text(it, color = Orange, fontSize = 13.sp) }
+        return
     }
+    PrimaryAction("Add a report", onClick = { adding = true })
     problem?.let { Text(it, color = Orange, fontSize = 13.sp) }
-    if (records.isEmpty()) return
     records.forEach { record ->
+        val flags = flagsSummary(record.findings)
         Surface(color = CardInk, shape = RoundedCornerShape(CardRadius), modifier = Modifier.fillMaxWidth().clickable { onOpen(record) }) {
             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    CardLabel(record.kind.label + if (record.about != ME) " · ${aboutLabel(record.about)}" else "", color = Lime)
+                    if (record.about != ME) CardLabel(aboutLabel(record.about))
                     Text(record.title, color = Paper, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        listOf(eventWhen(record.date, null).substringBefore(","), record.place).filter(String::isNotBlank).joinToString(" · "),
-                        color = Muted,
-                        fontSize = 13.sp,
-                    )
-                    record.followUp?.let { Text("Follow-up ${eventWhen(it, null).substringBefore(",")}", color = Lime, fontSize = 12.sp) }
+                    Text(dayAndPlace(record), color = Muted, fontSize = 13.sp)
+                    if (flags.isNotBlank()) Text(flags, color = if ("high" in flags) Orange else Lime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    record.followUp?.let { Text("Follow-up ${shortDay(it)}", color = Lime, fontSize = 12.sp) }
                 }
                 Icon(painterResource(LucideR.drawable.lucide_ic_chevron_right), contentDescription = null, tint = Muted, modifier = Modifier.size(18.dp))
             }
@@ -456,6 +483,18 @@ private fun HealthTab(
     }
     Text(HEALTH_DISCLAIMER, color = Muted, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
 }
+
+@Composable
+private fun ReadingCard() = NilaCard {
+    CardLabel("Reading your report", color = Lime)
+    Text("NILA is reading it on this phone. Nothing is sent online.", color = Paper, fontSize = 14.sp)
+}
+
+/** "Sun 4 Oct". */
+private fun shortDay(date: LocalDate) = eventWhen(date, null).substringBefore(",")
+
+/** "Sun 4 Oct · City Diagnostics Lab". */
+private fun dayAndPlace(record: HealthRecord) = listOf(shortDay(record.date), record.place).filter(String::isNotBlank).joinToString(" · ")
 
 private const val HEALTH_DISCLAIMER = "NILA reads the report and saves what it says. It is not a doctor: check every value with yours."
 
@@ -476,24 +515,38 @@ internal fun CardLabel(text: String, modifier: Modifier = Modifier, color: Color
 private fun HealthDetail(
     health: HealthStore,
     record: HealthRecord,
+    notice: String?,
+    onSetReminder: (HealthRecord) -> Unit,
+    onAddPage: (HealthRecord) -> Unit,
     onDelete: (HealthRecord, (Boolean) -> Unit) -> Unit,
     onDeleted: () -> Unit,
 ) {
     var armed by remember(record.id) { mutableStateOf(false) }
     var deleting by remember(record.id) { mutableStateOf(false) }
     var problem by remember(record.id) { mutableStateOf<String?>(null) }
-    SectionLabel(record.kind.label, color = Lime)
+    var reminded by remember(record.id) { mutableStateOf(false) }
     SerifTitle(record.title, size = 26.sp)
-    Text(listOf(eventWhen(record.date, null).substringBefore(","), record.place).filter(String::isNotBlank).joinToString(" · "), color = Muted, fontSize = 14.sp)
-    record.followUp?.let { NilaCard { SectionLabel("Follow-up", color = Lime); Text(eventWhen(it, null).substringBefore(","), color = Paper, fontWeight = FontWeight.Bold) } }
+    Text(dayAndPlace(record), color = Muted, fontSize = 14.sp)
+    notice?.let { Text(it, color = Orange, fontSize = 13.sp) }
+    record.followUp?.let { day ->
+        ResultCard(
+            LucideR.drawable.lucide_ic_calendar,
+            "Follow-up",
+            actions = { if (reminded) Text("Reminder set for 9 am", color = Muted, fontSize = 13.sp) else TextAction("Set a reminder", onClick = { onSetReminder(record); reminded = true }) },
+        ) { Text(shortDay(day), color = Paper, fontWeight = FontWeight.Bold, fontSize = 16.sp) }
+    }
     if (record.unverified) NilaCard {
         SectionLabel("Unverified", color = Orange)
         Text("Read by NILA's on-device model. Check each value against the report below.", color = Paper, fontSize = 14.sp)
     }
+    if (record.findings.isNotEmpty()) NilaCard {
+        record.findings.forEach { FindingRow(it) }
+    }
     if (record.notes.isNotBlank()) NilaCard { Text(record.notes, color = Paper, fontSize = 15.sp, lineHeight = 21.sp) }
     record.files.forEach { name -> Attachment(health, name) }
+    TextAction("Add a page", onClick = { onAddPage(record) })
     problem?.let { Text(it, color = Orange, fontSize = 13.sp) }
-    TextAction(if (deleting) "Deleting…" else if (armed) "Tap again to delete this record and its files" else "Delete record", onClick = {
+    TextAction(if (deleting) "Deleting…" else if (armed) "Tap again to delete this record and its files" else "Delete", onClick = {
         if (deleting) return@TextAction
         if (!armed) {
             armed = true
@@ -506,7 +559,28 @@ private fun HealthDetail(
                 problem = "Couldn't delete this record. Check phone storage and try again."
             }
         }
-    }, color = Orange)
+    }, color = if (armed || deleting) Orange else Muted)
+    Text(HEALTH_DISCLAIMER, color = Muted, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(bottom = 16.dp))
+}
+/** One value: its name on the left, value and unit on the right; low and high get a colour and the word. */
+@Composable
+private fun FindingRow(finding: ReportFinding) {
+    val flagged = finding.flag == "high" || finding.flag == "low"
+    val color = when (finding.flag) {
+        "high" -> Orange
+        "low" -> Lime
+        else -> Paper
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Column(Modifier.weight(1f)) {
+            Text(finding.name, color = Paper, fontSize = 15.sp)
+            if (finding.range.isNotBlank()) Text("Normal ${finding.range}", color = Muted, fontSize = 12.sp)
+        }
+        Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(start = 12.dp)) {
+            Text(listOf(finding.value, finding.unit).filter(String::isNotBlank).joinToString(" "), color = color, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            if (flagged) Text(finding.flag.replaceFirstChar { it.uppercase() }, color = color, fontSize = 12.sp)
+        }
+    }
 }
 
 /** A stored photo, or a PDF's first page, decrypted in memory only. */

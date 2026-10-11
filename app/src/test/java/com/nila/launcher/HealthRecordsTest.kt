@@ -67,20 +67,20 @@ class HealthRecordsTest {
              "findings": [{"name": "Haemoglobin", "value": "11.2", "unit": "g/dL", "flag": "low"},
                           {"name": "Glucose", "value": "92", "unit": "mg/dL", "flag": "normal"},
                           {"name": "", "value": "5"}],
-             "follow_up_days": 14, "summary": "Haemoglobin is slightly low."}"""
+             "follow_up": "18 Oct 2026", "summary": "Haemoglobin is slightly low."}"""
         val reading = parseReportReading(reply)!!
         assertEquals("Blood test", reading.title)
         assertEquals(LocalDate.of(2026, 10, 4), reading.date)
         // A finding without a name is dropped, never shown as a bare number.
         assertEquals(listOf("Haemoglobin", "Glucose"), reading.findings.map { it.name })
-        assertEquals(14, reading.followUpDays)
+        assertEquals(LocalDate.of(2026, 10, 18), reading.followUp)
 
         val record = recordFrom(reading, "a.img", fallbackDate = today, id = "r1")
         assertEquals(LocalDate.of(2026, 10, 4), record.date)
         assertEquals("Apollo Hospital", record.place)
         assertEquals(LocalDate.of(2026, 10, 18), record.followUp)
-        assertTrue(record.notes.contains("Haemoglobin: 11.2 g/dL (low)"))
-        assertTrue(record.notes.contains("check every value", ignoreCase = true) || record.notes.contains("Check every value"))
+        assertEquals("Haemoglobin is slightly low.", record.notes)
+        assertEquals(ReportFinding("Haemoglobin", "11.2", "g/dL", "low"), record.findings[0])
         assertEquals(listOf("a.img"), record.files)
     }
 
@@ -95,7 +95,7 @@ class HealthRecordsTest {
 
     @Test
     fun aSavedReportKeepsItsFollowUpAndUnverifiedMark() {
-        val reading = parseReportReading("""{"kind":"Report","title":"CBC","date":"2026-10-04","findings":[{"name":"Haemoglobin","value":"11.2"}],"follow_up_days":14}""")!!
+        val reading = parseReportReading("""{"kind":"Report","title":"CBC","date":"2026-10-04","findings":[{"name":"Haemoglobin","value":"11.2"}],"follow_up":"18 Oct 2026"}""")!!
         val record = recordFrom(reading, "a.pdf", fallbackDate = today, id = "r4", pages = 3)
         assertTrue(record.unverified)
         assertTrue(record.notes.contains("NILA read page 1 of 3"))
@@ -107,10 +107,42 @@ class HealthRecordsTest {
 
     @Test
     fun aReportWithoutAPrintedDateTakesTheDayTheUserSaid() {
-        val reading = parseReportReading("""{"kind":"Visit","title":"","date":"","place":"","findings":[],"follow_up_days":0,"summary":""}""")!!
+        val reading = parseReportReading("""{"kind":"Visit","title":"","date":"","place":"","findings":[],"follow_up":"","summary":""}""")!!
         val record = recordFrom(reading, "c.img", fallbackDate = today.minusWeeks(1), id = "r3")
         assertEquals(today.minusWeeks(1), record.date)
         assertEquals("Hospital visit", record.title)
         assertEquals(null, record.followUp)
+    }
+
+    @Test
+    fun followUpDatesAreReadInEveryPrintedFormat() {
+        val expected = LocalDate.of(2027, 1, 4)
+        listOf("04 Jan 2027", "4 January 2027", "Follow-up: 04 Jan 2027", "04/01/2027", "04-01-2027", "04.01.2027", "2027-01-04", "Jan 4, 2027", "4th Jan, 2027")
+            .forEach { assertEquals(it, expected, parseReportDate(it)) }
+    }
+
+    @Test
+    fun aDateIsNeverInvented() {
+        listOf("", "04", "Jan 2027", "after 3 months", "31/02/2027", "04 Foo 2027").forEach { assertEquals(it, null, parseReportDate(it)) }
+    }
+
+    @Test
+    fun flagsSummaryCountsHighAndLow() {
+        val f = { flag: String -> ReportFinding("x", "1", flag = flag) }
+        assertEquals("2 high · 1 low", flagsSummary(listOf(f("high"), f("low"), f("high"), f("normal"))))
+        assertEquals("1 low", flagsSummary(listOf(f("low"), f(""))))
+        assertEquals("", flagsSummary(listOf(f("normal"))))
+    }
+
+    @Test
+    fun anotherPageAddsItsValuesWithoutRepeats() {
+        val first = ReportFinding("Haemoglobin", "11.2", "g/dL", "low")
+        val record = HealthRecord("r", HealthKind.Report, "Blood test", today, files = listOf("a.img"), findings = listOf(first))
+        val page = ReportReading(HealthKind.Report, "", null, "City Lab", listOf(first, ReportFinding("Glucose", "92")), LocalDate.of(2027, 1, 4), "")
+        val merged = withPage(record, page, "b.img")
+        assertEquals(listOf("a.img", "b.img"), merged.files)
+        assertEquals(listOf("Haemoglobin", "Glucose"), merged.findings.map { it.name })
+        assertEquals(LocalDate.of(2027, 1, 4), merged.followUp)
+        assertEquals("City Lab", merged.place)
     }
 }

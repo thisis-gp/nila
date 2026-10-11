@@ -632,8 +632,8 @@ private fun NilaApp(resumeVersion: Int) {
                             onForgetAll = { scope.launch { memory.clear() } },
                             health = health,
                             readReport = brain::readReport,
-                            // A report that asks for a follow-up becomes a My NILA reminder on that day.
-                            onSaved = { record -> followUpReminder(record)?.let(reminders::add) },
+                            // "Set a reminder" on a report's follow-up date.
+                            onSetReminder = { record -> followUpReminder(record)?.let(::addReminder) },
                             onDeleted = { record -> reminders.remove("followup-${record.id}") },
                             draft = MyNilaRequests.pending,
                             onDraftUsed = { MyNilaRequests.pending = null },

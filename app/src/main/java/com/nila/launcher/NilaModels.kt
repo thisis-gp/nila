@@ -701,9 +701,9 @@ class NilaBrain(
              "title": a short title, like "Blood test" or "Fever check-up",
              "date": the date printed on it as YYYY-MM-DD, or "" if none,
              "place": the hospital, lab or doctor printed on it, or "",
-             "findings": [{"name": test name, "value": the value exactly as printed, "unit": its unit or "", "flag": "high" or "low" or "normal" or "" as the report marks it}],
-             "follow_up_days": days until a follow-up the document asks for, or 0,
-             "summary": one or two plain sentences on what the document says}
+             "findings": [{"name": test name, "value": the value exactly as printed, "unit": its unit or "", "flag": "high" or "low" or "normal" or "" as the report marks it, "range": the normal range printed beside it, or ""}],
+             "follow_up": the follow-up date the document asks for, copied exactly as printed (like "04 Jan 2027"), or "" if it prints none,
+             "summary": one or two plain sentences on the test, what was found and the follow-up. Never name any person: no patient and no doctor}
             Copy names, values and dates exactly as printed. Never guess a value that is not on the page. Give no medical advice.
         """.trimIndent()
 

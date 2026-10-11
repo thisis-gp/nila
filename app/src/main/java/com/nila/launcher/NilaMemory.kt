@@ -96,21 +96,21 @@ private val ManyRelations = setOf(
 /** True when [about] is a relation that can be several people: "cousin", "friend", "brother". */
 internal fun isManyRelation(about: String): Boolean = aboutKey(about) in ManyRelations
 
-/** The person-list title: the person's own name for a cousin NILA filed by name, "Cousin (not sure who)" for the rest. */
+/** The person-list title: the person's own name for a cousin NILA filed by name, the plain relation ("Cousin") for the rest. */
 internal fun personTitle(about: String, facts: List<MemoryFact>): String {
     val filed = facts.firstOrNull { it.relation != null }
     return when {
         about == ME -> "You"
         filed != null -> filed.personName ?: aboutLabel(about)
-        isManyRelation(about) -> "${aboutLabel(about)} (not sure who)"
         else -> aboutLabel(about)
     }
 }
 
-/** The line under a person's title: "Cousin · 2 things NILA knows", or just the count when there is no relation. */
+/** The line under a person's title: "Cousin · 2 things NILA knows", "Not linked · 1 thing NILA knows" for a relation not tied to anyone, else the count. */
 internal fun personSubtitle(facts: List<MemoryFact>): String {
     val relation = facts.firstNotNullOfOrNull { it.relation }
-    return (relation?.let { aboutLabel(it) + " · " } ?: "") + knownCount(facts.size)
+    val notLinked = relation == null && facts.firstOrNull()?.about?.let(::isManyRelation) == true
+    return (relation?.let { aboutLabel(it) + " · " } ?: if (notLinked) "Not linked · " else "") + knownCount(facts.size)
 }
 
 /** Who a fact is about, for a one-line list: "Wife", "Kavya (cousin)". */
