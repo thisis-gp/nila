@@ -216,7 +216,11 @@ class NilaBrain(
     private val context: Context,
     private val engine: NilaEngine,
     private val facts: () -> List<MemoryFact>,
+    /** My NILA's health records, for questions like "when was my last blood test". */
+    private val healthRecords: () -> List<HealthRecord> = { emptyList() },
 ) {
+    /** Set when Gemma read the last message as a personal fact, so [learn] keeps it whatever its wording. */
+    private var learnNext = false
     var assistantState by mutableStateOf(ModelState.MISSING)
         private set
     var routerState by mutableStateOf(ModelState.MISSING)
@@ -294,7 +298,7 @@ class NilaBrain(
         }
         // A statement about the user or their people is answered and remembered (learn), never acted on.
         if (isPersonalStatement(input)) return withContext(llm) { chat(input) } ?: NilaResponse.Text("Got it.")
-        val who = favouriteOf(input) ?: return answerFor(input)
+        val who = favouriteOf(input) ?: return understand(input) ?: answerFor(input)
         val resolved = withFavourite(input, facts())
             ?: return NilaResponse.Text("I don't know your $who's favourite yet. Tell me, like \"my $who loves butter chicken\".")
         return answerFor(resolved)
@@ -305,7 +309,9 @@ class NilaBrain(
      * Only messages that look personal reach Gemma, and the fact must be made of the user's own words.
      */
     suspend fun learn(input: String): NilaResponse.Remember? = withContext(llm) {
-        if (!mightBePersonal(input) || favouriteOf(input) != null || askedAbout(input) != null) return@withContext null
+        val readAsFact = learnNext.also { learnNext = false }
+        if (!readAsFact && !mightBePersonal(input)) return@withContext null
+        if (favouriteOf(input) != null || askedAbout(input) != null) return@withContext null
         // "remember that …" was already saved by the rules.
         if (Regex("""^\s*(please\s+)?remember\b""", RegexOption.IGNORE_CASE).containsMatchIn(input)) return@withContext null
         val model = assistant ?: return@withContext null
@@ -323,6 +329,56 @@ class NilaBrain(
         trace("my-nila learn grounded=${groundedFact(fact, input)}")
         if (!groundedFact(fact, input)) return@withContext null
         NilaResponse.Remember(fact, MemoryKind.from(proposed.arguments["kind"] as? String), aboutKey(proposed.arguments["about"] as? String))
+    }
+
+    /**
+     * For what the word patterns miss ("Priya can't eat gluten", "doctor said my BP is high", Hindi or
+     * Malayalam), Gemma says what the message is for My NILA. Clear commands and small talk skip this, so
+     * only free-form messages pay its half second. Null means carry on with the normal path.
+     */
+    private suspend fun understand(input: String): NilaResponse? = withContext(llm) {
+        if (engine.calculate(input) != null || engine.isSmallTalk(input)) return@withContext null
+        if (engine.route(input) is NilaIntent.Call) return@withContext null
+        val model = assistant ?: return@withContext null
+        val today = java.time.LocalDate.now()
+        val raw = runCatching {
+            model.createConversation(
+                ConversationConfig(
+                    systemInstruction = Contents.of(classifyPrompt(today)),
+                    samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0),
+                ),
+            ).use { it.sendMessage(input) }.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
+        }.getOrNull() ?: return@withContext null
+        val read = parseMyNilaRead(raw)
+        trace("my-nila understand type=${read.type}")
+        val day = read.date?.takeIf { namesADay(input) }
+        when (read.type) {
+            MyNilaType.Fact -> {
+                learnNext = true
+                chat(input) ?: NilaResponse.Text("Got it.")
+            }
+            MyNilaType.HealthEvent -> healthKindFor(input).let { HealthPrompt(it, it.label, day ?: healthDate(input, today)) }
+            MyNilaType.HealthQuestion -> healthAnswer(input)
+            MyNilaType.Photos -> day?.let { PhotoSearch(it, it, dayLabelOf(it)) }
+                ?: NilaResponse.Text("Which day? Try \"photos from 18 December 2024\".")
+            MyNilaType.Other -> null
+        }
+    }
+
+    /** Answers from My NILA's health records only; with none, says so instead of guessing. */
+    private fun healthAnswer(input: String): NilaResponse {
+        val records = healthRecords()
+        if (records.isEmpty()) return NilaResponse.Text("There are no health records in My NILA yet. Upload a report in My NILA › Health and I can answer from it.")
+        val model = assistant ?: return NilaResponse.Text("My NILA has ${records.size} health records. Open My NILA › Health to see them.")
+        val reply = runCatching {
+            model.createConversation(
+                ConversationConfig(
+                    systemInstruction = Contents.of(HEALTH_ANSWER + "\n\nRecords:\n" + healthContext(records)),
+                    samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0),
+                ),
+            ).use { it.sendMessage(input) }.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim()
+        }.getOrNull()
+        return NilaResponse.Text(reply?.takeIf(String::isNotBlank) ?: "Open My NILA › Health to see your records.")
     }
 
     private suspend fun answerFor(input: String): NilaResponse = withContext(llm) {
@@ -587,6 +643,26 @@ class NilaBrain(
         const val TAG = "NilaBrain"
         const val HISTORY_TURNS = 4
         const val REMEMBER = "remember_fact"
+
+        /** For My NILA: what a free-form message is, with the day it means. */
+        fun classifyPrompt(today: java.time.LocalDate) = """
+            Today is $today (${today.dayOfWeek.name.lowercase()}). NILA is a phone assistant with a personal space called My NILA.
+            Read the user's message, in any language, and reply with only one JSON object: {"type": ..., "date": ...}
+            type is one of:
+            "fact": the user tells a lasting personal detail about themselves or someone close (likes, food, diet, allergy, birthday, name, habit).
+            "health_event": the user says they or someone close saw a doctor, went to a hospital, had a test or got a medical report.
+            "health_question": the user asks about their own health records, visits, tests, reports, results or medicines.
+            "photos": the user asks to see photos or pictures they took on some day.
+            "other": anything else, such as an order, a request, a general question or small talk.
+            date is the day the message talks about as YYYY-MM-DD, worked out from today, or "" when it names no day.
+        """.trimIndent()
+
+        /** For My NILA: answer health questions from the user's own records, never beyond them. */
+        val HEALTH_ANSWER = """
+            You answer questions about the user's own health records in My NILA. Use only the records below.
+            If they don't contain the answer, say you couldn't find it in My NILA. Say dates plainly. Keep it to one or two sentences.
+            Never give medical advice or diagnose; for what a result means, suggest asking their doctor.
+        """.trimIndent()
 
         /** For My NILA: read a report photo into fields, copying values exactly and leaving out what isn't printed. */
         val READ_REPORT = """
