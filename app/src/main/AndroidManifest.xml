@@ -14,6 +14,9 @@
     <!-- "photos I took on Dec 18 2024": NILA searches the phone's photos by date, on the phone. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- My NILA reminders: shown as notifications, put back after a restart. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <queries>
         <intent>
@@ -70,6 +73,15 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/nila_files" />
         </provider>
+        <receiver android:name=".ReminderReceiver" android:exported="false" />
+        <!-- Not exported: these are protected system broadcasts, delivered to non-exported receivers too. -->
+        <receiver android:name=".ReminderBootReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
 
