@@ -221,11 +221,12 @@ internal fun matchAddress(nila: NilaAddress, saved: List<ProviderAddress>): Prov
 
 internal fun sameAddress(a: NilaAddress, b: NilaAddress): Boolean {
     if (normalized(a.line).isNotBlank() && normalized(a.line) == normalized(b.line)) return true
-    val pin = a.pin ?: return false
-    if (pin != b.pin) return false
     val numberA = houseNumberOf(a.line)
     val numberB = houseNumberOf(b.line)
     if (numberA != null && numberB != null && numberA != numberB) return false
+    // Zomato's saved addresses are one name string, often without a pincode: then the building and street must agree.
+    if (a.pin == null || b.pin == null) return sharedWords(a, b).size >= WORDS_WITHOUT_PINCODE
+    if (a.pin != b.pin) return false
     distanceMetres(a, b)?.let { return it <= SAME_PLACE_METRES }
     return sharedWords(a, b).isNotEmpty()
 }
@@ -276,6 +277,9 @@ private const val MAX_SHORT_NAME = 28
 
 /** Within this distance two pins on the same pincode are one building; geocoded pins drift by a few dozen metres. */
 internal const val SAME_PLACE_METRES = 300.0
+
+/** Without a pincode on one side, this many shared building or street words make it the same place. */
+internal const val WORDS_WITHOUT_PINCODE = 2
 
 private fun distanceMetres(a: NilaAddress, b: NilaAddress): Double? {
     val (lat1, lng1) = (a.lat ?: return null) to (a.lng ?: return null)

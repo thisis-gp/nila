@@ -5,6 +5,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -57,11 +58,16 @@ class NilaAddressesTest {
     }
 
     @Test
-    fun theSamePincodeIsRequired() {
+    fun aDifferentPincodeNeverMatches() {
         assertNull(matchAddress(wework, listOf(saved("s1", "WeWork Galaxy, 43 Residency Road, Bengaluru 560001", lat = 12.9716, lng = 77.6070))))
-        // Without a pincode on NILA's side there is nothing safe to match on.
-        assertNull(matchAddress(NilaAddress("A", "WeWork Galaxy, Residency Road, Bengaluru"), listOf(saved("s1", "WeWork Galaxy, Residency Road, Bengaluru 560025"))))
-        assertNull(matchAddress(NilaAddress("A", "WeWork Galaxy, Bengaluru 560025"), listOf(saved("s1", "WeWork Galaxy, Bengaluru"))))
+    }
+
+    @Test
+    fun withoutAPincodeTheBuildingAndStreetMustAgree() {
+        // Zomato saves one name string, often with no pincode.
+        assertNotNull(matchAddress(NilaAddress("A", "WeWork Galaxy, Residency Road, Bengaluru 560025"), listOf(saved("s1", "WeWork Galaxy, 43 Residency Road, Ashok Nagar, Bengaluru"))))
+        // One shared word is not enough.
+        assertNull(matchAddress(NilaAddress("A", "WeWork Galaxy, Residency Road, Bengaluru 560025"), listOf(saved("s1", "Galaxy Apartments, Koramangala, Bengaluru"))))
     }
 
     @Test
