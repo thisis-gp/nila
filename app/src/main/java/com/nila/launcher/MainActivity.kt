@@ -985,7 +985,10 @@ private fun AgentSpace(
                                 }
                             }
                             busy -> ThinkingLine()
-                            else -> ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, grocery = grocery, forget = forget, addTurn = addTurn)
+                            else -> {
+                                if (turn.response is NilaResponse.Food || turn.response is NilaResponse.Grocery) NilaMark()
+                                ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, grocery = grocery, forget = forget, addTurn = addTurn)
+                            }
                         }
                     }
                 }
