@@ -508,7 +508,7 @@ class NilaBrain(
             set a timer for <n> minutes | pause the timer | resume the timer | stop the timer | how much time is left
             turn on the flashlight | turn off the flashlight
             open the camera | take a selfie | record a video | record my voice
-            schedule <title> <day> at <time> | take a note that <text> | show my notes
+            schedule <title> <day> at <time> | remind me to <task> every month on the <day> | take a note that <text> | show my notes
             call <name or number> | tell <name> <message>
             take me to <place> | <things> near me | search for <query>
             order food <cooked dish or meal from a restaurant> | shop groceries <item to buy from a store>

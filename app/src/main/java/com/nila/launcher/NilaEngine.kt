@@ -214,6 +214,19 @@ class NilaEngine(
             label = "Flashlight",
         ),
         CapabilityDescriptor(
+            id = "monthly_reminder",
+            description = "A reminder that repeats every month, like paying the electricity bill. Give what to do, the day of the month and the time if said.",
+            params = listOf(
+                Param("title", ParamType.STRING),
+                Param("day", ParamType.INT, required = false),
+                Param("hour", ParamType.INT, required = false),
+                Param("minute", ParamType.INT, required = false),
+                Param("meridiem", ParamType.STRING, required = false),
+            ),
+            permission = PermissionClass.PREPARE,
+            label = "Monthly reminder",
+        ),
+        CapabilityDescriptor(
             id = "create_event",
             description = "Add an event, meeting or appointment to the calendar. Give the title, the day (today, tomorrow or a weekday) and the time if said.",
             params = listOf(
@@ -361,6 +374,9 @@ class NilaEngine(
             return NilaIntent.Call(ToolCall("remove_alarm", alarmArgs(input).orEmpty()))
         }
 
+        // "every month" is a repeating calendar reminder, not an alarm or a one-off event.
+        monthlyReminderArgs(input)?.let { return NilaIntent.Call(ToolCall("monthly_reminder", it)) }
+
         // Everyday phone actions. Each reads its values from the user's words.
         // Checked before "timer": "stop the timer" controls the running one, it does not start a new one.
         timerControl(input)?.let { return NilaIntent.Call(ToolCall("timer_control", mapOf("action" to it))) }
@@ -462,6 +478,19 @@ class NilaEngine(
                 ?: NilaResponse.Text("I can pause, resume or stop the timer, or tell you how much time is left.")
             "add_note" -> Note(args["text"] as String)
             "call_contact" -> Call(args["who"] as String)
+            "monthly_reminder" -> {
+                val day = args["day"] as Int?
+                val hour = args["hour"] as Int?
+                val minute = args["minute"] as Int? ?: 0
+                val time = if (hour == null) LocalTime.of(10, 0)
+                    else eventHour(hour, args["meridiem"] as String?)?.takeIf { minute in 0..59 }?.let { LocalTime.of(it, minute) }
+                when {
+                    day == null -> NilaResponse.Text("Which day of the month? Try \"remind me to pay the electricity bill every month on the 5th\".")
+                    day !in 1..31 -> NilaResponse.Text("A month has days 1 to 31. Which day should it be?")
+                    time == null -> NilaResponse.Text("That reminder time is not valid.")
+                    else -> MonthlyReminder(args["title"] as String, day, time)
+                }
+            }
             "create_event" -> {
                 val hour = args["hour"] as Int?
                 val minute = args["minute"] as Int? ?: 0

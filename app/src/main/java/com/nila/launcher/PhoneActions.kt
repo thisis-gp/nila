@@ -147,3 +147,60 @@ fun dismissPlan(hour: Int?, minute: Int, nextHour: Int?, nextMinute: Int?): Dism
     hour == nextHour && minute == nextMinute -> DismissPlan.DISMISS_NEXT
     else -> DismissPlan.SHOW_LIST
 }
+
+/** A reminder that repeats every month on [day] at [time]; a day after the 28th means the month's last day. */
+data class MonthlyReminder(val title: String, val day: Int, val time: LocalTime) : NilaResponse {
+    /**
+     * The calendar's repeat rule: the same date each month. For the 29th to 31st, the latest of that date
+     * and the two before it, so a bill due on the 30th is on the 30th, and on the 28th in February.
+     */
+    val rule get() = if (day > LAST_SAFE_DAY) "FREQ=MONTHLY;BYMONTHDAY=${day - 2},${day - 1},$day;BYSETPOS=-1" else "FREQ=MONTHLY;BYMONTHDAY=$day"
+}
+
+private const val LAST_SAFE_DAY = 28
+private val monthlyWords = Regex("""\b(every month|each month|monthly|every month's)\b""")
+private val monthDay = Regex("""\b(?:on\s+(?:the\s+)?)?(\d{1,2})(?:st|nd|rd|th)\b|\bon\s+(?:the\s+)?(\d{1,2})\b(?!\s*(?:am|pm|:))""")
+private val reminderTime = Regex("""\bat\s+(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?\b""")
+private val reminderLead = Regex("""^\s*(please\s+)?(remind me|set a (monthly )?reminder|add a (monthly )?reminder|reminder)\s*(to|about|for|that)?\s*""", RegexOption.IGNORE_CASE)
+
+/**
+ * "remind me to pay the electricity bill every month on the 5th at 9 am" → title, day, time. Null when it
+ * is not a monthly reminder. The day and time come only from the user's words.
+ */
+fun monthlyReminderArgs(text: String): Map<String, Any>? {
+    val lower = text.lowercase()
+    if (!monthlyWords.containsMatchIn(lower)) return null
+    if (!Regex("""\b(remind|reminder)\b""").containsMatchIn(lower)) return null
+    val args = mutableMapOf<String, Any>()
+    monthDay.find(lower)?.let { m -> (m.groupValues[1].ifEmpty { m.groupValues[2] }).toIntOrNull()?.let { args["day"] = it } }
+    reminderTime.find(lower)?.let { m ->
+        args["hour"] = m.groupValues[1].toInt()
+        m.groupValues[2].toIntOrNull()?.let { args["minute"] = it }
+        m.groupValues[3].takeIf { it.isNotEmpty() }?.let { args["meridiem"] = it }
+    }
+    val title = reminderLead.replace(lower, "")
+        .replace(monthlyWords, " ").replace(monthDay, " ").replace(reminderTime, " ")
+        .replace(Regex("""\b(of|on|the)\s*$"""), "").replace(Regex("""\s+"""), " ").trim().trimEnd('.', ',')
+    args["title"] = title.ifBlank { "Reminder" }.replaceFirstChar { it.uppercase() }
+    return args
+}
+
+/** "the 5th", "the 21st", "the last day". */
+fun dayLabel(reminder: MonthlyReminder): String = reminder.day.let { d ->
+    "the " + d.toString() + when {
+        d % 100 in 11..13 -> "th"
+        d % 10 == 1 -> "st"
+        d % 10 == 2 -> "nd"
+        d % 10 == 3 -> "rd"
+        else -> "th"
+    }
+}
+
+/** When the reminder first fires: this month if its day and time are still ahead, else next month. */
+fun firstReminder(reminder: MonthlyReminder, now: java.time.LocalDateTime): java.time.LocalDateTime {
+    fun inMonth(month: java.time.YearMonth) =
+        // The 30th in February is the 28th (or 29th): the month's last day, never a skipped month.
+        month.atDay(minOf(reminder.day, month.lengthOfMonth())).atTime(reminder.time)
+    val thisMonth = inMonth(java.time.YearMonth.from(now))
+    return if (thisMonth.isAfter(now)) thisMonth else inMonth(java.time.YearMonth.from(now).plusMonths(1))
+}
