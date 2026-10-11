@@ -29,5 +29,8 @@ class PhoneSearchTest {
         // Review on #40: doing something with photos is a command, not a gallery search.
         assertNull(photoSearch("take a selfie today", today))
         assertNull(photoSearch("remind me to print pictures on friday", today))
+        assertNull(photoSearch("hey nila, remind me to print my photos on friday", today))
+        assertNull(photoSearch("open the camera and take a selfie today", today))
+        assertNull(photoSearch("search the web for pictures of cats on friday", today))
     }
 }

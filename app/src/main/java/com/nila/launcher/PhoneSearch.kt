@@ -55,7 +55,7 @@ private val PhotoWords = Regex("""\b(photos?|pictures?|pics?|images?|selfies?|sc
 private val PhotoAsk = Regex("""\b(show|find|see|view|display|open|look at|where are|search)\b|\bmy (photos?|pictures?|pics?|images?|selfies?|screenshots?)\b|\b(photos?|pictures?|pics?|images?|selfies?|screenshots?) (from|of|on|taken|i took|i clicked)\b""")
 
 /** Doing something with photos is a command, not a search: "take a selfie today", "print pictures on friday". */
-private val PhotoAction = Regex("""^\s*(please\s+)?(take|click|capture|record|print|delete|send|share|edit|upload|set|remind)\b""")
+private val PhotoAction = Regex("""\b(take|click|capture|record|print|delete|send|share|edit|upload|set|remind)\b|\bsearch\s+(the\s+)?web\b""")
 private val months = listOf("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
 private val monthWord = """(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"""
 private val MonthDayYear = Regex("""\b$monthWord\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b""")
