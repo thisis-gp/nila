@@ -144,4 +144,12 @@ class ZeptoCardsTest {
         assertEquals("₹69", zeptoAmountDue(preview))
         assertNull(zeptoAmountDue("Zepto: something went wrong"))
     }
+
+    @Test
+    fun amountDueAcceptsRsAndInrAndTakesTheLastFigure() {
+        assertEquals("₹69", zeptoAmountDue("Amount To Pay: Rs 69"))
+        assertEquals("₹69", zeptoAmountDue("Amount To Pay: INR 69"))
+        // Zepto repeats the preview with an updated total on the confirmation step; the later one is real.
+        assertEquals("₹99", zeptoAmountDue("Amount To Pay: ₹69 ... Amount To Pay: ₹99"))
+    }
 }
