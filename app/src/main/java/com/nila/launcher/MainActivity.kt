@@ -2,28 +2,30 @@ package com.nila.launcher
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.AlarmClock
-import android.util.Log
 import android.provider.Settings
+import android.util.Log
 import android.widget.Toast
-import androidx.core.view.WindowCompat
+import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.activity.ComponentActivity
-import androidx.activity.SystemBarStyle
-import androidx.activity.enableEdgeToEdge
-import androidx.activity.compose.BackHandler
-import androidx.activity.compose.setContent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -34,17 +36,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -59,36 +65,34 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import java.time.LocalTime
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.border
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import java.time.LocalTime
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.composables.icons.lucide.R as LucideR
 
 class MainActivity : ComponentActivity() {
@@ -135,6 +139,7 @@ private fun NilaApp(resumeVersion: Int) {
     var facts by remember { mutableStateOf(memory.facts()) }
     val health = remember { HealthStore(context.applicationContext) }
     LaunchedEffect(health) { withContext(Dispatchers.IO) { health.sweep() } }
+    val reminders = remember { NilaReminders(context.applicationContext) }
     val brain = remember { NilaBrain(context.applicationContext, engine) { memory.facts() } }
     // Lakshmi speaks replies to spoken requests; typed requests stay silent.
     val lakshmi = remember { Lakshmi(context) }
@@ -582,7 +587,10 @@ private fun NilaApp(resumeVersion: Int) {
                                 onForgetAll = { facts = memory.clear() },
                                 health = health,
                                 readReport = brain::readReport,
-                                onSaved = {},
+                                // A report that asks for a follow-up becomes a My NILA reminder on that day.
+                                onSaved = { record -> followUpReminder(record)?.let(reminders::add) },
+                                onDeleted = { record -> reminders.remove("followup-${record.id}") },
+                                reminders = reminders,
                                 draft = MyNilaRequests.pending,
                                 onDraftUsed = { MyNilaRequests.pending = null },
                                 onBack = ::closeOverlay,
@@ -660,8 +668,33 @@ private val FollowUpLabels = setOf("Zepto", "Zepto tools result", "Action result
 
 internal fun isFollowUpTurn(label: String): Boolean = label in FollowUpLabels
 
-/** A monthly reminder is a 15-minute calendar entry, so it shows as a block, not an all-day banner. */
-private const val REMINDER_LENGTH_MS = 15 * 60 * 1000L
+/**
+ * A monthly reminder kept by My NILA: one tap schedules it and NILA notifies every month, even when closed.
+ * Notification permission is asked for on Android 13 and newer; without it the reminder is still saved.
+ */
+@Composable
+private fun MonthlyReminderCard(reminder: MonthlyReminder, context: Context, onResult: (String) -> Unit) {
+    val first = firstReminder(reminder, java.time.LocalDateTime.now())
+    var saved by remember { mutableStateOf(false) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) onResult("Saved, but notifications are off for NILA. Turn them on in Android settings to be reminded.")
+    }
+    ActionCard(
+        label = "Monthly reminder",
+        title = reminder.title,
+        detail = "Every month on ${dayLabel(reminder)} at %02d:%02d. First: %s.\nMy NILA notifies you, even when NILA is closed."
+            .format(reminder.time.hour, reminder.time.minute, eventWhen(first.toLocalDate(), null).substringBefore(",")),
+        action = if (saved) "Reminder on" else "Remind me every month",
+    ) {
+        if (saved) return@ActionCard
+        NilaReminders(context).add(monthlyReminderOf(reminder, java.time.LocalDateTime.now()))
+        saved = true
+        onResult("Done. My NILA will remind you every month on ${dayLabel(reminder)}. See it in My NILA › Reminders.")
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) ask.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+    }
+}
 private val MascotTapSize = 40.dp
 private val HeaderMascotSize = 34.dp
 private val WorkingMascotSize = 28.dp
@@ -997,27 +1030,7 @@ private fun ResponseView(
             runCatching { context.startActivity(intent) }
                 .onFailure { addTurn("Action result", NilaResponse.Text("No calendar app is available.")) }
         }
-        is MonthlyReminder -> {
-            val first = firstReminder(response, java.time.LocalDateTime.now())
-            ActionCard(
-                label = "Monthly reminder",
-                title = response.title,
-                detail = "Every month on ${dayLabel(response)} at %02d:%02d. First: %s.\nOpens your calendar to save it as a repeating event: check it says \"every month\"."
-                    .format(response.time.hour, response.time.minute, eventWhen(first.toLocalDate(), null).substringBefore(",")),
-                action = "Add to calendar",
-            ) {
-                val start = first.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
-                val intent = Intent(Intent.ACTION_INSERT)
-                    .setData(android.provider.CalendarContract.Events.CONTENT_URI)
-                    .putExtra(android.provider.CalendarContract.Events.TITLE, response.title)
-                    .putExtra(android.provider.CalendarContract.EXTRA_EVENT_BEGIN_TIME, start)
-                    .putExtra(android.provider.CalendarContract.EXTRA_EVENT_END_TIME, start + REMINDER_LENGTH_MS)
-                    .putExtra(android.provider.CalendarContract.Events.RRULE, response.rule)
-                    .putExtra(android.provider.CalendarContract.Events.HAS_ALARM, 1)
-                runCatching { context.startActivity(intent) }
-                    .onFailure { addTurn("Action result", NilaResponse.Text("No calendar app is available.")) }
-            }
-        }
+        is MonthlyReminder -> MonthlyReminderCard(response, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is Call -> CallCard(response.who, context) { addTurn("Action result", NilaResponse.Text(it)) }
         is NilaResponse.Alarm -> ActionCard(
             label = "Alarm",

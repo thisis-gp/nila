@@ -65,7 +65,7 @@ internal object MyNilaRequests {
     var pending by mutableStateOf<HealthPrompt?>(null)
 }
 
-internal enum class MyNilaTab(val label: String) { People("People"), Health("Health") }
+internal enum class MyNilaTab(val label: String) { People("People"), Health("Health"), Reminders("Reminders") }
 
 /**
  * My NILA: its own space for everything NILA knows about the user and their people, and their health
@@ -80,6 +80,8 @@ internal fun MyNilaScreen(
     health: HealthStore,
     readReport: suspend (ByteArray) -> ReportRead,
     onSaved: (HealthRecord) -> Unit,
+    onDeleted: (HealthRecord) -> Unit,
+    reminders: NilaReminders,
     draft: HealthPrompt?,
     onDraftUsed: () -> Unit,
     onBack: () -> Unit,
@@ -194,6 +196,7 @@ internal fun MyNilaScreen(
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             when {
                 tab == MyNilaTab.People -> PeopleTab(facts, onForgetFact, onForgetAll)
+                tab == MyNilaTab.Reminders -> RemindersTab(reminders)
                 open != null -> HealthDetail(
                     health = health,
                     record = open!!,
@@ -255,6 +258,29 @@ private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit, o
     TextAction(if (armed) "Tap again to forget everything about you and your people" else "Forget everything", onClick = {
         if (armed) onForgetAll() else armed = true
     }, color = Orange)
+}
+
+// ---- Reminders ---------------------------------------------------------------
+
+@Composable
+private fun RemindersTab(store: NilaReminders) {
+    var reminders by remember { mutableStateOf(store.all()) }
+    Text("My NILA notifies you, even when NILA is closed. Say \"remind me to pay the electricity bill every month on the 5th\", or upload a report that asks for a follow-up.", color = Muted, fontSize = 13.sp)
+    if (reminders.isEmpty()) {
+        NilaCard { Text("No reminders yet", color = Paper, fontWeight = FontWeight.Bold) }
+        return
+    }
+    reminders.forEach { reminder ->
+        Surface(color = CardInk, shape = RoundedCornerShape(CardRadius), modifier = Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(reminder.title, color = Paper, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(reminderWhen(reminder), color = Lime, fontSize = 13.sp)
+                }
+                TextAction("Turn off", onClick = { reminders = store.remove(reminder.id) }, color = Muted)
+            }
+        }
+    }
 }
 
 // ---- Health ------------------------------------------------------------------
