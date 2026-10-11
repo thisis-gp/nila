@@ -48,6 +48,9 @@ internal fun suggestContacts(context: Context, about: String): List<ContactChoic
     }.getOrDefault(emptyList())
 }
 
+/** The one card for a saved fact: what was saved, and, when a contact link is wanted, [suggestions] to link in the same card. */
+internal data class SavedMoment(val saved: NilaResponse.Remember, val suggestions: List<ContactChoice>?) : NilaResponse
+
 /** A thumbnail URI for the contact behind [lookupKey]; null without READ_CONTACTS or a photo. */
 internal fun contactPhotoUri(context: Context, lookupKey: String): String? {
     if (!canReadContacts(context)) return null

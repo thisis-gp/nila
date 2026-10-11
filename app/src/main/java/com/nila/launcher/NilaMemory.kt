@@ -65,6 +65,13 @@ internal fun aboutKey(raw: String?): String {
 /** "You", or the person as written: "Wife", "Amma". */
 internal fun aboutLabel(about: String): String = if (about == ME) "You" else about.replaceFirstChar(Char::uppercase)
 
+/** Who a fact is for, in a sentence: "you", "your wife" (a relation) or "Priya" (a name). */
+internal fun aboutPhrase(about: String): String = when {
+    about == ME -> "you"
+    about in RelationWords -> "your $about"
+    else -> aboutLabel(about)
+}
+
 /** Facts grouped by person, the user first, then everyone else in the order NILA learned about them. */
 internal fun factsByPerson(facts: List<MemoryFact>): List<Pair<String, List<MemoryFact>>> =
     facts.groupBy { it.about }.toList().sortedWith(compareBy<Pair<String, List<MemoryFact>>> { it.first != ME }.thenBy { p -> p.second.minOf { it.savedAt } })

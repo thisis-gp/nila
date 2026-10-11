@@ -300,8 +300,9 @@ class NilaBrain(
             val kind = healthKindFor(input)
             return HealthPrompt(kind, kind.label, healthDate(input, java.time.LocalDate.now()))
         }
-        // A statement about the user or their people is answered and remembered (learn), never acted on.
-        if (isPersonalStatement(input)) return withContext(llm) { chat(input) } ?: NilaResponse.Text("Got it.")
+        // A statement about the user or their people is remembered (learn), never acted on. When it is saved the
+        // card is the whole answer; a chat reply would only offer to save what is already saved.
+        if (isPersonalStatement(input)) return learn(input) ?: withContext(llm) { chat(input) } ?: NilaResponse.Text("Got it.")
         val who = favouriteOf(input) ?: return understand(input) ?: answerFor(input)
         val resolved = withFavourite(input, facts())
             ?: return NilaResponse.Text("I don't know your $who's favourite yet. Tell me, like \"my $who loves butter chicken\".")

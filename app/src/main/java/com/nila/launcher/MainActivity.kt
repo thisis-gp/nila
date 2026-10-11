@@ -496,7 +496,13 @@ private fun NilaApp(resumeVersion: Int) {
                 }
             }
             if (response is NilaResponse.Remember) memory.save(response.fact, response.kind, response.about)
-            turns[pendingIndex] = Turn(prompt, response)
+            // A saved fact about someone close asks, in the same card, which contact they are (once per person).
+            suspend fun savedMoment(saved: NilaResponse.Remember) = SavedMoment(
+                saved,
+                if (saved.about != ME && memory.claimContactAsk(saved.about)) withContext(Dispatchers.IO) { suggestContacts(context, saved.about) } else null,
+            )
+            val shown = if (response is NilaResponse.Remember) savedMoment(response) else response
+            turns[pendingIndex] = Turn(prompt, shown)
             if (speakReply) spokenText(response)?.let(lakshmi::speak)
             speakReply = false
             isThinking = false
@@ -507,12 +513,11 @@ private fun NilaApp(resumeVersion: Int) {
             val learned = if (response !is NilaResponse.Remember) brain.learn(prompt) else null
             learned?.let {
                 memory.save(it.fact, it.kind, it.about)
-                turns += Turn("My NILA", it)
+                turns += Turn(SAVED_TURN, savedMoment(it))
             }
             // Someone close came up and isn't linked to a contact yet: ask once, in chat.
-            val named = listOfNotNull((response as? NilaResponse.Remember)?.about, learned?.about, mentionedPerson(prompt)).filter { it != ME }.distinct()
-            named.firstOrNull { memory.claimContactAsk(it) }?.let { about ->
-                turns += Turn("My NILA", LinkContact(about, withContext(Dispatchers.IO) { suggestContacts(context, about) }))
+            mentionedPerson(prompt)?.takeIf { memory.claimContactAsk(it) }?.let { about ->
+                turns += Turn(SAVED_TURN, LinkContact(about, withContext(Dispatchers.IO) { suggestContacts(context, about) }))
             }
         }
     }
@@ -793,7 +798,10 @@ private fun NilaApp(resumeVersion: Int) {
 }
 
 /** Turns NILA adds on its own (a provider follow-up, an action's result) carry a label, not something the person said. */
-private val FollowUpLabels = setOf("Zepto", "Zepto tools result", "Action result", "Prepared action", "My NILA")
+private val FollowUpLabels = setOf("Zepto", "Zepto tools result", "Action result", "Prepared action")
+
+/** Marks a memory card NILA adds by itself; it carries its own headline, so no label is shown above it. */
+private const val SAVED_TURN = "My NILA"
 
 internal fun isFollowUpTurn(label: String): Boolean = label in FollowUpLabels
 
@@ -1027,6 +1035,7 @@ private fun AgentSpace(
 @Composable
 private fun TurnHeading(turn: Turn) {
     when {
+        turn.user == SAVED_TURN -> Unit
         isFollowUpTurn(turn.user) -> SectionLabel(turn.user)
         // The booking sheet brings its own serif title, so the request is only a quiet echo above it.
         turn.response is NilaResponse.Food || turn.response is NilaResponse.Grocery -> Text(turn.user, color = Muted, fontSize = FoodRequestSize, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1167,25 +1176,8 @@ private fun ResponseView(
             if (response.week.any { it.second > 0 }) Text("Last 7 days: %,d steps".format(response.week.sumOf { it.second }), color = Muted, fontSize = 13.sp)
         }
         is LinkContact -> LinkContactCard(response, context)
-        is NilaResponse.Remember -> NilaCard {
-            SectionLabel("Saved to My NILA", color = Lime)
-            Text(
-                if (response.about == ME) "I'll remember: ${response.fact}" else "${aboutLabel(response.about)}: ${response.fact}",
-                color = Paper,
-                fontSize = 15.sp,
-                lineHeight = 22.sp,
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("${response.kind.label} · on this phone, encrypted", color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                Text(
-                    "Forget",
-                    color = Lime,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.clickable { forget(response) }.padding(start = 12.dp, top = 6.dp, bottom = 6.dp),
-                )
-            }
-        }
+        is SavedMoment -> SavedMomentCard(response, context)
+        is NilaResponse.Remember -> SavedMomentCard(SavedMoment(response, null), context)
         // Only reached if a dismissal was not confirmed through the card; it is never sent without confirmation.
         is NilaResponse.DismissAlarm -> AnswerCard("This alarm was not turned off.")
         // Torch, Camera and Note are done in performNow before they reach the chat.
