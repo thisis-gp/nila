@@ -7,6 +7,8 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.roundToLong
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 
 /** Text for mini-app screens. The insight line is computed here, never written by a model, so opening an app costs no Gemma call. */
 object MiniAppFormat {
@@ -54,5 +56,21 @@ object MiniAppFormat {
         }
         groups.addFirst(rest)
         return sign + groups.joinToString(",") + "," + digits.takeLast(THOUSANDS)
+    }
+}
+
+private const val PAISE_PER_RUPEE_INPUT = 100.0
+
+/**
+ * What a form field saves. Numbers are saved as numbers so sums and charts can use them. Money is typed in rupees
+ * and saved in paise, like bank transactions, so ₹500 is never shown as ₹5. Anything unparseable stays text.
+ */
+internal fun typedInput(text: String, type: String): JsonElement {
+    val number = text.trim().toDoubleOrNull()
+    return when {
+        number == null -> JsonPrimitive(text)
+        type == "money" -> JsonPrimitive(Math.round(number * PAISE_PER_RUPEE_INPUT))
+        type == "number" -> JsonPrimitive(number)
+        else -> JsonPrimitive(text)
     }
 }
