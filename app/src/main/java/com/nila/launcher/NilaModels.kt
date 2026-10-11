@@ -299,7 +299,14 @@ class NilaBrain(
             // Stock FunctionGemma scored 4.7% on NILA's 12 tools (training eval); with Gemma 4 loaded, chat picks the tool.
             if (assistant == null) modelRoute(input)?.let { return@withContext answer("functiongemma", it) }
         }
-        chat(input)?.let { answer("gemma", it) } ?: answer("fallback", engine.execute(NilaIntent.Converse(input)))
+        chat(input)?.let { return@withContext answer("gemma", it) }
+        // Two different situations share this point: the model never loaded at all, or it loaded and
+        // just gave nothing usable this one time. They need different messages, not the same fallback.
+        if (assistant == null) {
+            answer("no-model", NilaResponse.Text(NOT_LOADED_YET))
+        } else {
+            answer("fallback", engine.execute(NilaIntent.Converse(input)))
+        }
     }
 
     private fun remember(input: String, response: NilaResponse) {
@@ -487,6 +494,8 @@ class NilaBrain(
         const val REMEMBER = "remember_fact"
         const val ALARM_HELP = "I couldn't read that time, so no alarm is set. Try \"set an alarm for 1:30 pm\"."
         const val NO_ACTION_TAKEN = "I haven't done that. Chat can't take actions. To set an alarm, say a time like \"set an alarm for 1:30 pm\" and tap Set alarm on the card."
+        const val NOT_LOADED_YET = "I'm still starting up on this phone — give it a moment and try again. " +
+            "Exact actions like \"set an alarm for 6\" or \"turn on the flashlight\" work even before I'm fully loaded."
 
         /**
          * An escape hatch for FunctionGemma, which otherwise tends to pick some tool for every input
@@ -520,6 +529,9 @@ class NilaBrain(
             Cooked dishes and meals are food: biryani, pizza, dosa, a paneer roll, dinner, lunch.
             Things you cook with or keep at home are groceries: milk, eggs, bread, fruit, bananas, vegetables, rice, atta, oil, sugar, snacks, soap, detergent.
             "buy milk" -> shop groceries milk. "we are out of eggs" -> shop groceries eggs. "buy dinner" -> order food dinner.
+            A question about what to cook, make or eat with items the user already has is not a request to buy or
+            order anything, even if it names milk, eggs, bread or other groceries: reply CHAT.
+            "I have milk, eggs and bread, what recipe can I try" -> CHAT. "what can I cook with rice and dal" -> CHAT.
             play <song or artist> | pause the music | next song | previous song
             volume up | volume down | mute | vibrate mode | silent mode | ring mode
             open <wifi, bluetooth, battery, display, sound, location> settings | open <app name>
@@ -539,7 +551,9 @@ class NilaBrain(
             open settings pages or any installed app, show alarms, tell the battery level,
             open YouTube, Netflix, Instagram or BGMI, order food on Swiggy, buy groceries on Zepto or Instamart,
             show the route to a place or find places nearby, remember facts the user tells NILA, and calculate percentages.
-            Questions are not requests: "is biryani healthy" or "what is Koramangala famous for" get a spoken answer, not a tool.
+            Questions are not requests: "is biryani healthy", "what is Koramangala famous for" or "I have milk, eggs
+            and bread, what recipe can I try" get a spoken answer, not a tool — naming an ingredient is not a request
+            to buy or order it.
             Jokes, facts, advice and small talk are welcome: answer them yourself, briefly and warmly.
             For actions NILA has no tool for, such as payments outside a food or grocery order, say plainly that NILA cannot do that yet and name something it can do.
             Never offer to do it, never ask "do you want me to…", never ask for confirmation, and never say you ordered, paid, booked, sent or shared anything.
