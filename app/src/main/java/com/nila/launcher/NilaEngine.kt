@@ -280,12 +280,13 @@ class NilaEngine(
      * doing today"). "hey, wake me up at 7" starts like small talk but is a request, so it still reaches the
      * rewrite and FunctionGemma instead of chat only.
      */
-    private val GreetingTail = Regex("""\b(how are you( doing)?( today)?|how('s| is) it going|what'?s up|good (morning|afternoon|evening|night)|nila)\b""")
+    // Only right after the greeting, and never "nila" alone: "hey nila play music" is a request.
+    private val GreetingTail = Regex("""^[\s,!.]*(how are you( doing)?( today)?|how('s| is) it going|what'?s up|good (morning|afternoon|evening|night))[\s,!.?]*$""")
 
     fun isSmallTalk(input: String): Boolean {
         val match = smallTalk.find(input.lowercase()) ?: return false
         // "hello how are you" is all small talk: Gemma picked show_notes for it on the iQOO 15.
-        val rest = input.lowercase().substring(match.range.last + 1).replace(GreetingTail, " ")
+        val rest = input.lowercase().substring(match.range.last + 1).let { if (GreetingTail.matches(it)) "" else it }
         return rest.split(Regex("""[^\p{L}\p{N}']+""")).count { it.isNotBlank() } <= 2
     }
 
