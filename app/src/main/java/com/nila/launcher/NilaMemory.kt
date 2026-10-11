@@ -124,18 +124,46 @@ internal fun withFavourite(text: String, facts: List<MemoryFact>): String? {
     return FavouriteOf.replace(text.lowercase(), dish)
 }
 
-private val AskAbout = Regex("""\bwhat do you know about\s+(?:my\s+)?([\p{L} ]+?)\s*\??$""")
+// Questions about the user or their people, answered from My NILA. Group 1 is the person; empty means the user.
+private val AskAbout = listOf(
+    Regex("""\bwhat do you (?:know|remember) about\s+(?:my\s+)?([\p{L} ]+?)\s*\??$"""),
+    Regex("""\btell me (?:what you know )?about\s+(?:my\s+)?([\p{L} ]+?)\s*\??$"""),
+    Regex("""\bwhat (?:does|do) my\s+([\p{L} ]+?)\s+(?:like|love|eat|prefer|enjoy)\b"""),
+    Regex("""\b(?:what are|show|show me|give me|list) my (?:details|info|information|profile|preferences|likes)()\b"""),
+    Regex("""^\s*my (?:details|info|information|profile)()\s*\??$"""),
+    Regex("""\bwho am i()\b"""),
+    Regex("""\bwhat do i (?:like|love|eat|prefer|enjoy)()\b"""),
+)
+private val AskName = Regex("""\b(?:what(?:'s| is) my name|do you know my name|what do you call me)\b""")
 
-/** "what do you know about my wife" → "wife"; "…about me" → "me". */
-internal fun askedAbout(text: String): String? = AskAbout.find(text.lowercase().trim())?.groupValues?.get(1)?.let(::aboutKey)
+private fun normalized(text: String) = text.lowercase().trim().replace('’', '\'')
 
-/** Everything NILA knows about one person, or that it knows nothing yet. */
-internal fun personSummary(about: String, facts: List<MemoryFact>): String {
-    val known = facts.filter { it.about == about }
-    val who = if (about == ME) "you" else "your $about"
-    return if (known.isEmpty()) "I don't know anything about $who yet. Tell me, like \"my wife loves butter chicken\"."
-    else "About $who:\n" + known.joinToString("\n") { "• ${it.text} (${it.kind.label.lowercase()})" }
+/** "what do you know about my wife" → "wife"; "…about me", "my details", "who am I" → "me". */
+internal fun askedAbout(text: String): String? {
+    val t = normalized(text)
+    if (AskName.containsMatchIn(t)) return ME
+    return AskAbout.firstNotNullOfOrNull { it.find(t) }?.groupValues?.get(1)?.let { if (it.isBlank()) ME else aboutKey(it) }
 }
+
+/** True for "what's my name": answered with the name alone, not the whole list. */
+internal fun askedName(text: String): Boolean = AskName.containsMatchIn(normalized(text))
+
+/** Everything NILA knows about one person, in the same clean lines My NILA shows, or that it knows nothing yet. */
+internal fun personSummary(about: String, facts: List<MemoryFact>): String {
+    val known = facts.filter { it.about == about && !isNameFact(it) }
+    val name = if (about == ME) userName(facts) else null
+    val who = if (about == ME) "you" else "your $about"
+    if (known.isEmpty()) {
+        return if (name != null) "You're $name. That's all I know so far: tell me more, like \"I'm vegetarian\"."
+        else "I don't know anything about $who yet. Tell me, like \"my wife loves butter chicken\"."
+    }
+    val heading = if (name != null) "Here's what I know about you, $name:" else "Here's what I know about $who:"
+    return heading + "\n" + known.joinToString("\n") { "• ${factLine(it.text)}" } + "\nYou can change any of this in My NILA."
+}
+
+/** "what's my name" → the saved name, or an invitation to share it. */
+internal fun nameAnswer(facts: List<MemoryFact>): String =
+    userName(facts)?.let { "You're $it." } ?: "You haven't told me your name yet. Say \"my name is …\"."
 
 /** The single fact older builds saved joins the list as an Other fact. */
 internal fun migrated(facts: List<MemoryFact>, legacy: String?, savedAt: Long): List<MemoryFact> =
