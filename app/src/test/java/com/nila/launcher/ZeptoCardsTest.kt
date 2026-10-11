@@ -52,6 +52,25 @@ class ZeptoCardsTest {
         assertNull(matchAddress(FoodAddress("s9", "Home", "Vishnu Homes, 503, Kondapur, Hyderabad 500032"), listOf(home)))
         // Nothing alike: NILA asks instead of guessing.
         assertNull(matchAddress(FoodAddress("s7", "Room", "Room Ballal, Koramangala, Bengaluru 560034"), listOf(home, work)))
+        // A Zepto address without a pincode and only half the words is a neighbour, not the same place.
+        assertNull(matchAddress(nila, listOf(SavedAddress("z3", "other", "Kondapur, Hyderabad, Telangana"))))
+        // A 6-digit flat number starting with 0 is not a pincode.
+        val flat = SavedAddress("z4", "home", "Flat 012345, Vishnu Homes, Kondapur, Hyderabad 500084")
+        assertEquals(flat, matchAddress(FoodAddress("s9", "Home", "Flat 012345, Vishnu Homes, Kondapur, Hyderabad 500084"), listOf(flat)))
+    }
+
+    @Test
+    fun zeptoAddressIsFilledOnlyFromRealFields() {
+        val schema = org.json.JSONObject(
+            """{"properties":{"addressLine":{"type":"string"},"latitude":{"type":"number"},"longitude":{"type":"number"},"landmark":{"type":"string"}},"required":["addressLine","latitude","longitude"]}""",
+        )
+        val swiggy = org.json.JSONObject("""{"id":"s9","address":"Vishnu Homes, Kondapur 500084","lat":"17.46","lng":"78.36"}""")
+        val args = addressArguments(schema, swiggy)!!
+        assertEquals("Vishnu Homes, Kondapur 500084", args.getString("addressLine"))
+        assertEquals(17.46, args.getDouble("latitude"), 0.0001)
+        assertFalse(args.has("landmark"))
+        // No coordinates: nothing is saved rather than a half-filled address.
+        assertNull(addressArguments(schema, org.json.JSONObject("""{"address":"Vishnu Homes"}""")))
     }
 
     @Test

@@ -33,12 +33,12 @@ data class InstamartCart(
     val warning: String?,
     val paymentMethods: List<String>,
 ) {
-    /** Cash on delivery when Swiggy offers it: online payment would hand off to a UPI app, which this card does not do. */
     /** The same order to place: lines and quantities, the amount to pay and the address all unchanged. */
     fun sameOrderAs(other: InstamartCart) =
         lines.associate { it.first.spinId to it.second } == other.lines.associate { it.first.spinId to it.second } &&
             toPay == other.toPay && addressId == other.addressId
 
+    /** Cash on delivery when Swiggy offers it: online payment would hand off to a UPI app, which this card does not do. */
     val cashMethod: String? get() = paymentMethods.firstOrNull { Regex("""(?i)\b(cash|cod)\b""").containsMatchIn(it) }
 }
 
@@ -83,15 +83,16 @@ internal class InstamartShop(private val context: Context) {
     }
 
     /** The Instamart column of a grocery comparison, with steppers that change the real Instamart cart. */
-    fun group(query: String, items: List<InstamartItem>, scope: CoroutineScope, onProblem: (String) -> Unit): ProductProviderGroup {
+    suspend fun group(query: String, items: List<InstamartItem>, scope: CoroutineScope, onProblem: (String) -> Unit): ProductProviderGroup {
         if (!connected) return ProductProviderGroup("Swiggy Instamart", "not connected", emptyList(), "Connect Swiggy in Settings to compare Instamart.")
+        val inCart = cartLock.withLock { cart.mapValues { it.value.second } }
         val products = items.map { item ->
             PickableProduct(
                 title = item.name,
                 detail = listOf(item.pack, item.mrpPaise.takeIf { it > item.pricePaise }?.let { "MRP ${rupeesText(it)}" }).filterNotNull().joinToString(" · "),
                 price = rupeesText(item.pricePaise),
                 imageUrl = item.imageUrl,
-                initialQuantity = cart[item.spinId]?.second ?: 0,
+                initialQuantity = inCart[item.spinId] ?: 0,
             ) { quantity ->
                 scope.launch {
                     if (!setQuantity(item, quantity)) onProblem("Instamart couldn't update the cart right now.")
@@ -115,10 +116,13 @@ internal class InstamartShop(private val context: Context) {
     }
 
     /** The address chosen in NILA, with its full line, so Zepto can deliver to the same place. Null without Swiggy. */
-    suspend fun nilaAddress(): FoodAddress? {
+    suspend fun nilaAddress(): FoodAddress? = nilaAddressJson()?.let { parseAddresses(JSONObject().put("addresses", JSONArray().put(it))).firstOrNull() }
+
+    /** The same address as Swiggy returns it, with every field (coordinates, pincode), so it can be saved in Zepto. */
+    suspend fun nilaAddressJson(): JSONObject? {
         if (!connected) return null
         val id = addressId() ?: return null
-        return call("get_addresses")?.let(::parseAddresses)?.firstOrNull { it.id == id }
+        return call("get_addresses")?.let { allObjects(it) }?.firstOrNull { it.pick("id", "addressId", "address_id") == id }
     }
 
     suspend fun setLine(item: InstamartItem, quantity: Int): Boolean = setQuantity(item, quantity)

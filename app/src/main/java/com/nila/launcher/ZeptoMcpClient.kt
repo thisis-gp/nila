@@ -122,6 +122,14 @@ class ZeptoMcpClient(private val auth: ZeptoAuth) {
     fun addSavedAddress(arguments: JSONObject): String =
         resultText(callTool("add_saved_address", arguments))
 
+    /** add_saved_address arguments read from [source], shaped by the input schema Zepto publishes, so no field is guessed. */
+    fun addressArgumentsFrom(source: JSONObject): JSONObject? {
+        val tools = listToolsRaw()
+        val schema = (0 until tools.length()).map { tools.getJSONObject(it) }
+            .firstOrNull { it.optString("name") == "add_saved_address" }?.optJSONObject("inputSchema") ?: return null
+        return addressArguments(schema, source)
+    }
+
     fun getUserDetails(): JSONObject =
         callTool("get_user_details", JSONObject()).optJSONObject("structuredContent") ?: JSONObject()
 
@@ -195,4 +203,38 @@ class ZeptoMcpClient(private val auth: ZeptoAuth) {
         .put("userAddressId", addressId)
         .put("riderTip", riderTip)
         .put("confirmOrder", confirm)
+}
+
+// The same address field under the names different apps give it.
+private val addressAliases = listOf(
+    listOf("latitude", "lat"),
+    listOf("longitude", "lng", "lon"),
+    listOf("addressLine", "address", "fullAddress", "formattedAddress", "displayAddress"),
+    listOf("label", "annotation", "addressTag", "tag"),
+    listOf("pincode", "pinCode", "pin", "postalCode", "zipCode"),
+    listOf("houseNumber", "flatNo", "flatNumber", "flat_no", "door"),
+    listOf("landmark"),
+    listOf("city"),
+    listOf("state"),
+    listOf("area", "locality"),
+)
+
+/**
+ * Fills each property of [schema] (a JSON Schema object) from [source], by its own name or a known alias.
+ * Null when a required property has no value, so nothing half-filled is saved.
+ */
+internal fun addressArguments(schema: JSONObject, source: JSONObject): JSONObject? {
+    val properties = schema.optJSONObject("properties") ?: return null
+    val required = schema.optJSONArray("required")?.let { array -> (0 until array.length()).map { array.getString(it) } }.orEmpty()
+    val arguments = JSONObject()
+    properties.keys().forEach { name ->
+        val names = addressAliases.firstOrNull { group -> group.any { it.equals(name, ignoreCase = true) } } ?: listOf(name)
+        val value = source.pick(name, *names.toTypedArray()) ?: return@forEach
+        when (properties.optJSONObject(name)?.optString("type").orEmpty()) {
+            "number" -> value.toDoubleOrNull()?.let { arguments.put(name, it) }
+            "integer" -> value.toLongOrNull()?.let { arguments.put(name, it) }
+            "string", "" -> arguments.put(name, value)
+        }
+    }
+    return arguments.takeIf { required.all(it::has) }
 }
