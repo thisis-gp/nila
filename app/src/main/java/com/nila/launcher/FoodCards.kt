@@ -86,7 +86,10 @@ internal interface FoodActions {
     fun lastCart(): FoodCard.Cart?
     fun changeAddress(query: String)
     fun refine(address: FoodAddress, search: NilaResponse.FoodSearch)
-    fun pickAddress(address: FoodAddress, query: String)
+    /** Makes [address] NILA's address and orders there; the other apps get it in the background. */
+    fun pickAddress(address: NilaAddress, query: String)
+    /** Which apps have NILA's address, for the quiet "Added WeWork Galaxy to Swiggy" note. */
+    fun addressSync(): StateFlow<AddressSyncState>
     fun addAddress(query: String, form: NewAddressForm)
     fun openRestaurant(address: FoodAddress, restaurant: FoodRestaurant, query: String)
     fun changeItem(address: FoodAddress, restaurant: FoodRestaurant, item: FoodItem, delta: Int)
@@ -180,9 +183,22 @@ private fun VegMark(veg: Boolean?) {
 
 // ---- Step 1: address ---------------------------------------------------------
 
+/** "To WeWork Galaxy · Change", and under it a quiet note when NILA just saved the address in an app. */
+@Composable
+internal fun DeliverToLine(address: FoodAddress, actions: FoodActions, onChange: () -> Unit) {
+    val sync by actions.addressSync().collectAsState()
+    Column {
+        Row(Modifier.clickable(onClick = onChange).padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("To ${address.label}", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(" · Change", color = Lime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+        sync.takeIf { it.address?.line == address.line }?.let(::addedNote)?.let { Text(it, color = Muted, fontSize = 12.sp) }
+    }
+}
+
 @Composable
 private fun AddressesCard(card: FoodCard.Addresses, actions: FoodActions) {
-    var showForm by rememberSaveable { mutableStateOf(card.addresses.isEmpty()) }
+    var showForm by rememberSaveable { mutableStateOf(card.choices.isEmpty()) }
     var showAll by rememberSaveable { mutableStateOf(false) }
     var asked by rememberSaveable { mutableStateOf(false) }
     val askLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -195,22 +211,26 @@ private fun AddressesCard(card: FoodCard.Addresses, actions: FoodActions) {
             askLocation.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
         }
     }
-    val nearest = card.here?.let { here -> card.addresses.firstOrNull { CurrentPlaces.matchScore(it, here) >= CurrentPlaces.NEARBY_SCORE } }
-    val others = card.addresses.filter { it != nearest }
+    val nearest = card.here?.let { here -> nilaAddressOf(here).let { spot -> card.choices.firstOrNull { sameAddress(spot, it.address) } } }
+    val others = card.choices.filter { it != nearest }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         StepHeader(1, foodIntentTitle(card.intent))
         IntentChips(card.intent, onChange = null)
         Text("Where should I deliver?", color = Paper, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
+        Text(card.note ?: "Every app delivers to the address you pick here.", color = if (card.note != null) Orange else Muted, fontSize = 13.sp)
         HereCard(card, nearest, actions, onAddHere = { showForm = true }, onAllow = { askLocation.launch(Manifest.permission.ACCESS_COARSE_LOCATION) })
         if (others.isNotEmpty()) {
-            SectionLabel("Saved addresses", Modifier.padding(top = 6.dp))
+            Text("Your addresses", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
             Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
                 Column {
                     val shown = if (showAll) others else others.take(SAVED_PREVIEW)
-                    shown.forEachIndexed { index, address ->
+                    shown.forEachIndexed { index, choice ->
                         if (index > 0) HorizontalDivider(color = Panel, modifier = Modifier.padding(start = 62.dp))
-                        AddressRow(address) { actions.pickAddress(address, card.query) }
+                        AddressRow(
+                            FoodAddress("", choice.address.label, choice.address.line),
+                            detail = choice.sources.joinToString(" · "),
+                        ) { actions.pickAddress(choice.address, card.query) }
                     }
                     if (!showAll && others.size > SAVED_PREVIEW) {
                         HorizontalDivider(color = Panel)
@@ -240,11 +260,11 @@ private fun AddressesCard(card: FoodCard.Addresses, actions: FoodActions) {
 
 private const val SAVED_PREVIEW = 3
 
-/** The phone's own location on top: the nearest saved address to deliver to, or a one-tap way to add it. */
+/** The phone's own location on top: the saved address the user is at, or a one-tap way to add it. */
 @Composable
 private fun HereCard(
     card: FoodCard.Addresses,
-    nearest: FoodAddress?,
+    nearest: AddressChoice?,
     actions: FoodActions,
     onAddHere: () -> Unit,
     onAllow: () -> Unit,
@@ -262,7 +282,7 @@ private fun HereCard(
                     Text("◎", color = Lime, fontSize = 20.sp)
                 }
                 Column(Modifier.weight(1f)) {
-                    Text("CURRENT LOCATION", color = Lime, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    Text("Current location", color = Lime, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     Text(
                         when {
                             here != null -> here.title
@@ -288,13 +308,13 @@ private fun HereCard(
             }
             when {
                 nearest != null -> {
-                    Text("Nearest saved address: ${nearest.label} · ${nearest.line.substringAfter(": ")}", color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text("You're at ${nearest.address.label} · ${nearest.address.line.substringAfter(": ")}", color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Button(
-                        onClick = { actions.pickAddress(nearest, card.query) },
+                        onClick = { actions.pickAddress(nearest.address, card.query) },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink),
-                    ) { Text("Deliver to ${nearest.label}", fontWeight = FontWeight.Bold) }
+                    ) { Text("Deliver to ${nearest.address.label}", fontWeight = FontWeight.Bold) }
                 }
                 here != null -> Button(
                     onClick = onAddHere,
@@ -308,14 +328,15 @@ private fun HereCard(
                     border = BorderStroke(1.dp, Lime.copy(alpha = 0.5f)),
                     shape = RoundedCornerShape(14.dp),
                 ) { Text("Use my current location", color = Lime) }
-                else -> Text("Pick a saved address below.", color = Muted, fontSize = 12.sp)
+                else -> Text("Pick an address below.", color = Muted, fontSize = 12.sp)
             }
         }
     }
 }
 
+/** One address: its label, its line, and [detail] (the apps that have it) when given. */
 @Composable
-internal fun AddressRow(address: FoodAddress, onPick: () -> Unit) {
+internal fun AddressRow(address: FoodAddress, detail: String? = null, onPick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onPick).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -334,6 +355,7 @@ internal fun AddressRow(address: FoodAddress, onPick: () -> Unit) {
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
             Text(address.label, color = Paper, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(address.line.substringAfter(": "), color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            detail?.let { Text(it, color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
         Text("›", color = Muted, fontSize = 22.sp, modifier = Modifier.padding(start = 8.dp))
     }
@@ -391,7 +413,7 @@ private fun NewAddressFormCard(prefill: CurrentPlace?, onSave: (NewAddressForm) 
                 enabled = valid && !saving,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
-            ) { Text(if (saving) "Saving to ${orderingProvider.name}…" else "Save and deliver here") }
+            ) { Text(if (saving) "Saving…" else "Save and deliver here") }
         }
     }
 }
@@ -417,13 +439,7 @@ private fun RestaurantsCard(card: FoodCard.Restaurants, actions: FoodActions) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         StepHeader(2, if (card.picks.isEmpty()) "Nothing open right now" else foodIntentTitle(card.intent))
         IntentChips(card.intent) { actions.refine(card.address, it) }
-        Row(
-            Modifier.clickable { actions.changeAddress(card.query) }.padding(vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("To ${card.address.label}", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(" · Change", color = Lime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        }
+        DeliverToLine(card.address, actions) { actions.changeAddress(card.query) }
         card.picks.forEachIndexed { index, (restaurant, reason) ->
             PickCard(restaurant, reason, badge = pickLabel(card.intent).takeIf { index == 0 }) { actions.openRestaurant(card.address, restaurant, card.query) }
         }
@@ -628,13 +644,7 @@ private fun DishesCard(card: FoodCard.Dishes, actions: FoodActions) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         StepHeader(2, foodIntentTitle(card.intent))
         IntentChips(card.intent) { actions.refine(card.address, it) }
-        Row(
-            Modifier.clickable { actions.changeAddress(card.query) }.padding(vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("To ${card.address.label}", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(" · Change", color = Lime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        }
+        DeliverToLine(card.address, actions) { actions.changeAddress(card.query) }
         // The comparison in one line: what the same dish costs across the places that have it.
         val prices = card.dishes.mapNotNull { Regex("""\d+""").find(it.item.chosenSize?.price ?: it.item.price)?.value?.toIntOrNull() }
         if (prices.size > 1) {
@@ -1162,7 +1172,7 @@ internal fun shopDishPrice(lookup: ZomatoLookup, swiggyName: String): DishPrice?
         lookup.loading -> null
         shop == null -> DishPrice.Failed("not connected")
         shop.gap == NO_ANSWER -> DishPrice.Failed(shop.gap)
-        shop.gap != null -> DishPrice.Missing
+        shop.gap != null -> DishPrice.Gap(shop.gap)
         else -> shop.sameAs(swiggyName)?.let { DishPrice.Found(it.price * PAISE_IN_RUPEE) } ?: DishPrice.Missing
     }
 }
@@ -1273,4 +1283,3 @@ private fun ZomatoNearbyBlock(card: FoodCard.Dishes, actions: FoodActions) {
 }
 
 private const val ZOMATO_DISHES_PER_SHOP = 3
-private const val ZOMATO_PACKAGE = "com.application.zomato"

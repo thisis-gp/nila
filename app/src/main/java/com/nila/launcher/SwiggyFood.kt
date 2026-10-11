@@ -1,7 +1,11 @@
 package com.nila.launcher
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -86,13 +90,18 @@ data class PendingPayment(
 )
 
 sealed interface FoodCard {
-    /** [here] is null when location is off or not allowed; [addresses] are ranked nearest first. */
+    /**
+     * NILA's address picker: its recent addresses and every app's saved ones, each place once. [here] is null
+     * when location is off or not allowed; with it, [choices] are ranked nearest first.
+     */
     data class Addresses(
         val query: String,
-        val addresses: List<FoodAddress>,
+        val choices: List<AddressChoice>,
         val here: CurrentPlace?,
         val locationAllowed: Boolean,
         val intent: NilaResponse.FoodSearch = NilaResponse.FoodSearch(query),
+        /** Why NILA is asking again, e.g. Swiggy couldn't save the chosen address. */
+        val note: String? = null,
     ) : FoodCard
     /** [picks] are the best fits for [intent] with the reason each was picked; [restaurants] is everything Swiggy returned. */
     data class Restaurants(
@@ -140,7 +149,14 @@ sealed interface FoodCard {
  * Swiggy doesn't document response shapes, so parsers search the JSON tree by key
  * names instead of fixed paths, and every raw response is kept in files/probe/.
  */
-internal class FoodFlow(private val context: Context, private val quotes: FoodQuotes, private val dishQuotes: DishQuotes) {
+internal class FoodFlow(
+    private val context: Context,
+    private val quotes: FoodQuotes,
+    private val dishQuotes: DishQuotes,
+    private val sync: NilaAddressSync,
+    /** Saved addresses from apps outside the food registry (Zepto), named by app, for the picker. */
+    private val extraSaved: List<Pair<String, suspend () -> List<ProviderAddress>>> = emptyList(),
+) {
     private var client: McpClient? = null
     private var cartRestaurantId: String? = null
     private val cartItems = linkedMapOf<String, Pair<FoodItem, Int>>()
@@ -151,6 +167,7 @@ internal class FoodFlow(private val context: Context, private val quotes: FoodQu
     private var intent = NilaResponse.FoodSearch("")
     private val memory = context.getSharedPreferences("nila_food", Context.MODE_PRIVATE)
     private val facts = NilaMemory(context)
+    private val book = NilaAddressBook(context)
     /** What the last order held, kept until its UPI payment is confirmed. */
     private var orderedDishes: List<String> = emptyList()
 
@@ -167,7 +184,7 @@ internal class FoodFlow(private val context: Context, private val quotes: FoodQu
 
     private suspend fun call(tool: String, args: JSONObject = JSONObject()): JSONObject? = withContext(Dispatchers.IO) {
         val session = SwiggyAuth.currentSession(context) ?: return@withContext null
-        val c = client ?: McpClient(SWIGGY_FOOD_ENDPOINT, session.accessToken).also { client = it }
+        val c = SwiggyProvider.client(session.accessToken).also { client = it }
         c.callTool(tool, args).also { result ->
             runCatching {
                 val dir = File(context.filesDir, "probe").apply { mkdirs() }
@@ -187,49 +204,60 @@ internal class FoodFlow(private val context: Context, private val quotes: FoodQu
     }
 
     /**
-     * Straight to the best fits: NILA picks the address the user last ordered to, else a saved one near
-     * where the phone is, and shows it as one "To Hotel2 · Change" line. Only with nothing to go on
-     * does the user get the address picker.
+     * Straight to the best fits at NILA's address, shown as one "To WeWork Galaxy · Change" line. With no
+     * address chosen yet, the saved address the phone is at; only with nothing to go on does the user get
+     * the address picker.
      */
     suspend fun start(query: String): NilaResponse {
         if (intent.query != query) intent = NilaResponse.FoodSearch(query)
+        val saved = swiggySaved() ?: return problem("Loading your addresses")
+        (book.chosen() ?: book.migrate(saved))?.let { return deliverTo(it, query, known = saved) }
         val here = CurrentPlaces.locate(context)
-        val result = call("get_addresses") ?: return problem("Loading your addresses")
-        val addresses = parseAddresses(result)
-        val last = memory.getString(LAST_ADDRESS, null)
-        val chosen = addresses.firstOrNull { it.id == last }
-            ?: here?.let { spot -> addresses.firstOrNull { CurrentPlaces.matchScore(it, spot) >= CurrentPlaces.NEARBY_SCORE } }
-            ?: return card(FoodCard.Addresses(query, CurrentPlaces.rank(addresses, here), here, CurrentPlaces.allowed(context), intent))
-        return restaurants(chosen, query)
+        here?.let { matchAddress(nilaAddressOf(it), saved) }?.let { return deliverTo(it.address, query, known = saved) }
+        return picker(query, saved, here)
     }
 
-    suspend fun chooseAddress(query: String): NilaResponse {
-        val here = CurrentPlaces.locate(context)
-        val result = call("get_addresses") ?: return problem("Loading your addresses")
-        val addresses = CurrentPlaces.rank(parseAddresses(result), here)
+    suspend fun chooseAddress(query: String, note: String? = null): NilaResponse {
         if (intent.query != query) intent = NilaResponse.FoodSearch(query)
-        return card(FoodCard.Addresses(query, addresses, here, CurrentPlaces.allowed(context), intent))
+        val saved = swiggySaved() ?: return problem("Loading your addresses")
+        return picker(query, saved, CurrentPlaces.locate(context), note)
     }
 
+    private suspend fun swiggySaved(): List<ProviderAddress>? = call("get_addresses")?.let(::parseProviderAddresses)
+
+    /** NILA's recent addresses plus each signed-in app's saved ones, asked at the same time. */
+    private suspend fun picker(query: String, swiggy: List<ProviderAddress>, here: CurrentPlace?, note: String? = null): NilaResponse {
+        val sources = foodProviders.filter { it != SwiggyProvider && it.connected(context) }
+            .map { provider -> provider.name to suspend { provider.savedAddresses(context) } } + extraSaved
+        val others = coroutineScope { sources.map { (name, load) -> async { name to savedOrNone(load) } }.awaitAll() }
+        val choices = addressChoices(book.recent(), listOf(SwiggyProvider.name to swiggy) + others)
+        val ranked = here?.let { spot -> choices.sortedByDescending { CurrentPlaces.matchScore(it.address.line, spot) } } ?: choices
+        return card(FoodCard.Addresses(query, ranked, here, CurrentPlaces.allowed(context), intent, note))
+    }
+
+    /** An app that can't list its addresses just adds none to the picker. */
+    private suspend fun savedOrNone(load: suspend () -> List<ProviderAddress>): List<ProviderAddress> = try {
+        load()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    /**
+     * A typed address becomes NILA's address; Swiggy saves it unless it already has it. The phone's location
+     * is not attached: the user may be typing an address somewhere else.
+     */
     suspend fun addAddress(query: String, form: NewAddressForm): NilaResponse {
-        val full = listOf(form.house, form.street, form.city, form.pincode).filter { it.isNotBlank() }.joinToString(", ")
-        val args = JSONObject()
-            .put("fullAddress", full)
-            .put("addressLine", form.street.ifBlank { form.house })
-            .put("addressLine2", form.house)
-            .put("city", form.city)
-            .put("postalCode", form.pincode)
-            .put("addressCategory", form.category)
-            .put("userName", form.name)
-            .put("userPhone", form.phone)
-            .put("addressTag", form.house)
-            // Without a locality Swiggy wrote "undefined" into the saved line ("Ashok Nagar, undefined, WeWork Galaxy").
-            .put("locality", form.street.substringAfterLast(",").trim().ifBlank { form.city })
-        val created = call("create_address", args)?.let { findString(it, "addressId") } ?: return problem("Saving the address")
-        // Deliver to the address just saved; restarting from the last-used one showed "To Hotel2" after adding WeWork.
-        val saved = call("get_addresses")?.let(::parseAddresses).orEmpty().firstOrNull { it.id == created }
-            ?: FoodAddress(created, form.house, full)
-        return deliverTo(saved, query)
+        book.contact = NilaContact(form.name, form.phone)
+        val typed = NilaAddress(
+            label = form.house,
+            line = listOf(form.house, form.street, form.city, form.pincode).filter { it.isNotBlank() }.joinToString(", "),
+            area = form.street.substringAfterLast(",").trim(),
+            city = form.city,
+            pincode = form.pincode,
+        )
+        return deliverTo(typed, query, category = form.category)
     }
 
     suspend fun refine(address: FoodAddress, search: NilaResponse.FoodSearch): NilaResponse {
@@ -237,9 +265,19 @@ internal class FoodFlow(private val context: Context, private val quotes: FoodQu
         return restaurants(address, search.query)
     }
 
-    suspend fun deliverTo(address: FoodAddress, query: String): NilaResponse {
-        memory.edit().putString(LAST_ADDRESS, address.id).apply()
-        return restaurants(address, query)
+    /**
+     * Makes [address] NILA's address and orders to it on Swiggy, which gets it first because the search needs
+     * its id. The other apps get it in the background, so their prices are ready by checkout.
+     */
+    suspend fun deliverTo(address: NilaAddress, query: String, category: String? = null, known: List<ProviderAddress>? = null): NilaResponse {
+        book.choose(address)
+        val result = ensureSwiggyAddress(address, book.contact, category, known) { tool, args -> call(tool, args) }
+        sync.record(address, SwiggyProvider.id, result)
+        sync.ensure(address, skip = setOf(SwiggyProvider.id))
+        // Without Swiggy's id there is no search; the picker says why, so the user can pick or type another.
+        val id = result.providerAddressId
+            ?: return chooseAddress(query, "Swiggy couldn't take ${address.label} (${client?.lastError ?: (result as? AddressResult.Failed)?.reason}). Pick another address or add it with the form.")
+        return restaurants(FoodAddress(id, address.label, address.line), query)
     }
 
     suspend fun restaurants(address: FoodAddress, query: String): NilaResponse {
@@ -496,23 +534,51 @@ private fun listText(o: JSONObject, key: String): String? = when (val v = o.opt(
     else -> null
 }?.takeIf { it.isNotBlank() }
 
-internal fun parseAddresses(result: JSONObject): List<FoodAddress> =
-    allObjects(result)
-        .filter { o -> o.pick("id", "addressId", "address_id") != null && o.pick("address", "fullAddress", "formattedAddress", "addressLine", "displayAddress", "annotation") != null }
-        .mapNotNull { o ->
-            val id = o.pick("id", "addressId", "address_id") ?: return@mapNotNull null
-            FoodAddress(
-                id = id,
-                label = o.pick("annotation", "addressTag", "tag", "label", "addressCategory", "category")
-                    ?.lowercase()?.replaceFirstChar(Char::uppercase) ?: "Address",
-                line = o.pick("address", "fullAddress", "formattedAddress", "displayAddress", "addressLine", "area").orEmpty(),
-            )
-        }
-        .distinctBy { it.id }
+/**
+ * NILA's address in Swiggy: one of its saved addresses through the shared matcher, else saved now with
+ * create_address. [known] is Swiggy's list when the caller already has it.
+ */
+internal suspend fun ensureSwiggyAddress(
+    address: NilaAddress,
+    contact: NilaContact?,
+    category: String? = null,
+    known: List<ProviderAddress>? = null,
+    call: suspend (String, JSONObject) -> JSONObject?,
+): AddressResult {
+    val saved = known ?: call("get_addresses", JSONObject())?.let(::parseProviderAddresses) ?: return AddressResult.Failed("Swiggy didn't answer")
+    matchAddress(address, saved)?.let { return AddressResult.Ready(it.id) }
+    val created = call("create_address", swiggyAddressArgs(address, contact, category))?.let { findString(it, "addressId") }
+        ?: return AddressResult.Failed("Swiggy couldn't save ${address.label}")
+    return AddressResult.Added(created)
+}
 
-private const val SWIGGY_FOOD_ENDPOINT = "https://mcp.swiggy.com/food"
+/** create_address arguments from NILA's address: the first part of the line is the house, the rest the street. */
+internal fun swiggyAddressArgs(address: NilaAddress, contact: NilaContact?, category: String?): JSONObject {
+    val parts = address.line.split(',').map(String::trim).filter(String::isNotBlank)
+    val house = parts.firstOrNull() ?: address.label
+    val street = parts.drop(1).filterNot { it.equals(address.city, ignoreCase = true) || pincodeIn(it) == it }.joinToString(", ")
+    val city = address.city.ifBlank { parts.drop(1).lastOrNull { pincodeIn(it) == null }.orEmpty() }
+    return JSONObject()
+        .put("fullAddress", address.line)
+        .put("addressLine", street.ifBlank { house })
+        .put("addressLine2", house)
+        .put("city", city)
+        .put("postalCode", address.pin.orEmpty())
+        .put("addressCategory", category ?: categoryOf(address.label))
+        .put("addressTag", address.label)
+        // Without a locality Swiggy wrote "undefined" into the saved line ("Ashok Nagar, undefined, WeWork Galaxy").
+        .put("locality", address.area.ifBlank { city })
+        .apply { contact?.let { put("userName", it.name).put("userPhone", it.phone) } }
+}
+
+private fun categoryOf(label: String) = when (label.lowercase()) {
+    "home" -> "HOME"
+    "work", "office" -> "WORK"
+    else -> "OTHER"
+}
+
+internal const val SWIGGY_FOOD_ENDPOINT = "https://mcp.swiggy.com/food"
 private const val BEST_FIT_COUNT = 3
-private const val LAST_ADDRESS = "last_address"
 private const val LAST_PAYMENT = "last_payment"
 
 /**

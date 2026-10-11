@@ -2,6 +2,9 @@ package com.nila.launcher
 
 import android.content.Context
 import androidx.compose.ui.graphics.Color
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
+import org.json.JSONObject
 
 /** Where the order goes, as every app needs it: NILA's chosen address and its pincode. */
 data class DeliveryAddress(val label: String, val line: String, val pincode: String?)
@@ -36,6 +39,8 @@ sealed interface ProviderQuote {
     data object Checking : ProviderQuote
     data object SignIn : ProviderQuote
     data class NotAvailable(val reason: String) : ProviderQuote
+    /** The app doesn't have NILA's address and can't be given it from here; [fix] is what the user can do. */
+    data class NoAddress(val reason: String, val fix: AddressFix?) : ProviderQuote
     data class Failed(val reason: String) : ProviderQuote
 }
 
@@ -46,8 +51,10 @@ data class DishRequest(val restaurant: String, val line: CartLine, val address: 
 sealed interface DishPrice {
     data class Found(val paise: Long) : DishPrice
     data object Missing : DishPrice
-    /** The app couldn't price it here at all: no saved address nearby, or the shop isn't on it. */
+    /** The app couldn't price it here at all: the shop isn't on it. */
     data class Gap(val reason: String) : DishPrice
+    /** The app doesn't have NILA's address; the comparison says so once, so the dish line leaves the app out. */
+    data object NoAddress : DishPrice
     data class Failed(val reason: String) : DishPrice
 }
 
@@ -67,6 +74,26 @@ internal interface FoodProvider {
     suspend fun quoteCart(context: Context, cart: CartRequest): ProviderQuote
 
     suspend fun quoteDish(context: Context, dish: DishRequest): DishPrice
+
+    /** Makes sure the app has NILA's address: finds it among the saved ones, or saves it when the app allows. */
+    suspend fun ensureAddress(context: Context, address: NilaAddress): AddressResult
+
+    /** The addresses saved in this app, for NILA's address picker. */
+    suspend fun savedAddresses(context: Context): List<ProviderAddress> = emptyList()
+}
+
+/** The comparison row for an app without NILA's address; null when the app has it and pricing can go on. */
+internal fun addressQuote(result: AddressResult): ProviderQuote? = when (result) {
+    is AddressResult.Ready, is AddressResult.Added -> null
+    is AddressResult.CantAdd -> ProviderQuote.NoAddress(result.reason, result.fix)
+    is AddressResult.Failed -> ProviderQuote.Failed(result.reason)
+}
+
+/** The same for a dish line: an app without the address is left out of it. */
+internal fun addressDishPrice(result: AddressResult): DishPrice? = when (result) {
+    is AddressResult.Ready, is AddressResult.Added -> null
+    is AddressResult.CantAdd -> DishPrice.NoAddress
+    is AddressResult.Failed -> DishPrice.Failed(result.reason)
 }
 
 internal object SwiggyProvider : FoodProvider {
@@ -77,6 +104,29 @@ internal object SwiggyProvider : FoodProvider {
     override val canOrder = true
     override val appPackage = "in.swiggy.android"
     override val auth: McpAuth get() = SwiggyAuth
+
+    private val lock = Any()
+    private var client: McpClient? = null
+    private var clientToken: String? = null
+
+    /** One Swiggy food client per access token, shared with the order flow. */
+    fun client(token: String): McpClient = synchronized(lock) {
+        client?.takeIf { clientToken == token } ?: McpClient(SWIGGY_FOOD_ENDPOINT, token).also {
+            client = it
+            clientToken = token
+        }
+    }
+
+    private suspend fun call(context: Context, tool: String, args: JSONObject): JSONObject? = runInterruptible(Dispatchers.IO) {
+        val session = SwiggyAuth.currentSession(context) ?: return@runInterruptible null
+        client(session.accessToken).callTool(tool, args)
+    }
+
+    override suspend fun ensureAddress(context: Context, address: NilaAddress): AddressResult =
+        ensureSwiggyAddress(address, NilaAddressBook(context).contact) { tool, args -> call(context, tool, args) }
+
+    override suspend fun savedAddresses(context: Context): List<ProviderAddress> =
+        call(context, "get_addresses", JSONObject())?.let(::parseProviderAddresses).orEmpty()
 
     /** Swiggy's numbers come from the live cart FoodFlow already holds; nothing is fetched again. */
     override suspend fun quoteCart(context: Context, cart: CartRequest): ProviderQuote =
@@ -95,7 +145,7 @@ internal object ZomatoProvider : FoodProvider {
     override val initial = 'Z'
     override val tint = Color(0xFFE23744)
     override val canOrder = false
-    override val appPackage = "com.application.zomato"
+    override val appPackage = ZOMATO_PACKAGE
     override val auth: McpAuth get() = ZomatoAuth
 
     private val lock = Any()
@@ -105,7 +155,12 @@ internal object ZomatoProvider : FoodProvider {
     fun compare(context: Context): ZomatoCompare =
         compare ?: synchronized(lock) { compare ?: ZomatoCompare(context.applicationContext).also { compare = it } }
 
+    override suspend fun ensureAddress(context: Context, address: NilaAddress): AddressResult = compare(context).ensure(address)
+
+    override suspend fun savedAddresses(context: Context): List<ProviderAddress> = compare(context).saved().orEmpty()
+
     override suspend fun quoteCart(context: Context, cart: CartRequest): ProviderQuote {
+        addressQuote(ensureAddress(context, cart.address.toNila()))?.let { return it }
         val zomato = compare(context)
         return when (val matched = zomato.quote(cart)) {
             is ZomatoGap -> if (matched.failed) ProviderQuote.Failed(matched.reason) else ProviderQuote.NotAvailable(matched.reason)
@@ -114,8 +169,19 @@ internal object ZomatoProvider : FoodProvider {
     }
 
     override suspend fun quoteDish(context: Context, dish: DishRequest): DishPrice =
-        compare(context).dishPrice(dish.restaurant, dish.line, dish.address)
+        addressDishPrice(ensureAddress(context, dish.address.toNila())) ?: compare(context).dishPrice(dish.restaurant, dish.line, dish.address)
 }
+
+/**
+ * Zomato's MCP has no tool to save an address (only get_saved_addresses_for_user), so the user adds it in
+ * the Zomato app once.
+ */
+internal fun zomatoCantAdd(label: String) = AddressResult.CantAdd(
+    "Zomato can't save new addresses for other apps yet. Add $label in the Zomato app once, then NILA compares there too.",
+    AddressFix.OpenApp(ZOMATO_PACKAGE),
+)
+
+internal const val ZOMATO_PACKAGE = "com.application.zomato"
 
 internal val foodProviders: List<FoodProvider> = listOf(SwiggyProvider, ZomatoProvider)
 
@@ -124,12 +190,11 @@ internal val orderingProvider: FoodProvider get() = foodProviders.first { it.can
 
 /** The dish exactly as the results show it: the size picked by default, priced by the app the results came from. */
 internal fun dishRequest(providerId: String, address: FoodAddress, dish: FoodDish): DishRequest {
-    val line = address.line.substringAfter(": ")
     val size = dish.item.chosenSize
     return DishRequest(
         restaurant = dish.restaurant.name,
         line = CartLine(dish.item.name, size?.name, 1),
-        address = DeliveryAddress(address.label, line, PINCODE.find(line)?.value),
+        address = deliveryAddress(address),
         known = paiseOf(size?.price ?: dish.item.price)?.let { providerId to it },
     )
 }

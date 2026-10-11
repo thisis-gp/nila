@@ -34,7 +34,7 @@ internal data class RankedComparison(
 
 /**
  * Cheapest total first. A tie goes to the app NILA can order on, then to the order the apps were given in.
- * Unpriced apps keep that order within their reason: still checking, sign in, couldn't reach, not there.
+ * Unpriced apps keep that order within their reason: still checking, sign in, couldn't reach, no address, not there.
  */
 internal fun rank(quotes: Map<FoodProvider, ProviderQuote>): RankedComparison {
     val position = quotes.keys.withIndex().associate { it.value to it.index }
@@ -48,8 +48,9 @@ private fun unpricedOrder(quote: ProviderQuote) = when (quote) {
     ProviderQuote.Checking -> 0
     ProviderQuote.SignIn -> 1
     is ProviderQuote.Failed -> 2
-    is ProviderQuote.NotAvailable -> 3
-    is ProviderQuote.Priced -> 4
+    is ProviderQuote.NoAddress -> 3
+    is ProviderQuote.NotAvailable -> 4
+    is ProviderQuote.Priced -> 5
 }
 
 /** "Cheapest on Swiggy · ₹312 with SWIGGYIT · 28 min"; null until some app has a price. */
@@ -181,17 +182,17 @@ internal class FoodQuotes(
 internal fun dishKey(dish: DishRequest): String =
     listOf(dish.restaurant, dish.line.dish, dish.line.variant, dish.address.pincode ?: dish.address.line).joinToString("|")
 
-/**
- * "S ₹249 · Z ₹259" under a search result: each app's initial and its price for the same dish and size.
- * A missing dish says so; a price still loading shows "…"; a failed lookup is left out. Null with fewer than two apps.
- */
 /** A provider's gap reason, short enough for the line under a result. */
 internal fun gapShort(reason: String): String = when {
-    reason.contains("address", ignoreCase = true) -> "no saved address here"
     reason.contains("isn't on", ignoreCase = true) -> "shop not on it"
     else -> "not listed"
 }
 
+/**
+ * "S ₹249 · Z ₹259" under a search result: each app's initial and its price for the same dish and size.
+ * A missing dish says so; a price still loading shows "…"; a failed lookup, or an app without NILA's
+ * address (the comparison says that once), is left out. Null with fewer than two apps.
+ */
 internal fun dishPriceLine(prices: List<Pair<FoodProvider, DishPrice?>>): String? {
     val parts = prices.mapNotNull { (provider, price) ->
         when (price) {
@@ -199,7 +200,7 @@ internal fun dishPriceLine(prices: List<Pair<FoodProvider, DishPrice?>>): String
             DishPrice.Missing -> "${provider.initial} not listed"
             is DishPrice.Gap -> "${provider.initial}: ${gapShort(price.reason)}"
             null -> "${provider.initial} …"
-            is DishPrice.Failed -> null
+            is DishPrice.Failed, DishPrice.NoAddress -> null
         }
     }
     return parts.takeIf { it.size > 1 }?.joinToString(" · ")

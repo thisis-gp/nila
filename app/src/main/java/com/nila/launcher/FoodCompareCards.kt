@@ -155,6 +155,7 @@ internal fun UnpricedRow(provider: FoodProvider, quote: ProviderQuote, actions: 
         ProviderQuote.Checking -> "Checking price" to null
         ProviderQuote.SignIn -> "Sign in to compare" to ("Sign in" to { actions.signIn(provider) })
         is ProviderQuote.Failed -> "Couldn't reach ${provider.name} · ${quote.reason}" to ("Try again" to { actions.retryQuote(provider.id) })
+        is ProviderQuote.NoAddress -> quote.reason to (quote.fix as? AddressFix.OpenApp)?.let { "Open ${provider.name}" to { actions.openApp(provider) } }
         is ProviderQuote.NotAvailable -> quote.reason to null
         is ProviderQuote.Priced -> return
     }

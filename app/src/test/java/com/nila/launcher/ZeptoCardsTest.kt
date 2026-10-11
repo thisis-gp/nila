@@ -46,21 +46,21 @@ class ZeptoCardsTest {
     fun zeptoDeliversToTheAddressChosenInNila() {
         val home = SavedAddress("z1", "home", "503, 5th floor, Vishnu Homes, Kondapur, Hyderabad 500084")
         val work = SavedAddress("z2", "work", "Tower B, Hitech City, Hyderabad 500081")
-        val nila = FoodAddress("s9", "Home", "Vishnu Homes, 503, Kondapur, Hyderabad, Telangana 500084")
-        assertEquals(home, matchAddress(nila, listOf(work, home)))
+        val nila = NilaAddress("Home", "Vishnu Homes, 503, Kondapur, Hyderabad, Telangana 500084")
+        assertEquals(home, zeptoMatch(nila, listOf(work, home)))
         // A different pincode is a different place, however many words match.
-        assertNull(matchAddress(FoodAddress("s9", "Home", "Vishnu Homes, 503, Kondapur, Hyderabad 500032"), listOf(home)))
+        assertNull(zeptoMatch(NilaAddress("Home", "Vishnu Homes, 503, Kondapur, Hyderabad 500032"), listOf(home)))
         // Nothing alike: NILA asks instead of guessing.
-        assertNull(matchAddress(FoodAddress("s7", "Room", "Room Ballal, Koramangala, Bengaluru 560034"), listOf(home, work)))
+        assertNull(zeptoMatch(NilaAddress("Room", "Room Ballal, Koramangala, Bengaluru 560034"), listOf(home, work)))
         // A Zepto address without a pincode and only half the words is a neighbour, not the same place.
-        assertNull(matchAddress(nila, listOf(SavedAddress("z3", "other", "Kondapur, Hyderabad, Telangana"))))
+        assertNull(zeptoMatch(nila, listOf(SavedAddress("z3", "other", "Kondapur, Hyderabad, Telangana"))))
         // A 6-digit flat number starting with 0 is not a pincode.
         val flat = SavedAddress("z4", "home", "Flat 012345, Vishnu Homes, Kondapur, Hyderabad 500084")
-        assertEquals(flat, matchAddress(FoodAddress("s9", "Home", "Flat 012345, Vishnu Homes, Kondapur, Hyderabad 500084"), listOf(flat)))
+        assertEquals(flat, zeptoMatch(NilaAddress("Home", "Flat 012345, Vishnu Homes, Kondapur, Hyderabad 500084"), listOf(flat)))
         // A neighbouring flat can share every other word and the pincode, but is still a different address.
         assertNull(
-            matchAddress(
-                FoodAddress("s9", "Home", "Flat 503, Vishnu Homes, Kondapur, Hyderabad 500084"),
+            zeptoMatch(
+                NilaAddress("Home", "Flat 503, Vishnu Homes, Kondapur, Hyderabad 500084"),
                 listOf(SavedAddress("z5", "home", "Flat 504, Vishnu Homes, Kondapur, Hyderabad 500084")),
             ),
         )

@@ -26,6 +26,7 @@ private class FakeProvider(override val id: String, override val canOrder: Boole
     override fun connected(context: Context) = true
     override suspend fun quoteCart(context: Context, cart: CartRequest): ProviderQuote = error("not used in tests")
     override suspend fun quoteDish(context: Context, dish: DishRequest): DishPrice = error("not used in tests")
+    override suspend fun ensureAddress(context: Context, address: NilaAddress): AddressResult = error("not used in tests")
 }
 
 class FoodComparisonTest {
@@ -226,14 +227,19 @@ class FoodComparisonTest {
 
     @Test
     fun zomatoAddressMustShareThePincode() {
-        val saved = JSONArray()
-            .put(JSONObject().put("address_id", 560001).put("location_name", "Indiranagar, Bengaluru"))
-            .put(JSONObject().put("address_id", 7).put("location_name", "WeWork Galaxy, Residency Road, Bengaluru 560025"))
+        val saved = parseProviderAddresses(
+            JSONObject().put(
+                "addresses",
+                JSONArray()
+                    .put(JSONObject().put("address_id", 560001).put("location_name", "Indiranagar, Bengaluru"))
+                    .put(JSONObject().put("address_id", 7).put("location_name", "WeWork Galaxy, Residency Road, Bengaluru 560025")),
+            ),
+        )
         val near = DeliveryAddress("WeWork", "43 Residency Road, Bengaluru 560025", "560025")
-        assertEquals("7", closestAddress(near, saved)?.pick("address_id"))
+        assertEquals("7", matchAddress(near.toNila(), saved)?.id)
         // The address id 560001 is not a pincode, and a city alone is never a match.
-        assertNull(closestAddress(DeliveryAddress("Home", "Bengaluru 560001", "560001"), saved))
-        assertNull(closestAddress(DeliveryAddress("Home", "Bengaluru", null), saved))
+        assertNull(matchAddress(DeliveryAddress("Home", "Bengaluru 560001", "560001").toNila(), saved))
+        assertNull(matchAddress(DeliveryAddress("Home", "Bengaluru", null).toNila(), saved))
     }
 
     @Test
@@ -280,5 +286,18 @@ class FoodComparisonTest {
         assertEquals("S ₹249 · Z not listed", dishPriceLine(listOf(swiggy to DishPrice.Found(24_900), zomato to DishPrice.Missing)))
         assertEquals("S ₹249 · Z …", dishPriceLine(listOf(swiggy to DishPrice.Found(24_900), zomato to null)))
         assertNull(dishPriceLine(listOf(swiggy to DishPrice.Found(24_900), zomato to DishPrice.Failed("took too long"))))
+    }
+
+    @Test
+    fun anAppWithoutTheAddressIsOneRowAndLeavesTheDishLines() {
+        val noAddress = addressQuote(zomatoCantAdd("WeWork Galaxy"))!!
+        val ranked = rank(mapOf(swiggy to priced(300), zomato to noAddress, third to ProviderQuote.NotAvailable("Meghana isn't on Third"), fourth to ProviderQuote.Failed("took too long")))
+        assertEquals(listOf(fourth, zomato, third), ranked.unpriced.map { it.first })
+        assertEquals(
+            "S ₹249 · T ₹259",
+            dishPriceLine(listOf(swiggy to DishPrice.Found(24_900), zomato to DishPrice.NoAddress, third to DishPrice.Found(25_900))),
+        )
+        // With only one app left there is nothing to compare on the line.
+        assertNull(dishPriceLine(listOf(swiggy to DishPrice.Found(24_900), zomato to DishPrice.NoAddress)))
     }
 }

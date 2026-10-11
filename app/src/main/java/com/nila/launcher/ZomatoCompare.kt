@@ -80,14 +80,36 @@ internal class ZomatoCompare(private val context: Context) {
     private val addressIds = ConcurrentHashMap<String, String>()
     private val restaurants = ConcurrentHashMap<String, JSONObject>()
     private val listings = ConcurrentHashMap<String, List<JSONObject>>()
+    @Volatile private var savedCache: Pair<Long, List<ProviderAddress>>? = null
 
-    /** The saved Zomato address on the chosen address's pincode, looked up once per pincode. */
-    private suspend fun addressId(address: DeliveryAddress): String {
-        val pin = address.pincode ?: stop("No saved Zomato address near ${address.label}")
-        addressIds[pin]?.let { return it }
-        val saved = call("get_saved_addresses_for_user")?.optJSONArray("addresses") ?: stop(NO_ANSWER, failed = true)
-        val id = closestAddress(address, saved)?.pick("address_id") ?: stop("No saved Zomato address near ${address.label}")
-        return id.also { addressIds[pin] = it }
+    /**
+     * The user's saved Zomato addresses, read again after [SAVED_TTL_MS] so one added in the Zomato app shows
+     * up, but not once per dish while the results are priced.
+     */
+    suspend fun saved(): List<ProviderAddress>? {
+        savedCache?.takeIf { System.currentTimeMillis() - it.first < SAVED_TTL_MS }?.let { return it.second }
+        val result = call("get_saved_addresses_for_user") ?: return null
+        return parseProviderAddresses(result).also { savedCache = System.currentTimeMillis() to it }
+    }
+
+    /**
+     * NILA's address among the saved Zomato ones, through the shared matcher. Zomato can't save an address
+     * for NILA, so a missing one is [zomatoCantAdd]. A match is kept for the session.
+     */
+    suspend fun ensure(address: NilaAddress): AddressResult {
+        val key = addressKey(address.line)
+        addressIds[key]?.let { return AddressResult.Ready(it) }
+        val saved = saved() ?: return AddressResult.Failed(NO_ANSWER)
+        val match = matchAddress(address, saved) ?: return zomatoCantAdd(address.label)
+        addressIds[key] = match.id
+        return AddressResult.Ready(match.id)
+    }
+
+    private suspend fun addressId(address: DeliveryAddress): String = when (val result = ensure(address.toNila())) {
+        is AddressResult.Ready -> result.providerAddressId
+        is AddressResult.Added -> result.providerAddressId
+        is AddressResult.CantAdd -> stop(result.reason)
+        is AddressResult.Failed -> stop(result.reason, failed = true)
     }
 
     private suspend fun restaurant(addressId: String, name: String): JSONObject = restaurants.getOrPut("$addressId|$name") {
@@ -271,6 +293,7 @@ internal class ZomatoCompare(private val context: Context) {
         // Each shop costs two menu calls, so the dish list reads the first few shops only.
         const val NEARBY_SHOPS = 4
         const val MAX_PARALLEL_CALLS = 3
+        const val SAVED_TTL_MS = 60_000L
     }
 }
 
@@ -299,18 +322,6 @@ internal fun zomatoBill(result: JSONObject, itemTotal: Long, eta: String): Provi
         total = total,
     )
     return ProviderQuote.Priced(bill.reconciled(), digitsOf(eta), coupon = null)
-}
-
-/**
- * A Zomato address on the same pincode as NILA's chosen one. Never a city or area guess: Zomato's MCP can't
- * save addresses, so a missing match is said plainly.
- */
-internal fun closestAddress(address: DeliveryAddress, zomato: JSONArray): JSONObject? {
-    val pin = address.pincode ?: return null
-    val exact = Regex("""\b$pin\b""")
-    return (0 until zomato.length()).mapNotNull { zomato.optJSONObject(it) }.firstOrNull { saved ->
-        saved.keys().asSequence().filterNot { it.contains("id") }.any { key -> saved.pick(key)?.let(exact::containsMatchIn) == true }
-    }
 }
 
 /** "Paradise Biryani" matches "Paradise Biryani - A Legend Since 1953"; "Biryani Blues" never matches "Biryani". */
@@ -399,3 +410,6 @@ internal fun dishKey(name: String): String =
         .joinToString(" ")
 
 private val SIZE_WORDS = setOf("regular", "small", "medium", "large", "half", "full", "mini", "quarter", "portion", "plate")
+
+/** The same address line however it is spaced, cased or prefixed with its label ("Work: ..."). */
+private fun addressKey(line: String) = line.substringAfter(": ").lowercase().split(Regex("""[^\p{L}\p{N}]+""")).filter(String::isNotBlank).joinToString(" ")
