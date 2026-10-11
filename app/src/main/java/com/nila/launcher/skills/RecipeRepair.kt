@@ -20,6 +20,9 @@ object RecipeRepair {
     private val FENCE = Regex("```[a-zA-Z]*")
     private const val LIST = "List"
     private const val INPUT = "Input"
+    private const val TEXT = "Text"
+    private const val FORM = "Form"
+    private const val DEFAULT_INPUT_TYPE = "text"
     private const val TXN_ROW = "TxnRow"
     private const val ITEM_ROW = "ItemRow"
     private const val TRANSACTIONS = "transactions"
@@ -90,7 +93,10 @@ object RecipeRepair {
             if (id in byId) continue
             byId[id] = cleanProps(component, spec)
         }
+        // A Text with nothing to say is a heading the model forgot to write; its parent loses the reference below.
+        byId.values.removeIf { it.string("component") == TEXT && it.string("text").isNullOrBlank() }
         addMissingRows(byId, data)
+        addMissingInputs(byId)
         for (component in byId.values) dropDanglingRefs(component, byId.keys)
         val rooted = if (RecipeCatalog.ROOT_ID in byId) byId else withRoot(byId)
         return keepTree(rooted)
@@ -139,6 +145,22 @@ object RecipeRepair {
                 row["titleField"] = JsonPrimitive(titleField)
             }
             byId[rowId] = row
+        }
+    }
+
+    /** A Form field id that was never written becomes a plain text input named after it. */
+    private fun addMissingInputs(byId: MutableMap<String, MutableMap<String, JsonElement>>) {
+        val missing = byId.values.filter { it.string("component") == FORM }
+            .flatMap { form -> (form["fields"] as? JsonArray).orEmpty().mapNotNull { it.stringOrNull() } }
+            .filter { it !in byId }
+        for (id in missing.distinct()) {
+            byId[id] = mutableMapOf(
+                "id" to JsonPrimitive(id),
+                "component" to JsonPrimitive(INPUT),
+                "label" to JsonPrimitive(id),
+                "field" to JsonPrimitive(id),
+                "type" to JsonPrimitive(DEFAULT_INPUT_TYPE),
+            )
         }
     }
 

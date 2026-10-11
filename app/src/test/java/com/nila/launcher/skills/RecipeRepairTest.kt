@@ -138,5 +138,23 @@ class RecipeRepairTest {
         assertNull(fixed.components().single()["style"])
         assertEquals(emptyList<RecipeError>(), RecipeValidator.validate(fixed))
     }
+
+    @Test
+    fun addsTheInputsAFormPointsAtButNeverDefined() {
+        val fixed = RecipeRepair.repair(recipe("""[{"id":"root","component":"Column","children":["form","list"]},
+            {"id":"form","component":"Form","fields":["item"],"submit":{"action":"storage.add"}},
+            {"id":"list","component":"Checklist","items":"/items","labelField":"item"}]"""))
+        assertEquals(emptyList<RecipeError>(), RecipeValidator.validate(fixed))
+        val input = fixed.components().single { it.string("id") == "item" }
+        assertEquals(listOf("Input", "item", "text"), listOf(input.string("component"), input.string("field"), input.string("type")))
+    }
+
+    @Test
+    fun dropsTextWithNothingToSay() {
+        val fixed = RecipeRepair.repair(recipe("""[{"id":"root","component":"Column","children":["header","body"]},
+            {"id":"header","component":"Text","style":"title"},{"id":"body","component":"Text","text":"hi"}]"""))
+        assertEquals(listOf("root", "body"), fixed.components().map { it.string("id") })
+        assertEquals(emptyList<RecipeError>(), RecipeValidator.validate(fixed))
+    }
 }
 
