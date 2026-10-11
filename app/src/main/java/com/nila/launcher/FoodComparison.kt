@@ -185,11 +185,19 @@ internal fun dishKey(dish: DishRequest): String =
  * "S ₹249 · Z ₹259" under a search result: each app's initial and its price for the same dish and size.
  * A missing dish says so; a price still loading shows "…"; a failed lookup is left out. Null with fewer than two apps.
  */
+/** A provider's gap reason, short enough for the line under a result. */
+internal fun gapShort(reason: String): String = when {
+    reason.contains("address", ignoreCase = true) -> "no saved address here"
+    reason.contains("isn't on", ignoreCase = true) -> "shop not on it"
+    else -> "not listed"
+}
+
 internal fun dishPriceLine(prices: List<Pair<FoodProvider, DishPrice?>>): String? {
     val parts = prices.mapNotNull { (provider, price) ->
         when (price) {
             is DishPrice.Found -> "${provider.initial} ${paiseText(price.paise)}"
             DishPrice.Missing -> "${provider.initial} not listed"
+            is DishPrice.Gap -> "${provider.initial}: ${gapShort(price.reason)}"
             null -> "${provider.initial} …"
             is DishPrice.Failed -> null
         }

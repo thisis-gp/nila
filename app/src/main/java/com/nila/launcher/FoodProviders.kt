@@ -46,6 +46,8 @@ data class DishRequest(val restaurant: String, val line: CartLine, val address: 
 sealed interface DishPrice {
     data class Found(val paise: Long) : DishPrice
     data object Missing : DishPrice
+    /** The app couldn't price it here at all: no saved address nearby, or the shop isn't on it. */
+    data class Gap(val reason: String) : DishPrice
     data class Failed(val reason: String) : DishPrice
 }
 

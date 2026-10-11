@@ -143,11 +143,12 @@ internal class ZomatoCompare(private val context: Context) {
         val addressId = addressId(address)
         val found = restaurant(addressId, restaurant)
         val resId = found.pick("res_id")!!.toLong()
-        val mapped = pickVariant(line, listing(resId, addressId).filter { sameDish(line.dish, it.pick("item_name").orEmpty()) })
+        val listed = listing(resId, addressId)
+        val mapped = pickVariant(line, listed.filter { sameDish(line.dish, it.pick("item_name").orEmpty()) })
         if (mapped == null) DishPrice.Missing
         else prices(resId, addressId, listOf(mapped), found.pick("name").orEmpty())[mapped.pick("variant_id")]?.let { DishPrice.Found(it) } ?: DishPrice.Missing
     } catch (stopped: Stop) {
-        if (stopped.gap.failed) DishPrice.Failed(stopped.gap.reason) else DishPrice.Missing
+        if (stopped.gap.failed) DishPrice.Failed(stopped.gap.reason) else DishPrice.Gap(stopped.gap.reason)
     }
 
     /**
