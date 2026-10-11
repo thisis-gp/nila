@@ -117,8 +117,13 @@ internal object MyNilaLock {
         unlocked = true
     }
 
-    /** Opens the phone's own screen-lock settings. */
+    /**
+     * Opens Android's own "choose a screen lock" screen. ACTION_SECURITY_SETTINGS landed on an unrelated page on
+     * vivo's settings app, so the direct picker comes first and the security page is only the fallback.
+     */
     fun openSecuritySettings(context: Context) {
-        runCatching { context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        val picker = Intent(android.app.admin.DevicePolicyManager.ACTION_SET_NEW_PASSWORD).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(picker) }
+            .recoverCatching { context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }
 }
