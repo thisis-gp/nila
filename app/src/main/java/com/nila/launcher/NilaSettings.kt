@@ -68,7 +68,7 @@ internal fun SettingsScreen(
     val people = factsByPerson(facts).size
     val context = LocalContext.current
     val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty() }
-    Column(Modifier.fillMaxSize().background(Ink).safeDrawingPadding().padding(horizontal = 20.dp, vertical = 12.dp)) {
+    Column(Modifier.fillMaxSize().background(Ink).safeDrawingPadding().padding(horizontal = ScreenGutter, vertical = 12.dp)) {
         RoundButton(LucideR.drawable.lucide_ic_chevron_left, "Back", onBack)
         SerifTitle("Settings", size = 34.sp, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp))
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {

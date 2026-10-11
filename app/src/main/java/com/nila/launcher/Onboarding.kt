@@ -100,7 +100,7 @@ internal fun OnboardingScreen(
     }
 
     Column(
-        Modifier.fillMaxSize().background(Ink).drawBehind { drawAgentAtmosphere() }.safeDrawingPadding().imePadding().padding(horizontal = 24.dp, vertical = 16.dp),
+        Modifier.fillMaxSize().background(Ink).drawBehind { drawAgentAtmosphere() }.safeDrawingPadding().imePadding().padding(horizontal = ScreenGutter, vertical = 16.dp),
     ) {
         Text("${step.ordinal + 1} of $STEP_COUNT", color = Muted, fontSize = 13.sp)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(top = 16.dp)) {

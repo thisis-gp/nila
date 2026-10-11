@@ -53,12 +53,16 @@ internal fun FitnessTab() {
     val today = LocalDate.now()
     val steps = stepsToday(state)?.takeIf { state?.day == today }
 
-    Text("Steps come from this phone's own step counter. Tell NILA about workouts and weight in chat: \"I ran 5 km in 30 minutes\", \"my weight is 72 kg\".", color = Muted, fontSize = 13.sp)
     if (!allowed) {
-        PrimaryAction("Count my steps", onClick = { ask.launch(Manifest.permission.ACTIVITY_RECOGNITION) })
+        EmptyState(
+            MascotMood.Listening,
+            "NILA counts your steps with this phone's own step counter.",
+            "Count my steps",
+            onAction = { ask.launch(Manifest.permission.ACTIVITY_RECOGNITION) },
+        )
     } else {
         NilaCard {
-            SectionLabel("Steps today", color = Lime)
+            CardLabel("Steps today", color = Lime)
             Text(if (noSensor) "This phone has no step counter." else "%,d".format(steps ?: 0), color = Paper, fontSize = 40.sp, fontWeight = FontWeight.Bold)
             Box(Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)).background(Panel)) {
                 Box(Modifier.fillMaxWidth(((steps ?: 0).toFloat() / STEP_GOAL).coerceIn(0f, 1f)).fillMaxHeight().background(Lime))
@@ -68,10 +72,10 @@ internal fun FitnessTab() {
         }
         WeekBars(lastDays(state, today))
     }
-    entries.firstOrNull { it.kg != null }?.let { w -> NilaCard { SectionLabel("Weight", color = Lime); Text("${entryLine(w).substringAfter("· ")} · ${eventWhen(w.date, null).substringBefore(",")}", color = Paper, fontWeight = FontWeight.Bold) } }
-    SectionLabel("Workouts and weight", Modifier.padding(top = 4.dp))
-    if (entries.isEmpty()) {
-        NilaCard { Text("Nothing logged yet. Say \"I walked 3 km today\" in chat.", color = Muted, fontSize = 13.sp) }
+    entries.firstOrNull { it.kg != null }?.let { w -> NilaCard { CardLabel("Weight", color = Lime); Text("${entryLine(w).substringAfter("· ")} · ${eventWhen(w.date, null).substringBefore(",")}", color = Paper, fontWeight = FontWeight.Bold) } }
+    if (entries.isNotEmpty() || allowed) SerifTitle("Workouts and weight", size = 22.sp, modifier = Modifier.padding(top = 8.dp))
+    if (entries.isEmpty() && allowed) {
+        EmptyState(MascotMood.Idle, "Nothing logged yet. Say \"I walked 3 km today\" in chat and it shows up here.")
     }
     entries.forEach { e ->
         Surface(color = CardInk, shape = RoundedCornerShape(CardRadius), modifier = Modifier.fillMaxWidth()) {
@@ -91,7 +95,7 @@ internal fun FitnessTab() {
 private fun WeekBars(days: List<Pair<LocalDate, Int>>) {
     val top = maxOf(STEP_GOAL, days.maxOf { it.second })
     NilaCard {
-        SectionLabel("Last 7 days", color = Lime)
+        CardLabel("Last 7 days", color = Lime)
         Row(Modifier.fillMaxWidth().height(120.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.Bottom) {
             days.forEach { (day, n) ->
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Bottom) {

@@ -598,7 +598,7 @@ private fun NilaApp(resumeVersion: Int) {
                                     if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
                                 },
                                 food = foodActions,
-                                suggestion = morningSuggestion(facts, LocalTime.now()),
+                                suggestion = homeSuggestion(facts, java.time.LocalDateTime.now()),
                                 grocery = groceryActions,
                                 forget = { saved ->
                                     // Undo for an automatic save: the fact goes, and the card says so instead of offering Forget again.
@@ -615,6 +615,7 @@ private fun NilaApp(resumeVersion: Int) {
                                     val old = facts.firstOrNull { it.id == id }
                                     if (old != null) scope.launch { memory.delete(id); memory.save(text, old.kind, old.about) }
                                 },
+                                onAddFact = { text, about -> scope.launch { memory.save(text, MemoryKind.Other, about) } },
                                 onForgetAll = { scope.launch { memory.clear() } },
                                 health = health,
                                 readReport = brain::readReport,
@@ -778,7 +779,6 @@ private val HeaderMascotSize = 34.dp
 private val WorkingMascotSize = 28.dp
 private val EmptyMascotSize = 72.dp
 private val FoodRequestSize = 14.sp
-private val ScreenGutter = 20.dp
 private val PromptMinHeight = 48.dp
 private val ProductImageSize = 60.dp
 private val OptionImageSize = 52.dp

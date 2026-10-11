@@ -15,6 +15,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +28,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.Image
+import androidx.compose.ui.layout.ContentScale
+import java.time.LocalDateTime
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -158,10 +162,11 @@ internal fun HomeScreen(
         }
     }
     val nextAlarm = remember(context, resumeVersion, now) { nextAlarmLine(context) }
-    val suggestion = remember(facts, now) { morningSuggestion(facts, now) }
+    val suggestion = remember(facts, now) { homeSuggestion(facts, LocalDateTime.of(LocalDate.now(), now)) }
     val homePrefs = remember(context) { context.getSharedPreferences("nila_launcher", Context.MODE_PRIVATE) }
     var hiddenOn by remember { mutableStateOf(homePrefs.getString(SUGGESTION_HIDDEN_KEY, null)) }
-    val showSuggestion = suggestion != null && hiddenOn != LocalDate.now().toString()
+    val suggestionKey = suggestion?.let { "${LocalDate.now()}:${it.meal}" }
+    val showSuggestion = suggestion != null && hiddenOn != suggestionKey
     var greeting by rememberSaveable { mutableStateOf(true) }
     var resting by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -179,12 +184,20 @@ internal fun HomeScreen(
         nilaMood == MascotMood.Talking -> "NILA has an answer for you."
         nilaMood == MascotMood.Listening -> "NILA is waiting on you."
         nilaMood == MascotMood.Error -> "NILA couldn't do that one."
-        else -> partOfDay(now.hour).line
+        else -> userName(facts)?.let { "${greetingFor(now.hour)}, $it" } ?: partOfDay(now.hour).line
     }
+    val statusOpensMyNila = !resting && nilaMood in setOf(MascotMood.Idle, MascotMood.Greeting)
 
     Box(
         Modifier.fillMaxSize()
             .pointerInput(Unit) { detectTapGestures(onLongPress = { onChangeWallpaper() }) }
+            .pointerInput(Unit) {
+                var sideways = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { sideways = 0f },
+                    onDragEnd = { if (sideways > SWIPE_SIDE_DP.dp.toPx()) onOpenMyNila() },
+                ) { _, dragAmount -> sideways += dragAmount }
+            }
             .pointerInput(Unit) {
                 var dragged = 0f
                 detectVerticalDragGestures(
@@ -223,25 +236,21 @@ internal fun HomeScreen(
                 letterSpacing = (-0.085).em,
                 modifier = Modifier.padding(top = 50.dp),
             )
-            Text(statusLine, color = ClockInk, fontSize = 12.sp, letterSpacing = 0.05.em, modifier = Modifier.padding(top = 4.dp))
-            Spacer(Modifier.weight(1f))
-            run {
-                Column(
-                    Modifier.align(Alignment.End).padding(bottom = 18.dp),
-                    horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    AmbientPill("My NILA", Modifier.clickable(onClick = onOpenMyNila))
-                    nextAlarm?.let { AmbientPill(it) }
-                }
+            Row(
+                Modifier.padding(top = 4.dp).then(if (statusOpensMyNila) Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClickLabel = "Open My NILA", onClick = onOpenMyNila) else Modifier),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(statusLine, color = ClockInk, fontSize = 12.sp, letterSpacing = 0.05.em)
+                if (statusOpensMyNila) Icon(painterResource(LucideR.drawable.lucide_ic_chevron_right), contentDescription = null, tint = ClockInk, modifier = Modifier.padding(start = 2.dp).size(14.dp))
             }
+            Spacer(Modifier.weight(1f))
+            nextAlarm?.let { AmbientPill(it, Modifier.align(Alignment.End).padding(bottom = 18.dp)) }
             if (showSuggestion && suggestion != null) {
                 HomeSuggestion(
                     suggestion = suggestion,
-                    reason = suggestionReason(facts),
                     onYes = { onSuggestion(suggestion.request) },
                     onNotToday = {
-                        hiddenOn = LocalDate.now().toString()
+                        hiddenOn = suggestionKey
                         homePrefs.edit().putString(SUGGESTION_HIDDEN_KEY, hiddenOn).apply()
                     },
                 )
@@ -309,11 +318,15 @@ private fun startOrTell(context: Context, intent: Intent, failure: String) {
 }
 
 /**
- * NILA says one line, shows why in a small line under it only when there is a real reason, and waits for a
- * reply. "Not today" hides it until tomorrow.
+ * NILA says one short line, shows why only when there is a real reason, and waits for a reply. "Not today" hides it until the next meal window.
  */
 @Composable
-private fun HomeSuggestion(suggestion: MemorySuggestion, reason: String?, onYes: () -> Unit, onNotToday: () -> Unit) {
+private fun HomeSuggestion(suggestion: MemorySuggestion, onYes: () -> Unit, onNotToday: () -> Unit) {
+    val photo = when (dishPhotoKey(suggestion.dish)) {
+        "biryani" -> R.drawable.food_biryani
+        "salad" -> R.drawable.food_salad
+        else -> null
+    }
     Column(Modifier.fillMaxWidth().padding(bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
             suggestion.label,
@@ -323,10 +336,12 @@ private fun HomeSuggestion(suggestion: MemorySuggestion, reason: String?, onYes:
             lineHeight = 36.sp,
             modifier = Modifier.padding(end = 40.dp),
         )
-        reason?.let {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(painterResource(LucideR.drawable.lucide_ic_history), contentDescription = null, tint = PillInk, modifier = Modifier.size(14.dp))
-                Text(it, color = PillInk, fontSize = 12.sp, maxLines = 2, modifier = Modifier.padding(start = 6.dp))
+        if (suggestion.reason != null || photo != null) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                photo?.let {
+                    Image(painterResource(it), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(SuggestionPhotoSize).clip(RoundedCornerShape(12.dp)))
+                }
+                suggestion.reason?.let { Text(it, color = PillInk, fontSize = 13.sp, maxLines = 2, modifier = Modifier.weight(1f)) }
             }
         }
         Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -346,6 +361,15 @@ private fun HomeSuggestion(suggestion: MemorySuggestion, reason: String?, onYes:
             )
         }
     }
+}
+
+private val SuggestionPhotoSize = 52.dp
+private const val SWIPE_SIDE_DP = 80
+
+private fun greetingFor(hour: Int) = when {
+    hour < 12 -> "Good morning"
+    hour < 17 -> "Good afternoon"
+    else -> "Good evening"
 }
 
 @Composable

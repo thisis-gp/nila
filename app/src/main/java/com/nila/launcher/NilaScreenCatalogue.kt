@@ -425,7 +425,7 @@ private fun Page(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
-        Modifier.fillMaxSize().background(Ink).safeDrawingPadding().padding(horizontal = 18.dp, vertical = 12.dp),
+        Modifier.fillMaxSize().background(Ink).safeDrawingPadding().padding(horizontal = ScreenGutter, vertical = 12.dp),
     ) {
         Box(Modifier.fillMaxWidth().padding(top = 12.dp)) {
             if (onBack != null) RoundButton(LucideR.drawable.lucide_ic_chevron_left, "Back", onBack, Modifier.align(Alignment.CenterStart))

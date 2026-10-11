@@ -1,7 +1,6 @@
 package com.nila.launcher
 
 import java.time.LocalDateTime
-import java.time.LocalTime
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -101,18 +100,6 @@ class NilaMemoryTest {
         assertFalse(wantsVeg(listOf(fact("I eat non-veg on Tuesdays", MemoryKind.Diet)), tuesdayMorning))
         assertFalse(wantsVeg(listOf(fact("Veg on weekend evenings", MemoryKind.Diet)), tuesdayMorning))
         assertTrue(appliesAt("weekday mornings", tuesdayMorning))
-    }
-
-    @Test
-    fun theMorningSuggestionComesFromTheNewestLike() {
-        val facts = listOf(
-            fact("I like masala dosa", MemoryKind.Preference, savedAt = 1),
-            fact("I like filter coffee", MemoryKind.Preference, savedAt = 2),
-            fact("Office is in Koramangala", MemoryKind.Place, savedAt = 3),
-        )
-        assertEquals(MemorySuggestion("Filter coffee for breakfast?", "order filter coffee"), morningSuggestion(facts, LocalTime.of(8, 30)))
-        assertNull(morningSuggestion(facts, LocalTime.of(11, 0)))
-        assertNull(morningSuggestion(facts.filter { it.kind == MemoryKind.Place }, LocalTime.of(8, 30)))
     }
 
     @Test

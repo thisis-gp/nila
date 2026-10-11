@@ -9,7 +9,6 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import java.time.DayOfWeek
 import java.time.LocalDateTime
-import java.time.LocalTime
 import java.util.UUID
 import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
@@ -388,8 +387,6 @@ private class MemoryStore(private val context: Context) {
 private const val MIN_WORD_LENGTH = 3
 /** A fact with two or more subject words matches only when two of them are in the name: "filter coffee" is not "cold coffee". */
 private const val STRONG_MATCH_WORDS = 2
-private const val SUGGESTION_START_HOUR = 5
-private const val SUGGESTION_END_HOUR = 11
 internal const val CHAT_FACT_LIMIT = 5
 
 private val DayWords: Map<String, Set<DayOfWeek>> =
@@ -410,14 +407,14 @@ private val FramingWords = setOf(
     "who", "when", "food", "foods", "breakfast", "lunch", "dinner", "meal", "meals", "snack", "snacks",
 ) + DayWords.keys.flatMap { listOf(it, "${it}s") } + PartWords.keys.flatMap { listOf(it, "${it}s") }
 
-private fun words(text: String) = text.lowercase().split(Regex("""[^\p{L}\p{N}']+""")).filter(String::isNotBlank)
+internal fun words(text: String) = text.lowercase().split(Regex("""[^\p{L}\p{N}']+""")).filter(String::isNotBlank)
 
 /** The words that say what a fact is about: "I really like filter coffee in the morning" gives [filter, coffee]. */
 internal fun factWords(text: String): List<String> =
     words(text).filter { it.length >= MIN_WORD_LENGTH && it !in FramingWords }.distinct()
 
 /** Whole-word match that forgives a plural on either side: "peanuts" finds "peanut chikki". */
-private fun mentions(text: String, word: String): Boolean {
+internal fun mentions(text: String, word: String): Boolean {
     val stem = Regex.escape(if (word.length > MIN_WORD_LENGTH + 1) word.removeSuffix("s") else word)
     return Regex("""\b$stem(s|es)?\b""").containsMatchIn(text.lowercase())
 }
@@ -446,7 +443,7 @@ internal fun appliesAt(text: String, now: LocalDateTime): Boolean {
     return (days.isEmpty() || now.dayOfWeek in days) && (parts.isEmpty() || partOfDay(now.hour) in parts)
 }
 
-private val VegWord = Regex("""(?<!non[- ])\b(veg|vegetarian|vegan)\b""")
+internal val VegWord = Regex("""(?<!non[- ])\b(veg|vegetarian|vegan)\b""")
 
 /** True when a Diet fact says veg and its day or time, if it names one, is now. */
 internal fun wantsVeg(facts: List<MemoryFact>, now: LocalDateTime): Boolean =
@@ -460,17 +457,6 @@ internal data class FoodMemory(val facts: List<MemoryFact>, val vegPreferred: Bo
 }
 
 internal fun foodMemory(facts: List<MemoryFact>, now: LocalDateTime) = FoodMemory(facts, wantsVeg(facts, now))
-
-/** One gentle nudge from memory: what the chip or pill says, and the request it sends when tapped. */
-internal data class MemorySuggestion(val label: String, val request: String)
-
-/** In the morning, the newest Preference as "Filter coffee for breakfast?"; null at other times or with nothing liked. */
-internal fun morningSuggestion(facts: List<MemoryFact>, now: LocalTime): MemorySuggestion? {
-    if (now.hour !in SUGGESTION_START_HOUR until SUGGESTION_END_HOUR) return null
-    val liked = facts.filter { it.kind == MemoryKind.Preference && it.about == ME }.maxByOrNull { it.savedAt } ?: return null
-    val subject = factWords(liked.text).joinToString(" ").ifBlank { return null }
-    return MemorySuggestion("${subject.replaceFirstChar(Char::uppercase)} for breakfast?", "order $subject")
-}
 
 private val PersonalKinds = setOf(MemoryKind.Preference, MemoryKind.Diet, MemoryKind.Allergy)
 
