@@ -53,6 +53,11 @@ class FileAppStore(private val dir: File, private val newId: () -> String = { UU
         }
     }
 
+    /** Deletes a whole store, for uninstalling an app. */
+    fun drop(store: String) {
+        fileOf(store).delete()
+    }
+
     private fun fileOf(store: String): File {
         require(store.matches(STORE_NAME)) { "bad store name" }
         return File(dir, store + EXTENSION)
