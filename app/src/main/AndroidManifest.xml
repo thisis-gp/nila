@@ -13,6 +13,9 @@
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <!-- "photos I took on Dec 18 2024": NILA searches the phone's photos by date, on the phone. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- My NILA fitness: the phone's own step counter. -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <!-- My NILA reminders: shown as notifications, put back after a restart. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

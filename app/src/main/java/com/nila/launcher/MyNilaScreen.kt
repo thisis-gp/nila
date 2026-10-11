@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -65,7 +66,7 @@ internal object MyNilaRequests {
     var pending by mutableStateOf<HealthPrompt?>(null)
 }
 
-internal enum class MyNilaTab(val label: String) { People("People"), Health("Health"), Reminders("Reminders") }
+internal enum class MyNilaTab(val label: String) { People("People"), Health("Health"), Reminders("Reminders"), Access("Phone access") }
 
 /**
  * My NILA: its own space for everything NILA knows about the user and their people, and their health
@@ -180,7 +181,8 @@ internal fun MyNilaScreen(
                 Text("About you and your people · encrypted on this phone", color = Muted, fontSize = 12.sp)
             }
         }
-        Row(Modifier.padding(vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Four tabs don't fit a phone row: it scrolls.
+        Row(Modifier.padding(vertical = 16.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MyNilaTab.entries.forEach { t ->
                 val on = t == tab
                 Text(
@@ -197,6 +199,7 @@ internal fun MyNilaScreen(
             when {
                 tab == MyNilaTab.People -> PeopleTab(facts, onForgetFact, onForgetAll)
                 tab == MyNilaTab.Reminders -> RemindersTab(reminders)
+                tab == MyNilaTab.Access -> PhoneAccessTab()
                 open != null -> HealthDetail(
                     health = health,
                     record = open!!,

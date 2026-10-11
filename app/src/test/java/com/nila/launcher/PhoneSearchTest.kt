@@ -19,6 +19,10 @@ class PhoneSearchTest {
         assertEquals(PhotoSearch(LocalDate.of(2024, 12, 1), LocalDate.of(2024, 12, 31), "December 2024"), photoSearch("my photos in december 2024", today))
         assertEquals(PhotoSearch(today.minusDays(1), today.minusDays(1), "yesterday"), photoSearch("pics from yesterday", today))
         assertEquals(LocalDate.of(2026, 10, 9), photoSearch("selfies from friday", today)!!.from)
+        // Videos are found the same way.
+        assertEquals(dec18, photoSearch("videos I recorded on 18 Dec 2024", today)!!.from)
+        assertEquals(dec18, photoSearch("show videos I recorded on 18 Dec 2024", today)!!.from)
+        assertEquals(dec18, photoSearch("open my gallery from Dec 18 2024", today)!!.from)
     }
 
     @Test
@@ -32,5 +36,6 @@ class PhoneSearchTest {
         assertNull(photoSearch("hey nila, remind me to print my photos on friday", today))
         assertNull(photoSearch("open the camera and take a selfie today", today))
         assertNull(photoSearch("search the web for pictures of cats on friday", today))
+        assertNull(photoSearch("record a video today", today))
     }
 }
