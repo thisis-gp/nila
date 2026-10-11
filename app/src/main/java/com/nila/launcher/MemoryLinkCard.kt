@@ -93,7 +93,7 @@ private fun ContactRows(suggestions: List<ContactChoice>, linker: ContactLinker,
             Text(choice.name, color = Paper, fontSize = 16.sp)
         }
     }
-    TextAction("Choose another contact", linker.pick)
+    TextAction(if (suggestions.isEmpty()) "Choose from contacts" else "Choose another contact", linker.pick)
 }
 
 /** A saved fact and, if wanted, "which contact is she?" in one card. Undo forgets the fact. */
