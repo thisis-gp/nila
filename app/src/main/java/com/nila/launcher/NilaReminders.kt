@@ -8,7 +8,10 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.net.Uri
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import java.time.LocalDateTime
 import java.time.YearMonth
 import java.time.ZoneId
@@ -67,7 +70,26 @@ internal fun monthlyReminderOf(reminder: MonthlyReminder, now: LocalDateTime): N
  */
 internal class NilaReminders(context: Context) {
     private val appContext = context.applicationContext
-    private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val prefs by lazy {
+        val masterKey = MasterKey.Builder(appContext).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+        EncryptedSharedPreferences.create(
+            appContext,
+            SECURE_PREFS,
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+        ).also(::moveFromPlain)
+    }
+
+    private fun moveFromPlain(secure: SharedPreferences) {
+        val plain = appContext.getSharedPreferences(PLAIN_PREFS, Context.MODE_PRIVATE)
+        val reminders = plain.getString(LIST, null) ?: return
+        // Delete the readable copy only after the encrypted write is on disk.
+        if (secure.edit().putString(LIST, secure.getString(LIST, null) ?: reminders).commit()) {
+            plain.edit().clear().commit()
+            appContext.deleteSharedPreferences(PLAIN_PREFS)
+        }
+    }
 
     fun all(): List<NilaReminder> = prefs.getString(LIST, null)?.let(::decode).orEmpty().sortedBy { nextFiring(it, LocalDateTime.now()) ?: it.at }
 
@@ -143,7 +165,8 @@ internal class NilaReminders(context: Context) {
     }
 
     companion object {
-        private const val PREFS = "nila_reminders"
+        private const val PLAIN_PREFS = "nila_reminders"
+        private const val SECURE_PREFS = "nila_reminders_secure"
         private const val LIST = "reminders"
         const val ACTION = "com.nila.launcher.REMINDER"
         const val EXTRA_ID = "id"

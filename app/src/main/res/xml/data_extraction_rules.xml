@@ -5,12 +5,16 @@
         <exclude domain="sharedpref" path="nila_memory.xml" />
         <exclude domain="sharedpref" path="nila_memory_secure.xml" />
         <exclude domain="sharedpref" path="nila_health.xml" />
+        <exclude domain="sharedpref" path="nila_reminders.xml" />
+        <exclude domain="sharedpref" path="nila_reminders_secure.xml" />
         <exclude domain="file" path="health/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="nila_memory.xml" />
         <exclude domain="sharedpref" path="nila_memory_secure.xml" />
         <exclude domain="sharedpref" path="nila_health.xml" />
+        <exclude domain="sharedpref" path="nila_reminders.xml" />
+        <exclude domain="sharedpref" path="nila_reminders_secure.xml" />
         <exclude domain="file" path="health/" />
     </device-transfer>
 </data-extraction-rules>
