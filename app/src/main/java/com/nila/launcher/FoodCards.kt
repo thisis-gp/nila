@@ -1136,14 +1136,20 @@ private fun rememberZomatoShops(address: FoodAddress, restaurants: List<FoodRest
     // Keyed on every shop shown, not on the ones still missing: marking a shop as loading must not restart
     // (and so cancel) the very lookup that is filling it in.
     LaunchedEffect(address.id, ids) {
-        val wanted = restaurants.distinctBy { it.id }.filter { it.id !in shops }
+        // Anything not finished is looked up again: "See N more" restarts this effect, which cancels lookups
+        // in flight, and a cancelled one must not stay on "Checking Zomato…" forever.
+        val wanted = restaurants.distinctBy { it.id }.filter { shops[it.id]?.loading != false }
         wanted.forEach { shops[it.id] = ZomatoLookup(loading = true, shop = null) }
         coroutineScope {
             wanted.forEach { restaurant ->
                 launch {
-                    val shop = runCatching { actions.zomatoShop(address, restaurant) }
-                        .getOrElse { if (it is CancellationException) throw it else ZomatoShop(restaurant.name, emptyList(), "Zomato didn't answer") }
-                    shops[restaurant.id] = ZomatoLookup(loading = false, shop = shop)
+                    try {
+                        val shop = runCatching { actions.zomatoShop(address, restaurant) }
+                            .getOrElse { if (it is CancellationException) throw it else ZomatoShop(restaurant.name, emptyList(), NO_ANSWER) }
+                        shops[restaurant.id] = ZomatoLookup(loading = false, shop = shop)
+                    } finally {
+                        if (shops[restaurant.id]?.loading == true) shops.remove(restaurant.id)
+                    }
                 }
             }
         }
@@ -1151,27 +1157,39 @@ private fun rememberZomatoShops(address: FoodAddress, restaurants: List<FoodRest
     return shops
 }
 
+/** What the line under a Swiggy dish says, and whether Zomato is the cheaper app (it then stands out). */
+internal data class ZomatoLineText(val text: String, val cheaperOnZomato: Boolean = false)
+
+/** Swiggy's price as a number, decimals kept: "₹199.50" is 199.5, not 199. */
+internal fun priceRupees(price: String): Double? = Regex("""\d+(\.\d+)?""").find(price.replace(",", ""))?.value?.toDoubleOrNull()
+
+internal fun zomatoLine(lookup: ZomatoLookup, swiggyName: String, swiggyPrice: String): ZomatoLineText {
+    val shop = lookup.shop
+    return when {
+        lookup.loading -> ZomatoLineText("Checking Zomato…")
+        shop?.gap != null -> ZomatoLineText("Zomato: ${shop.gap}")
+        shop == null -> ZomatoLineText("")
+        else -> {
+            val same = shop.sameAs(swiggyName)
+            val swiggy = priceRupees(swiggyPrice)?.toInt()
+            when {
+                same != null && swiggy != null -> ZomatoLineText("Zomato ₹${same.price} · ${priceGap(swiggy, same.price)}", same.price < swiggy)
+                same != null -> ZomatoLineText("Zomato ₹${same.price}")
+                // No exact match: say what Zomato has, with no price verdict.
+                else -> ZomatoLineText("Not on its Zomato menu · Zomato has ${shop.dishes.take(2).joinToString { "${it.name} ₹${it.price}" }}")
+            }
+        }
+    }
+}
+
 /** Under a Swiggy dish: its price at the same shop on Zomato and which app is cheaper, or the nearest Zomato dish. */
 @Composable
 private fun ZomatoPriceLine(lookup: ZomatoLookup?, swiggyName: String, swiggyPrice: String) {
     if (lookup == null || (!lookup.loading && lookup.shop == null)) return
-    val shop = lookup.shop
-    val text = when {
-        lookup.loading -> "Checking Zomato…"
-        shop?.gap != null -> "Zomato: ${shop.gap}"
-        else -> {
-            val same = shop?.sameAs(swiggyName)
-            val swiggy = Regex("""\d+""").find(swiggyPrice)?.value?.toIntOrNull()
-            when {
-                same != null && swiggy != null -> "Zomato ₹${same.price} · ${priceGap(swiggy, same.price)}"
-                same != null -> "Zomato ₹${same.price}"
-                else -> "Not on its Zomato menu · Zomato has ${shop?.dishes?.take(2)?.joinToString { "${it.name} ₹${it.price}" }}"
-            }
-        }
-    }
-    val cheaperOnZomato = text.contains("cheaper on Zomato")
+    val line = zomatoLine(lookup, swiggyName, swiggyPrice)
+    val cheaperOnZomato = line.cheaperOnZomato
     Text(
-        text,
+        line.text,
         color = if (cheaperOnZomato) ZomatoRed else Muted,
         fontSize = 12.sp,
         fontWeight = if (cheaperOnZomato) FontWeight.SemiBold else FontWeight.Normal,
@@ -1185,7 +1203,7 @@ private fun ZomatoPriceLine(lookup: ZomatoLookup?, swiggyName: String, swiggyPri
 private fun ZomatoShopBlock(lookup: ZomatoLookup?, swiggyNames: List<String>) {
     val shop = lookup?.shop ?: return
     if (shop.gap != null || shop.dishes.isEmpty()) return
-    val onlyOnZomato = shop.dishes.filter { dish -> swiggyNames.none { sameDish(it, dish.name) } }
+    val onlyOnZomato = shop.dishes.filter { dish -> swiggyNames.none { dishKey(it) == dishKey(dish.name) } }
     Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             SectionLabel("Same shop on Zomato · ${shop.dishes.size} dishes", color = ZomatoRed)

@@ -3,6 +3,8 @@ package com.nila.launcher
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -53,10 +55,16 @@ internal class ZomatoCompare(private val context: Context) {
 
     val connected: Boolean get() = ZomatoAuth.currentSession(context) != null
 
-    private suspend fun call(tool: String, args: JSONObject = JSONObject()): JSONObject? = withContext(Dispatchers.IO) {
-        val session = ZomatoAuth.currentSession(context) ?: return@withContext null
-        val c = client ?: McpClient(ENDPOINT, session.accessToken).also { client = it }
-        c.callTool(tool, args)
+    // At most three Zomato calls at once: the dish list looks up several shops in parallel.
+    private val calls = Semaphore(MAX_PARALLEL_CALLS)
+    private val clientLock = Mutex()
+    /** True when the last call failed (network, sign-in), as opposed to Zomato answering with nothing. */
+    @Volatile private var lastFailed = false
+
+    private suspend fun call(tool: String, args: JSONObject = JSONObject()): JSONObject? = calls.withPermit {
+        val session = ZomatoAuth.currentSession(context) ?: return@withPermit null.also { lastFailed = true }
+        val c = clientLock.withLock { client ?: McpClient(ENDPOINT, session.accessToken).also { client = it } }
+        withContext(Dispatchers.IO) { c.callTool(tool, args) }.also { lastFailed = it == null }
     }
 
     suspend fun quote(address: FoodAddress, restaurant: FoodRestaurant, cart: FoodCartView): ZomatoComparison {
@@ -104,6 +112,7 @@ internal class ZomatoCompare(private val context: Context) {
     private suspend fun addressIdFor(address: FoodAddress): String? = addressLock.withLock {
         addressIds[address.id]?.let { return it }
         val saved = call("get_saved_addresses_for_user")?.optJSONArray("addresses") ?: return null
+        lastFailed = false
         closestAddress(address, saved)?.pick("address_id")?.also { addressIds[address.id] = it }
     }
 
@@ -115,30 +124,34 @@ internal class ZomatoCompare(private val context: Context) {
         val key = "${address.id}|$restaurantName|$query"
         shops[key]?.let { return it }
         fun gap(reason: String) = ZomatoShop(restaurantName, emptyList(), reason)
-        val addressId = addressIdFor(address) ?: return gap("No Zomato address near ${address.label}")
-        val found = call("get_restaurants_for_keyword", JSONObject().put("address_id", addressId).put("keyword", restaurantName).put("page_size", SEARCH_SIZE))
-            ?.let { allObjects(it) }.orEmpty()
-            .firstOrNull { it.has("res_id") && sameRestaurant(restaurantName, it.pick("name").orEmpty()) }
-            ?: return gap("Not on Zomato near ${address.label}")
-        val resId = found.pick("res_id")?.toLongOrNull() ?: return gap("Not on Zomato near ${address.label}")
-        val listing = call("get_menu_items_listing", JSONObject().put("res_id", resId).put("address_id", addressId))
-            ?.let { allObjects(it) }.orEmpty().filter { it.has("item_name") && it.has("variant_id") }
+        // A failed call is "Zomato didn't answer", never "Not on Zomato", and is not cached: the next look tries again.
+        val unanswered = gap(NO_ANSWER)
+        val addressId = addressIdFor(address) ?: return if (lastFailed) unanswered else gap("No Zomato address near ${address.label}")
+        val results = call("get_restaurants_for_keyword", JSONObject().put("address_id", addressId).put("keyword", restaurantName).put("page_size", SEARCH_SIZE))
+            ?: return unanswered
+        val found = allObjects(results).firstOrNull { it.has("res_id") && sameRestaurant(restaurantName, it.pick("name").orEmpty()) }
+            ?: return gap("Not on Zomato near ${address.label}").also { shops[key] = it }
+        val resId = found.pick("res_id")?.toLongOrNull() ?: return gap("Not on Zomato near ${address.label}").also { shops[key] = it }
+        val listing = (call("get_menu_items_listing", JSONObject().put("res_id", resId).put("address_id", addressId)) ?: return unanswered)
+            .let { allObjects(it) }.filter { it.has("item_name") && it.has("variant_id") }
             .filter { mentionsDish(it.pick("item_name").orEmpty(), query) }
         val categories = listing.mapNotNull { it.optJSONArray("categories")?.optString(0) }.distinct()
-        if (categories.isEmpty()) return gap("No $query on its Zomato menu")
+        if (categories.isEmpty()) return gap("No $query on its Zomato menu").also { shops[key] = it }
         val wanted = listing.mapNotNull { it.pick("variant_id") }.toSet()
-        val dishes = call(
+        val menu = call(
             "get_restaurant_menu_by_categories",
             JSONObject().put("res_id", resId).put("address_id", addressId).put("categories", JSONArray(categories)),
-        )?.let { allObjects(it) }.orEmpty()
+        ) ?: return unanswered
+        val dishes = allObjects(menu)
             .filter { it.pick("variant_id") in wanted }
             .mapNotNull { item ->
                 val price = item.pick("discounted_price", "price")?.toDoubleOrNull()?.toInt() ?: return@mapNotNull null
                 ZomatoDish(item.pick("name", "item_name").orEmpty(), price)
             }
-            .distinctBy { it.name.lowercase() }
+            // Size variants share a name but not a price: keep each one.
+            .distinctBy { it.name.lowercase() to it.price }
             .sortedBy { it.price }
-        if (dishes.isEmpty()) return gap("Zomato didn't price its $query")
+        if (dishes.isEmpty()) return gap("Zomato didn't price its $query").also { shops[key] = it }
         return ZomatoShop(found.pick("name").orEmpty().ifBlank { restaurantName }, dishes).also { shops[key] = it }
     }
 
@@ -158,6 +171,7 @@ internal class ZomatoCompare(private val context: Context) {
     private companion object {
         const val ENDPOINT = "https://mcp-server.zomato.com/mcp"
         const val SEARCH_SIZE = 5
+        const val MAX_PARALLEL_CALLS = 3
     }
 }
 
@@ -210,5 +224,13 @@ internal fun priceGap(swiggy: Int, zomato: Int): String = when {
     else -> "Same price on Zomato"
 }
 
-/** The Zomato dish that is this Swiggy dish at the same shop, if Zomato lists it. */
-internal fun ZomatoShop.sameAs(swiggyName: String): ZomatoDish? = dishes.firstOrNull { sameDish(swiggyName, it.name) }
+/** "Chicken Biryani · Regular" and "chicken biryani" are the same name; "Biryani" is not. */
+internal fun dishKey(name: String) = name.substringBefore(" · ").lowercase().replace(Regex("""[^\p{L}\p{N} ]"""), " ").replace(Regex("""\s+"""), " ").trim()
+
+/**
+ * The Zomato dish that is exactly this Swiggy dish at the same shop. Only an exact name match carries a
+ * price verdict: "Biryani" against "Chicken Biryani" would claim a false "₹X cheaper".
+ */
+internal fun ZomatoShop.sameAs(swiggyName: String): ZomatoDish? = dishes.firstOrNull { dishKey(it.name) == dishKey(swiggyName) }
+
+internal const val NO_ANSWER = "Zomato didn't answer. Try again in a moment."
