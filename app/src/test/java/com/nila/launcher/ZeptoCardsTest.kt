@@ -128,4 +128,28 @@ class ZeptoCardsTest {
         assertEquals("No cart", cart.warning)
         assertNull(cart.cashMethod)
     }
+
+    @Test
+    fun amountDueIsPulledFromZeptosRawPreviewNotShown() {
+        // Real text seen on-device: raw product ids, markdown, and an instruction meant for an LLM agent.
+        val preview = """
+            🛒 **Order Preview**
+            1. 17ce1910-171f-4aac-8fcb-86d96d679487 (Qty: 1)
+            Payment Method: COD
+            **Bill Summary:**
+              Delivery Fee: ₹30
+            **Amount To Pay: ₹69**
+            ⚠️ **Confirmation Required**: call create_order again with confirmOrder: true.
+        """.trimIndent()
+        assertEquals("₹69", zeptoAmountDue(preview))
+        assertNull(zeptoAmountDue("Zepto: something went wrong"))
+    }
+
+    @Test
+    fun amountDueAcceptsRsAndInrAndTakesTheLastFigure() {
+        assertEquals("₹69", zeptoAmountDue("Amount To Pay: Rs 69"))
+        assertEquals("₹69", zeptoAmountDue("Amount To Pay: INR 69"))
+        // Zepto repeats the preview with an updated total on the confirmation step; the later one is real.
+        assertEquals("₹99", zeptoAmountDue("Amount To Pay: ₹69 ... Amount To Pay: ₹99"))
+    }
 }
