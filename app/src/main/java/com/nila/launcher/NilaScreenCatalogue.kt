@@ -1,13 +1,15 @@
 package com.nila.launcher
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,11 +20,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -40,6 +43,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -68,7 +72,6 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Food -> FoodScreen(onOpen, onBack)
         NilaScreen.PreparedOrder -> PreparedOrderScreen(onOpen, onBack)
         NilaScreen.ActionResult -> ActionResultScreen(onOpen)
-        NilaScreen.People -> PeopleScreen(onOpen, onBack)
         NilaScreen.Memory -> MemoryScreen(onOpen, onBack, facts, onForgetFact, onForgetAll)
         NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
@@ -174,19 +177,6 @@ private fun ActionResultScreen(onOpen: (NilaScreen) -> Unit) = Page("ACTION RESU
 }
 
 @Composable
-private fun PeopleScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("PEOPLE & MESSAGES", onOpen, onBack) {
-    ScreenTitle("Messages, grouped\nby person.")
-    BodyText("Demo content only. NILA has not read notifications, contacts or messages on this device.")
-    SectionCard("Arjun Menon", "“Are we still meeting at the studio?” · mock WhatsApp", "MOCK · 4 MIN")
-    SectionCard("Devananda", "Sent 3 launcher references · mock Messages", "MOCK · 21 MIN")
-    NilaCard {
-        SectionLabel("Draft · not sent", color = Lime)
-        BodyText("Running a little late. I’ll be at the studio by 6:30.", Paper)
-    }
-    SecondaryButton("Continue in NILA") { onOpen(NilaScreen.Home) }
-}
-
-@Composable
 private fun MemoryScreen(
     onOpen: (NilaScreen) -> Unit,
     onBack: () -> Unit,
@@ -244,6 +234,7 @@ internal data class ServiceAccount(
     val onDisconnect: () -> Unit,
     val saveKey: ((String) -> Boolean)? = null,
     val keyUrl: String? = null,
+    val icon: Int = LucideR.drawable.lucide_ic_globe,
 )
 
 @Composable
@@ -253,74 +244,125 @@ private fun SettingsScreen(
     onChooseDefaultHome: () -> Unit,
     accounts: List<ServiceAccount>,
 ) = Page("SETTINGS", onOpen, onBack) {
-    ScreenTitle("NILA is yours.")
-    BodyText("Language, voice, privacy and intelligence stay understandable.")
-    PrimaryButton("Choose default Home app") { onChooseDefaultHome() }
-    PrimaryButton("Voice languages · English · हिंदी · മലയാളം") { onOpen(NilaScreen.Languages) }
-    SectionLabel("Accounts", Modifier.padding(top = 8.dp))
-    BodyText("The services NILA can act on for you. Sign-ins and keys stay encrypted on this phone.")
-    accounts.forEach { AccountCard(it) }
-    SectionLabel("Voice, memory and consent", Modifier.padding(top = 8.dp))
-    SectionCard("Lakshmi voice", "Android on-device voice candidate", "NOT CONNECTED")
-    SectionCard("Memory", "Typed facts stay in app storage", "LOCAL")
-    SectionCard("Commit actions", "Pay, send, book, delete or share", "ALWAYS CONFIRM")
-    PrimaryButton("Permission centre") { onOpen(NilaScreen.Permissions) }
-    SectionLabel("More", Modifier.padding(top = 8.dp))
-    SecondaryButton("Welcome preview") { onOpen(NilaScreen.Welcome) }
-    SecondaryButton("Capabilities") { onOpen(NilaScreen.Capabilities) }
-    SecondaryButton("Memory") { onOpen(NilaScreen.Memory) }
-    SecondaryButton("People & messages") { onOpen(NilaScreen.People) }
-    SecondaryButton("Activity & approvals") { onOpen(NilaScreen.Activity) }
-}
+    ScreenTitle("Settings")
+    BodyText("${accounts.count { it.connected }} of ${accounts.size} services connected. Everything else stays on this phone.")
 
-@Composable
-private fun AccountCard(account: ServiceAccount) {
-    var key by remember(account.name) { mutableStateOf("") }
-    var keyError by remember(account.name) { mutableStateOf(false) }
-    val uriHandler = LocalUriHandler.current
-    NilaCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(account.name, color = Paper, fontWeight = FontWeight.Bold, fontSize = 17.sp, modifier = Modifier.weight(1f))
-            StatusPill(account.connected)
-        }
-        Text(account.detail, color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
-        when {
-            account.connected -> TextAction("Disconnect", onClick = account.onDisconnect, color = Muted)
-            account.saveKey != null -> {
-                OutlinedTextField(
-                    value = key,
-                    onValueChange = { key = it; keyError = false },
-                    placeholder = { Text("tvly-…", color = Muted) },
-                    singleLine = true,
-                    // The key is a password: hidden on screen, and never suggested or learned by the keyboard.
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
-                    isError = keyError,
-                    supportingText = if (keyError) ({ Text("That doesn't look like a Tavily key. It starts with tvly-.") }) else null,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                PrimaryAction("Save key", onClick = {
-                    if (account.saveKey.invoke(key)) key = "" else keyError = true
-                }, enabled = key.isNotBlank())
-                account.keyUrl?.let { url -> TextAction("Get a free key", onClick = { uriHandler.openUri(url) }) }
-            }
-            else -> PrimaryAction("Connect ${account.name}", onClick = account.onConnect)
-        }
+    SettingsGroup("General") {
+        SettingsRow(LucideR.drawable.lucide_ic_house, "Home screen", "Make NILA your phone's home", onClick = onChooseDefaultHome)
+        SettingsRow(LucideR.drawable.lucide_ic_languages, "Voice languages", "English · हिंदी · മലയാളം") { onOpen(NilaScreen.Languages) }
+        SettingsRow(LucideR.drawable.lucide_ic_lock, "Permissions", "Microphone, location, contacts") { onOpen(NilaScreen.Permissions) }
+    }
+
+    SettingsGroup("Accounts") {
+        accounts.forEach { AccountRow(it) }
+    }
+
+    SettingsGroup("Privacy and safety") {
+        SettingsRow(LucideR.drawable.lucide_ic_brain, "My NILA", "What NILA knows about you and your people, on this phone") { onOpen(NilaScreen.Memory) }
+        SettingsRow(LucideR.drawable.lucide_ic_volume_2, "Spoken replies", "Offline voices for Lakshmi") { onOpen(NilaScreen.Languages) }
+    }
+    // A fact about NILA, not a setting: nothing here to switch.
+    BodyText("NILA always asks before it pays, sends, books, deletes or shares anything.")
+
+    SettingsGroup("About") {
+        SettingsRow(LucideR.drawable.lucide_ic_sparkles, "What NILA can do", "Every action and the model behind it") { onOpen(NilaScreen.Capabilities) }
+        SettingsRow(LucideR.drawable.lucide_ic_info, "Welcome tour", "The first-run screens again") { onOpen(NilaScreen.Welcome) }
     }
 }
 
-/** "● CONNECTED" in lime, or a muted "NOT CONNECTED". */
+/** A titled block of rows on one card, like the phone's own settings. */
 @Composable
-private fun StatusPill(connected: Boolean) {
-    val color = if (connected) Lime else Muted
+private fun SettingsGroup(title: String, rows: @Composable ColumnScope.() -> Unit) {
+    SectionLabel(title, Modifier.padding(top = 12.dp, start = 4.dp))
+    Surface(color = CardInk, shape = RoundedCornerShape(CardRadius), modifier = Modifier.fillMaxWidth()) {
+        Column(content = rows)
+    }
+}
+
+/** One setting: an icon, what it is, a line about it, and either a value or a chevron when it opens something. */
+@Composable
+private fun SettingsRow(icon: Int, title: String, detail: String, value: String? = null, onClick: (() -> Unit)? = null) {
     Row(
-        Modifier.border(1.dp, color.copy(alpha = 0.4f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp),
+        Modifier.fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Box(Modifier.size(6.dp).background(color, CircleShape))
-        SectionLabel(if (connected) "Connected" else "Not connected", color = color)
+        RowIcon(icon)
+        Column(Modifier.weight(1f).padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+            Text(detail, color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+        }
+        value?.let { Text(it, color = Lime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
+        if (onClick != null) Icon(painterResource(LucideR.drawable.lucide_ic_chevron_right), contentDescription = null, tint = Muted, modifier = Modifier.size(18.dp))
+    }
+}
+
+@Composable
+private fun RowIcon(icon: Int, tint: Color = Lime) {
+    Box(Modifier.size(38.dp).background(Panel, CircleShape), contentAlignment = Alignment.Center) {
+        Icon(painterResource(icon), contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+    }
+}
+
+/**
+ * A service as one row: connected ones show a lime dot, the rest a Connect action. Tapping a connected row
+ * reveals Disconnect, so it is never one stray tap away; a key service opens its hidden key field in place.
+ */
+@Composable
+private fun AccountRow(account: ServiceAccount) {
+    var open by remember(account.name) { mutableStateOf(false) }
+    var key by remember(account.name) { mutableStateOf("") }
+    var keyError by remember(account.name) { mutableStateOf(false) }
+    val uriHandler = LocalUriHandler.current
+    Column {
+        Row(
+            Modifier.fillMaxWidth()
+                .clickable(onClickLabel = if (open) "Hide ${account.name} options" else "${account.name} options") {
+                    if (account.connected || account.saveKey != null) open = !open else account.onConnect()
+                }
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RowIcon(account.icon, tint = if (account.connected) Lime else Muted)
+            Column(Modifier.weight(1f).padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(account.name, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                Text(account.detail, color = Muted, fontSize = 13.sp, lineHeight = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            if (account.connected) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Box(Modifier.size(8.dp).background(Lime, CircleShape))
+                    Text("On", color = Lime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
+            } else {
+                Text("Connect", color = Lime, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        AnimatedVisibility(open) {
+            Column(Modifier.fillMaxWidth().padding(start = 68.dp, end = 16.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (account.connected) {
+                    TextAction("Disconnect ${account.name}", onClick = { open = false; account.onDisconnect() }, color = Orange)
+                } else if (account.saveKey != null) {
+                    OutlinedTextField(
+                        value = key,
+                        onValueChange = { key = it; keyError = false },
+                        placeholder = { Text("tvly-…", color = Muted) },
+                        singleLine = true,
+                        // The key is a password: hidden on screen, and never suggested or learned by the keyboard.
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
+                        isError = keyError,
+                        supportingText = if (keyError) ({ Text("That doesn't look like a Tavily key. It starts with tvly-.") }) else null,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    PrimaryAction("Save key", onClick = {
+                        if (account.saveKey.invoke(key)) { key = ""; open = false } else keyError = true
+                    }, enabled = key.isNotBlank())
+                    account.keyUrl?.let { url -> TextAction("Get a free key", onClick = { uriHandler.openUri(url) }) }
+                }
+            }
+        }
     }
 }
 
