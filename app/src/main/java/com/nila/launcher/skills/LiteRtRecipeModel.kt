@@ -9,7 +9,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /** Gemma behind RecipeModel. Greedy decoding, a token cap and a timeout: a runaway answer (#3510) becomes "". */
-class LiteRtRecipeModel(private val engine: Engine) : RecipeModel {
+class LiteRtRecipeModel(private val engine: Engine, private val timeoutMs: Long = TIMEOUT_MS) : RecipeModel {
     private val watchdog = Executors.newSingleThreadScheduledExecutor { Thread(it, "recipe-watchdog").apply { isDaemon = true } }
 
     override fun complete(system: String, user: String): String =
@@ -20,7 +20,7 @@ class LiteRtRecipeModel(private val engine: Engine) : RecipeModel {
                 maxOutputToken = MAX_OUTPUT_TOKENS,
             ),
         ).use { conversation ->
-            val timer = watchdog.schedule({ conversation.cancelProcess() }, TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            val timer = watchdog.schedule({ conversation.cancelProcess() }, timeoutMs, TimeUnit.MILLISECONDS)
             try {
                 runCatching { conversation.sendMessage(user) }.getOrNull()
                     ?.contents?.contents?.filterIsInstance<Content.Text>()?.joinToString("") { it.text }
