@@ -53,7 +53,6 @@ internal val CardPadding = 16.dp
 internal val PrimaryActionHeight = 52.dp
 internal val ActionRadius = 16.dp
 internal val TitleSize = 22.sp
-internal val HeadlineSize = 28.sp
 private val LabelSize = 10.sp
 private val LabelSpacing = 1.sp
 private val LiveDotSize = 6.dp

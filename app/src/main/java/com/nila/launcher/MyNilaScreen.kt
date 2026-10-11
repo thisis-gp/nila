@@ -84,7 +84,6 @@ internal enum class MyNilaTab(val label: String) { People("People"), Health("Hea
  */
 @Composable
 internal fun MyNilaScreen(
-    showLockBanner: Boolean,
     facts: List<MemoryFact>,
     onForgetFact: (String) -> Unit,
     onEditFact: (String, String) -> Unit,
@@ -195,13 +194,6 @@ internal fun MyNilaScreen(
         }
         SerifTitle("My NILA", size = 38.sp, modifier = Modifier.padding(top = 12.dp))
         Text("Stored only on this phone, encrypted", color = Muted, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(top = 4.dp))
-        if (showLockBanner) Text(
-            "Set a screen lock on your phone to protect My NILA",
-            color = Lime,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(top = 12.dp).clickable { MyNilaLock.openSecuritySettings(context) }.padding(vertical = 6.dp),
-        )
         SegmentedTabs(tab, Modifier.padding(top = 20.dp, bottom = 16.dp)) { tab = it; open = null }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             when {

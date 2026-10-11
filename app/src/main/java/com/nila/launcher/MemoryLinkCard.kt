@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -25,43 +26,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.composables.icons.lucide.R as LucideR
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private val AvatarSize = 28.dp
-private val ReplySize = 19.sp
-
-private val SheWords = setOf("wife", "sister", "mom", "mother", "amma", "daughter", "grandma", "aunt", "girlfriend", "akka", "didi", "paati")
-private val HeWords = setOf("husband", "brother", "dad", "father", "appa", "son", "grandpa", "uncle", "boyfriend", "anna", "bhaiya", "thatha")
-private val Verbs = setOf("loves", "likes", "enjoys", "prefers", "eats", "hates", "drinks", "avoids", "wants")
-
-/** "you", "she", "he", or "they" for a person NILA has no pronoun for. */
-internal fun pronounFor(about: String): String = when {
-    about == ME -> "you"
-    about.lowercase() in SheWords -> "she"
-    about.lowercase() in HeWords -> "he"
-    else -> "they"
-}
-
-/**
- * NILA's one-line reply when it saves a fact: "I'll remember she loves pani puri.", "I'll remember you're vegetarian."
- * The request above already names the person, so the reply doesn't repeat it.
- */
-internal fun rememberLine(about: String, fact: String): String {
-    val subject = pronounFor(about)
-    val line = factLine(fact)
-    val first = line.substringBefore(' ').lowercase()
-    val rest = line.substringAfter(' ', "")
-    val plural = subject == "you" || subject == "they"
-    val said = when {
-        first in Verbs -> "$subject ${if (plural) first.removeSuffix("s") else first} $rest"
-        else -> "$subject${if (plural) "'re" else "'s"} ${line.replaceFirstChar(Char::lowercase)}"
-    }
-    return "I'll remember ${said.trim()}."
-}
 
 /** The letter shown when a contact has no photo. */
 internal fun contactInitial(name: String): String = name.trim().firstOrNull()?.uppercase() ?: "?"
@@ -77,6 +50,14 @@ private fun rememberContactLinker(context: Context, onLink: (ContactChoice) -> U
         scope.launch { withContext(Dispatchers.IO) { resolvePickedContact(context, uri) }?.let(onLink) }
     }
     return ContactLinker(link = onLink, pick = { picker.launch(null) })
+}
+
+/** The avatar of a person who is not linked to a contact yet: their initial. */
+@Composable
+private fun InitialAvatar(label: String) {
+    Box(Modifier.size(AvatarSize).clip(CircleShape).background(Panel), contentAlignment = Alignment.Center) {
+        Text(contactInitial(label), color = Paper, fontSize = 15.sp)
+    }
 }
 
 /** A round avatar: the contact's photo when there is one, otherwise their initial. */
@@ -119,8 +100,8 @@ private fun Chip(label: String, onClick: () -> Unit, leading: @Composable (() ->
 }
 
 /**
- * Saving a fact is a short reply, not a form: one line from NILA, then the people it might be as chips,
- * "Pick contact", and Undo. A linked contact replaces the chips with their face and name.
+ * Saving a fact is a short reply and a card: "Remembered", the person and the fact, then the people it might be
+ * as chips, "Pick contact", and Undo. A linked contact replaces the chips with their face and name.
  */
 @Composable
 internal fun SavedMomentCard(moment: SavedMoment, context: Context) {
@@ -134,22 +115,28 @@ internal fun SavedMomentCard(moment: SavedMoment, context: Context) {
         scope.launch { memory.linkContact(about, choice) }
     }
 
-    androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (undone) {
-            Text("Okay, forgotten.", color = Muted, fontSize = ReplySize)
-            return@Column
-        }
-        Text(rememberLine(about, moment.saved.fact), color = Paper, fontSize = ReplySize, fontFamily = androidx.compose.ui.text.font.FontFamily.Serif)
-        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
-            val choice = linked
-            when {
-                choice != null -> Chip(choice.name, {}) { ContactAvatar(choice, context) }
-                moment.suggestions != null -> {
+    if (undone) return NilaLine("Okay, forgotten.")
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        NilaLine("Noted. I'll keep that.")
+        val choice = linked
+        ResultCard(
+            icon = LucideR.drawable.lucide_ic_user,
+            title = "Remembered",
+            actions = {
+                if (choice == null && moment.suggestions != null) {
                     moment.suggestions.forEach { s -> Chip(s.name, { linker.link(s) }) { ContactAvatar(s, context) } }
                     Chip("Pick contact", linker.pick)
                 }
+                TextAction("Undo", { undone = true; scope.launch { memory.forget(moment.saved.fact, about) } }, modifier = Modifier.padding(start = 6.dp), color = Muted)
+            },
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (choice != null) ContactAvatar(choice, context) else InitialAvatar(aboutLabel(about))
+                Column {
+                    Text(choice?.name ?: aboutLabel(about), color = Paper, fontSize = 17.sp, fontFamily = FontFamily.Serif)
+                    Text(factLine(moment.saved.fact), color = Muted, fontSize = 14.sp)
+                }
             }
-            TextAction("Undo", { undone = true; scope.launch { memory.forget(moment.saved.fact, about) } }, modifier = Modifier.padding(start = 6.dp), color = Muted)
         }
     }
 }
@@ -164,13 +151,13 @@ internal fun LinkContactCard(response: LinkContact, context: Context) {
         linked = choice
         scope.launch { memory.linkContact(response.about, choice) }
     }
-    androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         val choice = linked
         if (choice != null) {
             Chip(choice.name, {}) { ContactAvatar(choice, context) }
             return@Column
         }
-        Text("Who's ${aboutPhrase(response.about)} in your contacts?", color = Paper, fontSize = ReplySize, fontFamily = androidx.compose.ui.text.font.FontFamily.Serif)
+        Text("Who's ${aboutPhrase(response.about)} in your contacts?", color = Paper, fontSize = 19.sp, fontFamily = FontFamily.Serif)
         androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
             response.suggestions.forEach { s -> Chip(s.name, { linker.link(s) }) { ContactAvatar(s, context) } }
             Chip("Pick contact", linker.pick)
