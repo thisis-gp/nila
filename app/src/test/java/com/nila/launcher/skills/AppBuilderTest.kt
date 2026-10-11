@@ -11,9 +11,11 @@ class AppBuilderTest {
     /** Replies in order and records what NILA asked. */
     private class ScriptedModel(vararg replies: String) : RecipeModel {
         val requests = mutableListOf<String>()
+        val schemas = mutableListOf<String?>()
         private val queue = ArrayDeque(replies.toList())
-        override fun complete(system: String, user: String): String {
+        override fun complete(system: String, user: String, schema: String?): String {
             requests += user
+            schemas += schema
             return queue.removeFirst()
         }
     }
@@ -107,6 +109,14 @@ class AppBuilderTest {
         val prompt = AppBuilderPrompts.fillSystem(RecipeExamples.forTemplate("money"))
         assertTrue(prompt, "\"components\":[{\"id\":\"root\"" in prompt)
         assertTrue(prompt, "\"permissions\"" !in prompt && "\"recipe\"" !in prompt)
+    }
+
+    @Test
+    fun onlyTheScreenIsConstrainedToTheCatalogSchema() {
+        val model = ScriptedModel(waterPlan, waterScreen)
+        AppBuilder(model).build("count my water")
+        // The plan stays free text: its title has spaces, which LiteRT-LM #3510 can break under constraints on device.
+        assertEquals(listOf(null, RecipeSchema.FILL), model.schemas)
     }
 }
 

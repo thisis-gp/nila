@@ -26,9 +26,9 @@ fun main(args: Array<String>) {
         engine.initialize()
         val gemma = LiteRtRecipeModel(engine, timeoutMs = PC_TIMEOUT_MS)
         // Every raw answer is kept, so a failure can be traced to the model, the timeout or the pipeline.
-        val logged = RecipeModel { system, user ->
+        val logged = RecipeModel { system, user, schema ->
             val started = System.currentTimeMillis()
-            gemma.complete(system, user).also { reply ->
+            gemma.complete(system, user, schema).also { reply ->
                 val entry = buildJsonObject {
                     put("ms", System.currentTimeMillis() - started)
                     put("user", user.take(PREVIEW_CHARS))

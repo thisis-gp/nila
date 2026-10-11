@@ -8,9 +8,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
-/** Text in, text out. On the phone this is LiteRtRecipeModel; tests pass a scripted fake. */
+/** Text in, text out. A non-null [schema] constrains decoding to that JSON schema. On the phone this is LiteRtRecipeModel. */
 fun interface RecipeModel {
-    fun complete(system: String, user: String): String
+    fun complete(system: String, user: String, schema: String?): String
 }
 
 data class Plan(val template: String, val title: String, val providers: List<String>)
@@ -37,7 +37,7 @@ class AppBuilder(private val model: RecipeModel) {
         var request = AppBuilderPrompts.fillRequest(idea, skeleton)
         var errors = emptyList<RecipeError>()
         for (attempt in 1..MAX_ATTEMPTS) {
-            val raw = model.complete(system, request)
+            val raw = model.complete(system, request, RecipeSchema.FILL)
             val filled = RecipeRepair.extractJson(raw)
             errors = if (filled == null) listOf(NOT_JSON) else {
                 val recipe = RecipeRepair.repair(withScreen(skeleton, filled))
@@ -55,7 +55,7 @@ class AppBuilder(private val model: RecipeModel) {
     }
 
     private fun plan(idea: String): Plan? {
-        val json = RecipeRepair.extractJson(model.complete(AppBuilderPrompts.PLAN_SYSTEM, idea)) ?: return null
+        val json = RecipeRepair.extractJson(model.complete(AppBuilderPrompts.PLAN_SYSTEM, idea, null)) ?: return null
         val template = json.string("template")?.takeIf { it in RecipeCatalog.templates || it == RecipeCatalog.NO_TEMPLATE } ?: return null
         val title = json.string("title")?.trim()?.take(MAX_TITLE_CHARS)?.ifBlank { null } ?: DEFAULT_TITLE
         val providers = (json["providers"] as? JsonArray).orEmpty().mapNotNull { it.stringOrNull() }
