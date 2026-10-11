@@ -40,6 +40,10 @@ data class HealthRecord(
 /** Newest first, so last week's visit is at the top. */
 internal fun newestFirst(records: List<HealthRecord>) = records.sortedWith(compareByDescending<HealthRecord> { it.date }.thenByDescending { it.id })
 
+/** A write only has a result when it reached encrypted storage. */
+internal fun committedRecords(records: List<HealthRecord>, write: (List<HealthRecord>) -> Boolean): List<HealthRecord>? =
+    records.takeIf(write)
+
 private val HealthCue = Regex(
     """\b(went to|visited|been to|go to)\s+(the\s+|a\s+)?(hospital|doctor|clinic|dentist|lab)\b|""" +
         """\b(blood|sugar|thyroid|lab)\s+(test|report)\b|\b(medical|health|lab|scan|x-?ray|mri|ct)\s+(report|record|scan|result)s?\b|""" +
@@ -98,16 +102,18 @@ internal class HealthStore(context: Context) {
 
     fun records(): List<HealthRecord> = newestFirst(prefs.getString(RECORDS, null)?.let(::decode).orEmpty())
 
-    fun save(record: HealthRecord): List<HealthRecord> =
-        (records().filterNot { it.id == record.id } + record).also(::write).let(::newestFirst)
+    fun save(record: HealthRecord): List<HealthRecord>? = runCatching {
+        committedRecords(newestFirst(records().filterNot { it.id == record.id } + record), ::write)
+    }.getOrNull()
 
     /** Removes the record, then its attachments: files go only once the record no longer points to them. */
-    fun delete(id: String): List<HealthRecord> {
+    fun delete(id: String): List<HealthRecord>? = runCatching {
         val all = records()
         val left = all.filterNot { it.id == id }
-        if (write(left)) all.firstOrNull { it.id == id }?.files?.forEach { File(dir, it).delete() }
-        return left
-    }
+        val saved = committedRecords(left, ::write) ?: return@runCatching null
+        all.firstOrNull { it.id == id }?.files?.forEach { File(dir, it).delete() }
+        saved
+    }.getOrNull()
 
     /**
      * Run once at start, before any draft exists: removes camera captures and temporary PDFs left in cache

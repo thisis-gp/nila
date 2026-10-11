@@ -132,14 +132,30 @@ internal fun MyNilaScreen(
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             when {
                 tab == MyNilaTab.People -> PeopleTab(facts, onForgetFact, onForgetAll)
-                editing != null -> HealthForm(health, editing!!) { saved ->
-                    if (saved != null) scope.launch { records = withContext(Dispatchers.IO) { health.save(saved) } }
-                    editing = null
-                }
-                open != null -> HealthDetail(health, open!!) {
-                    scope.launch { records = withContext(Dispatchers.IO) { health.delete(it.id) } }
-                    open = null
-                }
+                editing != null -> HealthForm(
+                    health = health,
+                    draft = editing!!,
+                    onSave = { record, done ->
+                        scope.launch {
+                            val updated = withContext(Dispatchers.IO) { health.save(record) }
+                            if (updated != null) records = updated
+                            done(updated != null)
+                        }
+                    },
+                    onDone = { editing = null },
+                )
+                open != null -> HealthDetail(
+                    health = health,
+                    record = open!!,
+                    onDelete = { record, done ->
+                        scope.launch {
+                            val updated = withContext(Dispatchers.IO) { health.delete(record.id) }
+                            if (updated != null) records = updated
+                            done(updated != null)
+                        }
+                    },
+                    onDeleted = { open = null },
+                )
                 else -> HealthTab(records, onAdd = { editing = HealthPrompt(HealthKind.Visit, "", LocalDate.now()) }, onOpen = { open = it })
             }
         }
@@ -218,7 +234,7 @@ private fun HealthTab(records: List<HealthRecord>, onAdd: () -> Unit, onOpen: (H
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HealthForm(health: HealthStore, draft: HealthPrompt, onDone: (HealthRecord?) -> Unit) {
+private fun HealthForm(health: HealthStore, draft: HealthPrompt, onSave: (HealthRecord, (Boolean) -> Unit) -> Unit, onDone: () -> Unit) {
     val context = LocalContext.current
     var kind by remember { mutableStateOf(draft.kind) }
     var title by remember { mutableStateOf(draft.title) }
@@ -229,10 +245,11 @@ private fun HealthForm(health: HealthStore, draft: HealthPrompt, onDone: (Health
     var problem by remember { mutableStateOf<String?>(null) }
     var picking by remember { mutableStateOf(false) }
     var photo by remember { mutableStateOf<File?>(null) }
-    var saved by remember { mutableStateOf(false) }
+    var keepFiles by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     // Back, a tab change or a rotation ends the draft: its encrypted files go with it unless it was saved.
-    DisposableEffect(Unit) { onDispose { if (!saved) files.toList().forEach(health::discard) } }
+    DisposableEffect(Unit) { onDispose { if (!keepFiles) files.toList().forEach(health::discard) } }
 
     // Reading and encrypting a whole PDF or photo runs off the main thread.
     fun attach(uri: Uri, failed: String, after: () -> Unit = {}) = scope.launch {
@@ -294,10 +311,22 @@ private fun HealthForm(health: HealthStore, draft: HealthPrompt, onDone: (Health
     if (files.isNotEmpty()) Text("${files.size} attached, encrypted on this phone", color = Lime, fontSize = 13.sp)
     problem?.let { Text(it, color = Orange, fontSize = 13.sp) }
     PrimaryAction("Save to My NILA", onClick = {
-        saved = true
-        onDone(HealthRecord(UUID.randomUUID().toString(), kind, title.trim(), date, place.trim(), notes.trim(), files.toList()))
-    }, enabled = title.isNotBlank())
-    TextAction("Cancel", onClick = { onDone(null) }, color = Muted)
+        if (saving) return@PrimaryAction
+        saving = true
+        // Keep attachments while the disk write is in flight; start-up sweep removes them if the app dies first.
+        keepFiles = true
+        val record = HealthRecord(UUID.randomUUID().toString(), kind, title.trim(), date, place.trim(), notes.trim(), files.toList())
+        onSave(record) { success ->
+            if (success) {
+                onDone()
+            } else {
+                saving = false
+                keepFiles = false
+                problem = "Couldn't save this record. Check phone storage and try again."
+            }
+        }
+    }, enabled = title.isNotBlank() && !saving)
+    TextAction("Cancel", onClick = onDone, color = Muted)
 
     if (picking) {
         val state = rememberDatePickerState(initialSelectedDateMillis = date.atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli())
@@ -327,15 +356,34 @@ private fun Chip(label: String, on: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun HealthDetail(health: HealthStore, record: HealthRecord, onDelete: (HealthRecord) -> Unit) {
+private fun HealthDetail(
+    health: HealthStore,
+    record: HealthRecord,
+    onDelete: (HealthRecord, (Boolean) -> Unit) -> Unit,
+    onDeleted: () -> Unit,
+) {
     var armed by remember(record.id) { mutableStateOf(false) }
+    var deleting by remember(record.id) { mutableStateOf(false) }
+    var problem by remember(record.id) { mutableStateOf<String?>(null) }
     SectionLabel(record.kind.label, color = Lime)
     SerifTitle(record.title, size = 26.sp)
     Text(listOf(eventWhen(record.date, null).substringBefore(","), record.place).filter(String::isNotBlank).joinToString(" · "), color = Muted, fontSize = 14.sp)
     if (record.notes.isNotBlank()) NilaCard { Text(record.notes, color = Paper, fontSize = 15.sp, lineHeight = 21.sp) }
     record.files.forEach { name -> Attachment(health, name) }
-    TextAction(if (armed) "Tap again to delete this record and its files" else "Delete record", onClick = {
-        if (armed) onDelete(record) else armed = true
+    problem?.let { Text(it, color = Orange, fontSize = 13.sp) }
+    TextAction(if (deleting) "Deleting…" else if (armed) "Tap again to delete this record and its files" else "Delete record", onClick = {
+        if (deleting) return@TextAction
+        if (!armed) {
+            armed = true
+            return@TextAction
+        }
+        deleting = true
+        onDelete(record) { success ->
+            if (success) onDeleted() else {
+                deleting = false
+                problem = "Couldn't delete this record. Check phone storage and try again."
+            }
+        }
     }, color = Orange)
 }
 

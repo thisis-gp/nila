@@ -3,6 +3,7 @@ package com.nila.launcher
 import java.time.LocalDate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -44,5 +45,13 @@ class HealthRecordsTest {
         val old = HealthRecord("a", HealthKind.Visit, "Check-up", today.minusMonths(2))
         val new = HealthRecord("b", HealthKind.Report, "Blood test", today.minusWeeks(1))
         assertEquals(listOf("b", "a"), newestFirst(listOf(old, new)).map { it.id })
+    }
+
+    @Test
+    fun aFailedWriteHasNoSuccessfulResult() {
+        val record = HealthRecord("a", HealthKind.Report, "Blood test", today)
+        var attempted = false
+        assertNull(committedRecords(listOf(record)) { attempted = true; false })
+        assertTrue(attempted)
     }
 }
