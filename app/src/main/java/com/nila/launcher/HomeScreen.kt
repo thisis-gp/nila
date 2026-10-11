@@ -1,6 +1,5 @@
 package com.nila.launcher
 
-import android.app.AlarmManager
 import android.app.WallpaperManager
 import android.content.Context
 import android.content.Intent
@@ -59,14 +58,13 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.abs
 import kotlin.math.cos
@@ -86,9 +84,6 @@ private val VignetteMid = Color(0x38090C08)
 private val VignetteEdge = Color(0x9E060705)
 private val ClockInk = Color(0xFFF6F2E7)
 private val HomeInk = Color(0xFFF8F5EB)
-private val PillInk = Color(0xFFEEECE4)
-private val PillFill = Color(0x5C0F110D)
-private val PillStroke = Color.White.copy(alpha = 0.25f)
 private val DockFill = Color(0x7A0E100C)
 private val DockStroke = Color.White.copy(alpha = 0.2f)
 private val TileFill = Color(0xFFECE9DF)
@@ -163,7 +158,14 @@ internal fun HomeScreen(
             delay(MINUTE_MS - System.currentTimeMillis() % MINUTE_MS)
         }
     }
-    val nextAlarm = remember(context, resumeVersion, now) { nextAlarmLine(context) }
+    val glance by produceState(GlanceData(), resumeVersion) {
+        while (true) {
+            value = loadGlance(context, LocalDateTime.now())
+            delay(MINUTE_MS)
+        }
+    }
+    val clockStyle = if (DateFormat.is24HourFormat(context)) ClockStyle.Hours24 else ClockStyle.Hours12
+    val glanceLines = glanceLines(glance, LocalDateTime.of(LocalDate.now(), now), clockStyle)
     val suggestion = remember(facts, now) { homeSuggestion(facts, LocalDateTime.of(LocalDate.now(), now)) }
     val homePrefs = remember(context) { context.getSharedPreferences("nila_launcher", Context.MODE_PRIVATE) }
     var hiddenOn by remember { mutableStateOf(homePrefs.getString(SUGGESTION_HIDDEN_KEY, null)) }
@@ -239,8 +241,15 @@ internal fun HomeScreen(
                 Text(statusLine, color = ClockInk, fontSize = 12.sp, letterSpacing = 0.05.em)
                 if (statusOpensMyNila) Icon(painterResource(LucideR.drawable.lucide_ic_chevron_right), contentDescription = null, tint = ClockInk, modifier = Modifier.padding(start = 2.dp).size(14.dp))
             }
+            Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                glanceLines.forEach { line ->
+                    GlanceRow(line) {
+                        val intent = glanceIntent(line.target)
+                        if (intent == null) onOpenMyNila() else startOrTell(context, intent, "No app is available for that.")
+                    }
+                }
+            }
             Spacer(Modifier.weight(1f))
-            nextAlarm?.let { AmbientPill(it, Modifier.align(Alignment.End).padding(bottom = 18.dp)) }
             if (showSuggestion && suggestion != null) {
                 HomeSuggestion(
                     suggestion = suggestion,
@@ -299,23 +308,28 @@ private fun DrawScope.drawOliveWallpaper() {
 internal fun DrawScope.farthestCorner(point: Offset): Float =
     hypot(maxOf(point.x, size.width - point.x), maxOf(point.y, size.height - point.y))
 
-/** "Next alarm 6:30 am", with the weekday when it isn't today; null when Android reports no alarm. */
-private fun nextAlarmLine(context: Context): String? {
-    val alarm = context.getSystemService(AlarmManager::class.java)?.nextAlarmClock ?: return null
-    val at = Instant.ofEpochMilli(alarm.triggerTime).atZone(ZoneId.systemDefault())
-    val time = if (DateFormat.is24HourFormat(context)) "HH:mm" else "h:mm a"
-    val pattern = if (at.toLocalDate() == LocalDate.now()) time else "EEE $time"
-    return "Next alarm " + at.format(DateTimeFormatter.ofPattern(pattern))
-}
-
 private fun startOrTell(context: Context, intent: Intent, failure: String) {
     runCatching { context.startActivity(intent) }
         .onFailure { Toast.makeText(context, failure, Toast.LENGTH_SHORT).show() }
 }
 
-/**
- * NILA says one short line, shows why only when there is a real reason, and waits for a reply. "Not today" hides it until the next meal window.
- */
+@Composable
+private fun GlanceRow(line: GlanceLine, onClick: () -> Unit) {
+    val icon = when (line.icon) {
+        GlanceIcon.Calendar -> LucideR.drawable.lucide_ic_calendar
+        GlanceIcon.Reminder -> LucideR.drawable.lucide_ic_bell
+        GlanceIcon.Alarm -> LucideR.drawable.lucide_ic_alarm_clock
+        GlanceIcon.Steps -> LucideR.drawable.lucide_ic_footprints
+    }
+    Row(Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
+        Icon(painterResource(icon), contentDescription = null, tint = ClockInk, modifier = Modifier.size(GLANCE_ICON_DP.dp))
+        Text(line.text, color = ClockInk, fontSize = 12.sp, letterSpacing = 0.05.em, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 6.dp))
+    }
+}
+
+private const val GLANCE_ICON_DP = 13
+
+/** One compact row above the dock: the suggestion, an Order pill, and a small x that hides it until the next meal window. */
 @Composable
 private fun HomeSuggestion(suggestion: MemorySuggestion, onYes: () -> Unit, onNotToday: () -> Unit) {
     val photo = when (dishPhotoKey(suggestion.dish)) {
@@ -323,60 +337,33 @@ private fun HomeSuggestion(suggestion: MemorySuggestion, onYes: () -> Unit, onNo
         "salad" -> R.drawable.food_salad
         else -> null
     }
-    Column(Modifier.fillMaxWidth().padding(bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Row(Modifier.fillMaxWidth().padding(bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        photo?.let {
+            Image(painterResource(it), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.padding(end = 10.dp).size(SuggestionPhotoSize).clip(RoundedCornerShape(8.dp)))
+        }
+        Text(suggestion.label, color = ClockInk, fontFamily = FontFamily.Serif, fontSize = 17.sp, maxLines = 2, modifier = Modifier.weight(1f))
         Text(
-            suggestion.label,
-            color = ClockInk,
-            fontFamily = FontFamily.Serif,
-            fontSize = 32.sp,
-            lineHeight = 36.sp,
-            modifier = Modifier.padding(end = 40.dp),
+            "Order",
+            color = TileInk,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 10.dp).clip(RoundedCornerShape(50)).background(TileFill).clickable(onClick = onYes).padding(horizontal = 14.dp, vertical = 7.dp),
         )
-        if (suggestion.reason != null || photo != null) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                photo?.let {
-                    Image(painterResource(it), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(SuggestionPhotoSize).clip(RoundedCornerShape(12.dp)))
-                }
-                suggestion.reason?.let { Text(it, color = PillInk, fontSize = 13.sp, maxLines = 2, modifier = Modifier.weight(1f)) }
-            }
-        }
-        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            val shape = RoundedCornerShape(50)
-            Text(
-                "Yes, order it",
-                color = TileInk,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.clip(shape).background(TileFill).clickable(onClick = onYes).padding(horizontal = 20.dp, vertical = 12.dp),
-            )
-            Text(
-                "Not today",
-                color = HomeInk,
-                fontSize = 14.sp,
-                modifier = Modifier.clip(shape).background(PillFill).border(1.dp, PillStroke, shape).clickable(onClick = onNotToday).padding(horizontal = 20.dp, vertical = 12.dp),
-            )
-        }
+        Icon(
+            painterResource(LucideR.drawable.lucide_ic_x),
+            contentDescription = "Not today",
+            tint = ClockInk,
+            modifier = Modifier.clip(CircleShape).clickable(onClick = onNotToday).padding(8.dp).size(14.dp),
+        )
     }
 }
 
-private val SuggestionPhotoSize = 52.dp
+private val SuggestionPhotoSize = 32.dp
 
 private fun greetingFor(hour: Int) = when {
     hour < 12 -> "Good morning"
     hour < 17 -> "Good afternoon"
     else -> "Good evening"
-}
-
-@Composable
-private fun AmbientPill(text: String, modifier: Modifier = Modifier) {
-    Row(
-        Modifier.clip(RoundedCornerShape(16.dp)).then(modifier).background(PillFill).border(1.dp, PillStroke, RoundedCornerShape(16.dp))
-            .padding(horizontal = 12.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(6.dp).shadow(6.dp, CircleShape, ambientColor = Lime, spotColor = Lime).background(Lime, CircleShape))
-        Text(text, color = PillInk, fontSize = 11.sp, modifier = Modifier.padding(start = 7.dp))
-    }
 }
 
 @Composable
