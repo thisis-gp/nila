@@ -751,7 +751,6 @@ private fun NilaApp(resumeVersion: Int) {
                                 onVoiceRequest = { speakReply = true; submit(it) },
                                 onListenStart = lakshmi::stop,
                                 onClose = ::closeOverlay,
-                                // Only a Zepto session that has searched or added something has a cart worth opening.
                                 context = context,
                                 prepare = engine::prepare,
                                 confirm = { token ->
@@ -858,7 +857,7 @@ private fun AgentSpace(
     input: String,
     isThinking: Boolean,
     modelStatus: String,
-    transcribe: suspend (wav: ByteArray, languageName: String?) -> String?,
+    transcribe: suspend (wav: ByteArray) -> String?,
     onInput: (String) -> Unit,
     onSubmit: (String) -> Unit,
     onVoiceRequest: (String) -> Unit,

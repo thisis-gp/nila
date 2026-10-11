@@ -140,8 +140,8 @@ interface VoiceCapture {
  */
 @Composable
 fun rememberVoiceCapture(
-    /** [languageName] is null for Auto, so Gemma detects the language itself. */
-    transcribe: suspend (wav: ByteArray, languageName: String?) -> String?,
+    /** Gemma detects the language itself. */
+    transcribe: suspend (wav: ByteArray) -> String?,
     onFinal: (String) -> Unit,
     onMessage: (String) -> Unit,
     /** Called as recording starts, so NILA stops talking and the mic does not record Lakshmi. */
@@ -169,7 +169,7 @@ fun rememberVoiceCapture(
                 return@launch latestMessage("I didn't hear anything. Tap the mic and try again, or type instead.")
             }
             currentState = VoiceState.UNDERSTANDING
-            val text = runCatching { transcribe(clip, null) }.getOrNull()?.trim()
+            val text = runCatching { transcribe(clip) }.getOrNull()?.trim()
             if (session.get() != mine) return@launch
             currentState = VoiceState.IDLE
             if (text.isNullOrBlank()) latestMessage("I couldn't understand that. Try again, or type instead.") else latestFinal(text)

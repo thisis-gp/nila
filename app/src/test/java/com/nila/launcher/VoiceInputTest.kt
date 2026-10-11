@@ -54,14 +54,8 @@ class VoiceInputTest {
 
     @Test
     fun autoPromptLetsGemmaDetectAndKeepEachLanguagesScript() {
-        val prompt = transcriptionPrompt(null)
+        val prompt = TRANSCRIPTION_PROMPT
         assertTrue("English, Hindi or Malayalam" in prompt && "may mix" in prompt)
         assertTrue("Malayalam script" in prompt && "Devanagari" in prompt && "Output only the transcript" in prompt)
-    }
-
-    @Test
-    fun transcriptionPromptAsksForTheTranscriptInTheChosenLanguage() {
-        val prompt = transcriptionPrompt("മലയാളം · Malayalam")
-        assertTrue("Malayalam" in prompt && "own script" in prompt && "Output only the transcript" in prompt)
     }
 }
