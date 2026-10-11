@@ -79,13 +79,13 @@
         <receiver android:name=".ReminderReceiver" android:exported="false" />
         <!-- Not exported: these are protected system broadcasts, delivered to non-exported receivers too. -->
         <receiver android:name=".ReminderBootReceiver" android:exported="false">
-        <receiver android:name=".StepSampleReceiver" android:exported="false" />
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
             </intent-filter>
         </receiver>
+        <receiver android:name=".StepSampleReceiver" android:exported="false" />
     </application>
 </manifest>
 

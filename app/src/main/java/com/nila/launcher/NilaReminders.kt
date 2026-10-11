@@ -227,7 +227,7 @@ class ReminderReceiver : BroadcastReceiver() {
         // "Stop reminding" on the notification: reminders are only notifications, so this is where they end.
         if (intent.action == NilaReminders.ACTION_STOP) {
             reminders.remove(id)
-            context.getSystemService(NotificationManager::class.java)?.cancel(id.hashCode())
+            context.getSystemService(NotificationManager::class.java)?.cancel(id, 0)
             return
         }
         val reminder = reminders.find(id) ?: return
@@ -271,7 +271,7 @@ private val PartOfDayTime = mapOf(
     Regex("""\bnoon\b""") to LocalTime.NOON,
 )
 private val ReminderLead = Regex(
-    """^\s*(please\s+)?(can you\s+)?(help me\s+(to\s+)?)?((set|add|create|make|put)\s+(up\s+)?(a\s+|me\s+a\s+)?reminder|remind me)\s*(to|about|for|that|of)?\s*""",
+    """^\s*(please\s+)?(can you\s+)?(help me\s+(to\s+)?)?((set|add|create|make|put)\s+(up\s+)?(a\s+|me\s+a\s+)?reminder|remind me|reminder)\s*(to|about|for|that|of)?\s*""",
 )
 private val ReminderDay = Regex("""\b(today|tomorrow|tonight|(on\s+)?(next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b""")
 private const val DEFAULT_HOUR = 9
