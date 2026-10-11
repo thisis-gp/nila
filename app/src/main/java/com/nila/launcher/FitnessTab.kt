@@ -38,10 +38,10 @@ import java.time.LocalDate
 internal fun FitnessTab() {
     val context = LocalContext.current
     val store = remember { FitnessStore(context) }
-    var allowed by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED) }
+    var allowed by remember { mutableStateOf(hasStepPermission(context)) }
     var refresh by remember { mutableIntStateOf(0) }
     var entries by remember { mutableStateOf(store.entries()) }
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed = it }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed = hasStepPermission(context) }
     var state by remember { mutableStateOf(store.steps()) }
     var noSensor by remember { mutableStateOf(false) }
     LaunchedEffect(allowed, refresh) {

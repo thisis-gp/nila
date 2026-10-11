@@ -607,10 +607,8 @@ private fun NilaApp(resumeVersion: Int) {
                                 health = health,
                                 readReport = brain::readReport,
                                 // A report that asks for a follow-up becomes a My NILA reminder on that day.
-                                // No follow-up (any more): its reminder goes too.
-                                onSaved = { record -> followUpReminder(record)?.let(::addReminder) ?: reminders.remove("followup-${record.id}") },
+                                onSaved = { record -> followUpReminder(record)?.let(::addReminder) },
                                 onDeleted = { record -> reminders.remove("followup-${record.id}") },
-                                reminders = reminders,
                                 draft = MyNilaRequests.pending,
                                 onDraftUsed = { MyNilaRequests.pending = null },
                                 onBack = ::closeOverlay,
@@ -709,7 +707,7 @@ private fun MonthlyReminderCard(reminder: MonthlyReminder, context: Context, onR
         if (saved) return@ActionCard
         NilaReminders(context).add(monthlyReminderOf(reminder, java.time.LocalDateTime.now()))
         saved = true
-        onResult("Done. My NILA will remind you every month on ${dayLabel(reminder)}. See it in My NILA › Reminders.")
+        onResult("Done. My NILA will remind you every month on ${dayLabel(reminder)}. Stop it from the notification when it comes.")
         if (needsNotificationPermission(context)) ask.launch(android.Manifest.permission.POST_NOTIFICATIONS)
     }
 }

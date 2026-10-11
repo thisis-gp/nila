@@ -169,6 +169,7 @@ internal class NilaReminders(context: Context) {
         private const val SECURE_PREFS = "nila_reminders_secure"
         private const val LIST = "reminders"
         const val ACTION = "com.nila.launcher.REMINDER"
+        const val ACTION_STOP = "com.nila.launcher.REMINDER_STOP"
         const val EXTRA_ID = "id"
         const val CHANNEL = "my_nila"
     }
@@ -202,6 +203,17 @@ internal fun notifyReminder(context: Context, reminder: NilaReminder) {
         .setPublicVersion(onLockScreen)
         .setContentIntent(open)
         .setAutoCancel(true)
+        .addAction(
+            Notification.Action.Builder(
+                null,
+                if (reminder.monthlyDay != null) "Stop reminding" else "Done",
+                PendingIntent.getBroadcast(
+                    context, reminder.id.hashCode() + 1,
+                    Intent(context, ReminderReceiver::class.java).setAction(NilaReminders.ACTION_STOP).putExtra(NilaReminders.EXTRA_ID, reminder.id),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            ).build(),
+        )
         .build()
     runCatching { manager.notify(reminder.id, 0, notification) }
 }
@@ -210,6 +222,12 @@ class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val reminders = NilaReminders(context)
         val id = intent.getStringExtra(NilaReminders.EXTRA_ID) ?: return
+        // "Stop reminding" on the notification: reminders are only notifications, so this is where they end.
+        if (intent.action == NilaReminders.ACTION_STOP) {
+            reminders.remove(id)
+            context.getSystemService(NotificationManager::class.java)?.cancel(id.hashCode())
+            return
+        }
         val reminder = reminders.find(id) ?: return
         notifyReminder(context, reminder)
         reminders.fired(id)

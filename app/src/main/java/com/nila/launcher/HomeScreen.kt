@@ -143,7 +143,11 @@ internal fun HomeScreen(
     onSuggestion: (String) -> Unit,
 ) {
     val context = LocalContext.current
-    val wallpaper = remember(context, resumeVersion) { runCatching { WallpaperManager.getInstance(context).drawable }.getOrNull() }
+    // NILA's olive look by default; the phone's wallpaper only after the user picks one by long-pressing Home.
+    // (Reading it used to depend on photo access: granting that silently swapped the olive look out.)
+    val wallpaper = remember(context, resumeVersion) {
+        if (!usesPhoneWallpaper(context)) null else runCatching { WallpaperManager.getInstance(context).drawable }.getOrNull()
+    }
     // City only when location is already allowed; home never asks for it and never shows a guess.
     val city by produceState<String?>(null) { value = CurrentPlaces.locate(context)?.city?.takeIf(String::isNotBlank) }
     val now by produceState(LocalTime.now()) {

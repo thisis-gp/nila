@@ -18,6 +18,7 @@ enum class NilaScreen {
     Settings,
     Languages,
     MyNila,
+    PhoneAccess,
 }
 
 class NilaNavigation(start: NilaScreen) {
