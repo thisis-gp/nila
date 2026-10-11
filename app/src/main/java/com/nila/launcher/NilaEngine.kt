@@ -386,9 +386,10 @@ class NilaEngine(
     fun execute(
         intent: NilaIntent,
     ): NilaResponse = when (intent) {
-        // No assistant model yet, so conversation falls back to the capability list.
+        // Reached either with no assistant model loaded, or Gemma produced no usable reply this one time.
         is NilaIntent.Converse -> NilaResponse.Text(
-            "I can calculate, set an alarm, remember a preference, compare mock food options, or open YouTube, Netflix, Instagram and BGMI."
+            "I didn't catch that — try asking again. I can order food or groceries, search the web, set an alarm or timer, " +
+                "get directions, play music, remember a preference, or open an app."
         )
         is NilaIntent.Call -> when (val check = checkCall(intent.call, capabilities)) {
             is CallCheck.Rejected -> NilaResponse.Text("I can't do that. ${check.reason}.")
