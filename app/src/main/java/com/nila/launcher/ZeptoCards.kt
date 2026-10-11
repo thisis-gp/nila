@@ -107,6 +107,19 @@ internal fun cheapestLine(item: String, groups: List<ProductProviderGroup>): Str
 internal fun sameZeptoCart(a: List<CartItem>, b: List<CartItem>) =
     a.associate { it.productVariantId to it.quantity } == b.associate { it.productVariantId to it.quantity }
 
+private val amountDuePattern = Regex("""Amount To Pay:?\**\s*(?:₹|Rs\.?|INR)\s*([\d,]+(?:\.\d+)?)""", RegexOption.IGNORE_CASE)
+
+/**
+ * The real amount due, including delivery fee, out of Zepto's own free-form order-preview text — the only
+ * place that fee appears; the cart's own item total alone understates what's actually owed. The rest of that
+ * text is written for an LLM agent (raw product ids, markdown, "call create_order again..."), never for a
+ * person, so nothing else from it should ever reach the screen. The last match wins: Zepto's confirmation
+ * step repeats the preview with an updated total below the first one. Null if Zepto's wording changes —
+ * callers must treat that as a sign something is wrong with the order, not just a missing total.
+ */
+internal fun zeptoAmountDue(preview: String): String? =
+    amountDuePattern.findAll(preview).lastOrNull()?.groupValues?.get(1)?.let { "₹$it" }
+
 // An Indian pincode never starts with 0; the last one in a line is the pincode, not a flat or plot number.
 private val pincode = Regex("""\b[1-9]\d{5}\b""")
 private val addressNumber = Regex("""\b\d+[a-z]?\b""", RegexOption.IGNORE_CASE)
@@ -521,9 +534,13 @@ private fun TotalRow(label: String, value: String) {
 
 // ---- Step 4: review and the Commit gate --------------------------------------
 
-/** The Commit gate both apps share: a real order, two taps within five seconds, then it locks. */
+/**
+ * The Commit gate both apps share: a real order, two taps within five seconds, then it locks.
+ * [blocked] replaces the button with that message and refuses taps — used when NILA can't show
+ * the real amount due, so a real-money order is never confirmed blind.
+ */
 @Composable
-private fun CommitGate(key: Any, heading: String, lines: List<String>, address: String, warning: String, note: String?, onPlace: () -> Boolean) {
+private fun CommitGate(key: Any, heading: String, lines: List<String>, address: String, warning: String, note: String?, blocked: String? = null, onPlace: () -> Boolean) {
     // Keyed on the review: a fresh review after a change starts with a fresh gate.
     var gate by remember(key) { mutableStateOf(GateState()) }
     LaunchedEffect(gate.armed) {
@@ -541,43 +558,48 @@ private fun CommitGate(key: Any, heading: String, lines: List<String>, address: 
             lines.forEach { Text(it, color = Paper, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
             Text(address, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(4.dp))
-            Button(
-                onClick = { gate = gate.tap(onPlace) },
-                enabled = !placed,
-                colors = ButtonDefaults.buttonColors(containerColor = if (armed) Orange else Lime, contentColor = Ink),
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(16.dp),
-            ) {
-                Text(
-                    when {
-                        placed -> "Placing order…"
-                        armed -> "Tap again to place the order"
-                        else -> "Place order · pay on delivery"
-                    },
-                    fontWeight = FontWeight.Bold,
-                )
+            if (blocked != null) {
+                Text(blocked, color = Orange, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            } else {
+                Button(
+                    onClick = { gate = gate.tap(onPlace) },
+                    enabled = !placed,
+                    colors = ButtonDefaults.buttonColors(containerColor = if (armed) Orange else Lime, contentColor = Ink),
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(16.dp),
+                ) {
+                    Text(
+                        when {
+                            placed -> "Placing order…"
+                            armed -> "Tap again to place the order"
+                            else -> "Place order · pay on delivery"
+                        },
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                Text(warning, color = Muted, fontSize = 11.sp)
             }
-            Text(warning, color = Muted, fontSize = 11.sp)
         }
     }
 }
 
 @Composable
 private fun GroceryReviewCard(card: GroceryCard.Review, actions: GroceryActions) {
+    val amountDue = zeptoAmountDue(card.preview)
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         actions.lastCart()?.let { cart -> BackLink("Edit carts") { actions.back(cart) } }
         StepHeader(4, "Review your Zepto order", ZEPTO_SOURCE)
-        NilaCard {
-            SectionLabel("Zepto's bill")
-            Text(card.preview, color = Paper, fontSize = 13.sp, lineHeight = 19.sp)
-        }
         CommitGate(
             key = card,
             note = card.note,
             heading = "REAL ZEPTO ORDER · CASH ON DELIVERY",
-            lines = card.items.map { "${it.quantity} × ${it.name}" },
+            lines = card.items.map { "${it.quantity} × ${it.name}" } +
+                (amountDue?.let { "Total to pay: $it" } ?: "Total unavailable—review in Zepto before ordering"),
             address = "To ${card.address.label.ifBlank { "saved address" }} · ${card.address.addressLine}",
             warning = "This places a real Zepto order. You pay the rider in cash when it arrives.",
+            // Zepto's preview normally always has a total; its absence usually means the preview is
+            // carrying an unavailable-item or minimum-order warning instead, so block rather than guess.
+            blocked = if (amountDue == null) "Zepto says there's a problem with this order. Open the Zepto app to check, then come back." else null,
             onPlace = { actions.place(card) },
         )
     }
