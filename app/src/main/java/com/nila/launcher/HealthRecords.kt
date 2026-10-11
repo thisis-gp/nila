@@ -35,6 +35,10 @@ data class HealthRecord(
     val notes: String = "",
     val files: List<String> = emptyList(),
     val about: String = ME,
+    /** When the report asks to come back, for a My NILA reminder. */
+    val followUp: LocalDate? = null,
+    /** Read by the on-device model, not typed by the user: shown with a "check every value" banner. */
+    val unverified: Boolean = false,
 )
 
 /** Newest first, so last week's visit is at the top. */
@@ -100,7 +104,7 @@ internal class HealthStore(context: Context) {
     }
     private val dir get() = File(appContext.filesDir, DIR).apply { mkdirs() }
 
-    fun records(): List<HealthRecord> = newestFirst(prefs.getString(RECORDS, null)?.let(::decode).orEmpty())
+    fun records(): List<HealthRecord> = newestFirst(prefs.getString(RECORDS, null)?.let(::decodeRecords).orEmpty())
 
     fun save(record: HealthRecord): List<HealthRecord>? = runCatching {
         committedRecords(newestFirst(records().filterNot { it.id == record.id } + record), ::write)
@@ -153,35 +157,7 @@ internal class HealthStore(context: Context) {
     private fun encrypted(file: File) =
         EncryptedFile.Builder(appContext, file, masterKey, EncryptedFile.FileEncryptionScheme.AES256_GCM_HKDF_4KB).build()
 
-    private fun write(records: List<HealthRecord>): Boolean =
-        prefs.edit().putString(RECORDS, JSONArray().apply {
-            records.forEach { r ->
-                put(
-                    JSONObject().put("id", r.id).put("kind", r.kind.name).put("title", r.title).put("date", r.date.toString())
-                        .put("place", r.place).put("notes", r.notes).put("files", JSONArray(r.files)).put("about", r.about),
-                )
-            }
-        }.toString()).commit()
-
-    /** A malformed entry is skipped, never fatal. */
-    private fun decode(raw: String): List<HealthRecord> {
-        val list = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
-        return (0 until list.length()).mapNotNull { i ->
-            val o = list.optJSONObject(i) ?: return@mapNotNull null
-            runCatching {
-                HealthRecord(
-                    id = o.getString("id"),
-                    kind = HealthKind.entries.firstOrNull { it.name == o.optString("kind") } ?: HealthKind.Note,
-                    title = o.optString("title"),
-                    date = LocalDate.parse(o.getString("date")),
-                    place = o.optString("place"),
-                    notes = o.optString("notes"),
-                    files = o.optJSONArray("files")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty(),
-                    about = aboutKey(o.optString("about")),
-                )
-            }.getOrNull()
-        }
-    }
+    private fun write(records: List<HealthRecord>): Boolean = prefs.edit().putString(RECORDS, encodeRecords(records)).commit()
 
     companion object {
         private const val PREFS = "nila_health"
@@ -196,4 +172,128 @@ internal class HealthStore(context: Context) {
 
         fun isPdf(name: String) = name.endsWith(".pdf")
     }
+}
+
+/** One value from a report, as printed on it: "Haemoglobin 11.2 g/dL, low". */
+data class ReportFinding(val name: String, val value: String, val unit: String = "", val flag: String = "")
+
+/** What Gemma read from a report photo. Every field is what the paper says, or blank when it doesn't say. */
+data class ReportReading(
+    val kind: HealthKind,
+    val title: String,
+    val date: LocalDate?,
+    val place: String,
+    val findings: List<ReportFinding>,
+    val followUpDays: Int?,
+    val summary: String,
+)
+
+/**
+ * Gemma's answer as a [ReportReading]: the first JSON object in its reply. Null when there is none, so a
+ * reply NILA can't read becomes "NILA couldn't read this report", never invented details.
+ */
+internal fun parseReportReading(raw: String): ReportReading? {
+    val start = raw.indexOf('{')
+    val end = raw.lastIndexOf('}')
+    if (start < 0 || end <= start) return null
+    val o = runCatching { JSONObject(raw.substring(start, end + 1)) }.getOrNull() ?: return null
+    val findings = o.optJSONArray("findings")?.let { a ->
+        (0 until a.length()).mapNotNull { i ->
+            val f = a.optJSONObject(i) ?: return@mapNotNull null
+            val name = f.optString("name").trim()
+            val value = f.optString("value").trim()
+            if (name.isBlank() || value.isBlank()) null
+            else ReportFinding(name, value, f.optString("unit").trim(), f.optString("flag").trim().lowercase().takeIf { it in setOf("high", "low", "normal") }.orEmpty())
+        }
+    }.orEmpty()
+    return ReportReading(
+        kind = HealthKind.entries.firstOrNull { it.name.equals(o.optString("kind").trim(), ignoreCase = true) } ?: HealthKind.Report,
+        title = o.optString("title").trim(),
+        date = o.optString("date").trim().let { runCatching { LocalDate.parse(it) }.getOrNull() },
+        place = o.optString("place").trim(),
+        findings = findings,
+        followUpDays = o.optInt("follow_up_days", -1).takeIf { it in 1..MAX_FOLLOW_UP_DAYS },
+        summary = o.optString("summary").trim(),
+    )
+}
+
+private const val MAX_FOLLOW_UP_DAYS = 366
+
+/** Records as stored: a JSON list. */
+internal fun encodeRecords(records: List<HealthRecord>): String = JSONArray().apply {
+    records.forEach { r ->
+        put(
+            JSONObject().put("id", r.id).put("kind", r.kind.name).put("title", r.title).put("date", r.date.toString())
+                .put("place", r.place).put("notes", r.notes).put("files", JSONArray(r.files)).put("about", r.about)
+                .put("followUp", r.followUp?.toString() ?: "").put("unverified", r.unverified),
+        )
+    }
+}.toString()
+
+/** A malformed entry is skipped, never fatal. */
+internal fun decodeRecords(raw: String): List<HealthRecord> {
+    val list = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
+    return (0 until list.length()).mapNotNull { i ->
+        val o = list.optJSONObject(i) ?: return@mapNotNull null
+        runCatching {
+            HealthRecord(
+                id = o.getString("id"),
+                kind = HealthKind.entries.firstOrNull { it.name == o.optString("kind") } ?: HealthKind.Note,
+                title = o.optString("title"),
+                date = LocalDate.parse(o.getString("date")),
+                place = o.optString("place"),
+                notes = o.optString("notes"),
+                files = o.optJSONArray("files")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty(),
+                about = aboutKey(o.optString("about")),
+                followUp = o.optString("followUp").takeIf { it.isNotBlank() }?.let(LocalDate::parse),
+                unverified = o.optBoolean("unverified"),
+            )
+        }.getOrNull()
+    }
+}
+
+/** What came of reading a report: what it says, or why there is nothing. Never invented values. */
+sealed interface ReportRead {
+    data class Read(val reading: ReportReading) : ReportRead
+    /** The model answered, but NILA couldn't make out the report. */
+    data object Unreadable : ReportRead
+    /** The on-device model isn't installed or couldn't load. */
+    data object Unavailable : ReportRead
+}
+
+/**
+ * The record NILA saves from a reading: the report's own date if it printed one, else the day the user said.
+ * [pages] above 1 means only the first page of a PDF was read, and the notes say so.
+ */
+internal fun recordFrom(
+    reading: ReportReading?,
+    file: String,
+    fallbackDate: LocalDate,
+    id: String = UUID.randomUUID().toString(),
+    unavailable: Boolean = false,
+    pages: Int = 1,
+): HealthRecord {
+    if (reading == null) {
+        val why = if (unavailable) "NILA's on-device reader isn't available right now, so this report was saved without reading it."
+        else "NILA couldn't read this report."
+        return HealthRecord(id, HealthKind.Report, "Report", fallbackDate, notes = "$why Open the photo to see it.", files = listOf(file))
+    }
+    val date = reading.date ?: fallbackDate
+    val lines = reading.findings.joinToString("\n") { f ->
+        "• ${f.name}: ${f.value}${if (f.unit.isNotBlank()) " ${f.unit}" else ""}${if (f.flag.isNotBlank() && f.flag != "normal") " (${f.flag})" else ""}"
+    }
+    val pagesNote = if (pages > 1) "\n\nNILA read page 1 of $pages. The other pages are in the PDF." else ""
+    val notes = listOf(reading.summary, lines).filter(String::isNotBlank).joinToString("\n\n") + pagesNote +
+        "\n\nUnverified: read by NILA on this phone. Check every value against the report and with your doctor."
+    return HealthRecord(
+        id = id,
+        kind = reading.kind,
+        title = reading.title.ifBlank { reading.kind.label },
+        date = date,
+        place = reading.place,
+        notes = notes.trim(),
+        files = listOf(file),
+        followUp = reading.followUpDays?.let { date.plusDays(it.toLong()) },
+        unverified = true,
+    )
 }
