@@ -103,6 +103,7 @@ private const val VIGNETTE_CLEAR_STOP = 0.18f
 private const val VIGNETTE_MID_STOP = 0.44f
 /** Dims a photo wallpaper enough for the clock and dock to stay readable on it. */
 private const val WALLPAPER_SCRIM_ALPHA = 0.45f
+private const val SUGGESTION_HIDDEN_KEY = "suggestion_hidden_on"
 private const val GREETING_MS = 1_800L
 private const val MINUTE_MS = 60_000L
 private const val SWIPE_UP_DP = 64
@@ -158,6 +159,9 @@ internal fun HomeScreen(
     }
     val nextAlarm = remember(context, resumeVersion, now) { nextAlarmLine(context) }
     val suggestion = remember(facts, now) { morningSuggestion(facts, now) }
+    val homePrefs = remember(context) { context.getSharedPreferences("nila_launcher", Context.MODE_PRIVATE) }
+    var hiddenOn by remember { mutableStateOf(homePrefs.getString(SUGGESTION_HIDDEN_KEY, null)) }
+    val showSuggestion = suggestion != null && hiddenOn != LocalDate.now().toString()
     var greeting by rememberSaveable { mutableStateOf(true) }
     var resting by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -229,8 +233,18 @@ internal fun HomeScreen(
                 ) {
                     AmbientPill("My NILA", Modifier.clickable(onClick = onOpenMyNila))
                     nextAlarm?.let { AmbientPill(it) }
-                    suggestion?.let { AmbientPill(it.label, Modifier.clickable { onSuggestion(it.request) }) }
                 }
+            }
+            if (showSuggestion && suggestion != null) {
+                HomeSuggestion(
+                    suggestion = suggestion,
+                    reason = suggestionReason(facts),
+                    onYes = { onSuggestion(suggestion.request) },
+                    onNotToday = {
+                        hiddenOn = LocalDate.now().toString()
+                        homePrefs.edit().putString(SUGGESTION_HIDDEN_KEY, hiddenOn).apply()
+                    },
+                )
             }
             HomeDock(
                 mood = displayMood,
@@ -292,6 +306,46 @@ private fun nextAlarmLine(context: Context): String? {
 private fun startOrTell(context: Context, intent: Intent, failure: String) {
     runCatching { context.startActivity(intent) }
         .onFailure { Toast.makeText(context, failure, Toast.LENGTH_SHORT).show() }
+}
+
+/**
+ * NILA says one line, shows why in a small line under it only when there is a real reason, and waits for a
+ * reply. "Not today" hides it until tomorrow.
+ */
+@Composable
+private fun HomeSuggestion(suggestion: MemorySuggestion, reason: String?, onYes: () -> Unit, onNotToday: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            suggestion.label,
+            color = ClockInk,
+            fontFamily = FontFamily.Serif,
+            fontSize = 32.sp,
+            lineHeight = 36.sp,
+            modifier = Modifier.padding(end = 40.dp),
+        )
+        reason?.let {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(painterResource(LucideR.drawable.lucide_ic_history), contentDescription = null, tint = PillInk, modifier = Modifier.size(14.dp))
+                Text(it, color = PillInk, fontSize = 12.sp, maxLines = 2, modifier = Modifier.padding(start = 6.dp))
+            }
+        }
+        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            val shape = RoundedCornerShape(50)
+            Text(
+                "Yes, order it",
+                color = TileInk,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clip(shape).background(TileFill).clickable(onClick = onYes).padding(horizontal = 20.dp, vertical = 12.dp),
+            )
+            Text(
+                "Not today",
+                color = HomeInk,
+                fontSize = 14.sp,
+                modifier = Modifier.clip(shape).background(PillFill).border(1.dp, PillStroke, shape).clickable(onClick = onNotToday).padding(horizontal = 20.dp, vertical = 12.dp),
+            )
+        }
+    }
 }
 
 @Composable

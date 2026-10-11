@@ -10,7 +10,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,7 +23,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -66,7 +69,7 @@ internal object MyNilaRequests {
     var pending by mutableStateOf<HealthPrompt?>(null)
 }
 
-internal enum class MyNilaTab(val label: String) { People("People"), Health("Health"), Fitness("Fitness") }
+internal enum class MyNilaTab(val label: String) { People("People"), Health("Health records"), Fitness("Fitness") }
 
 /**
  * My NILA: its own space for everything NILA knows about the user and their people, and their health
@@ -77,6 +80,7 @@ internal enum class MyNilaTab(val label: String) { People("People"), Health("Hea
 internal fun MyNilaScreen(
     facts: List<MemoryFact>,
     onForgetFact: (String) -> Unit,
+    onEditFact: (String, String) -> Unit,
     onForgetAll: () -> Unit,
     health: HealthStore,
     readReport: suspend (ByteArray) -> ReportRead,
@@ -180,23 +184,10 @@ internal fun MyNilaScreen(
                 Text("About you and your people · encrypted on this phone", color = Muted, fontSize = 12.sp)
             }
         }
-        // Four tabs don't fit a phone row: it scrolls.
-        Row(Modifier.padding(vertical = 16.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MyNilaTab.entries.forEach { t ->
-                val on = t == tab
-                Text(
-                    t.label,
-                    color = if (on) Ink else Paper,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    modifier = Modifier.clip(RoundedCornerShape(50)).background(if (on) Lime else Panel)
-                        .clickable { tab = t; open = null }.padding(horizontal = 18.dp, vertical = 9.dp),
-                )
-            }
-        }
+        SegmentedTabs(tab, Modifier.padding(vertical = 16.dp)) { tab = it; open = null }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             when {
-                tab == MyNilaTab.People -> PeopleTab(facts, onForgetFact, onForgetAll)
+                tab == MyNilaTab.People -> PeopleTab(facts, onForgetFact, onEditFact, onForgetAll)
                 open != null -> HealthDetail(
                     health = health,
                     record = open!!,
@@ -225,8 +216,32 @@ internal fun MyNilaScreen(
 
 // ---- People ------------------------------------------------------------------
 
+private val SelectedSegment = Lime.copy(alpha = 0.16f)
+private val AvatarSize = 40.dp
+private val IconTouch = 44.dp
+
+/** The People | Health records | Fitness switch: one rounded track, the chosen segment lifted and ticked. */
 @Composable
-private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit, onForgetAll: () -> Unit) {
+private fun SegmentedTabs(selected: MyNilaTab, modifier: Modifier = Modifier, onSelect: (MyNilaTab) -> Unit) {
+    Row(modifier.fillMaxWidth().clip(RoundedCornerShape(50)).background(Panel).padding(4.dp)) {
+        MyNilaTab.entries.forEach { t ->
+            val on = t == selected
+            Row(
+                Modifier.weight(1f).clip(RoundedCornerShape(50)).background(if (on) SelectedSegment else Color.Transparent)
+                    .clickable { onSelect(t) }.padding(vertical = 10.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (on) Icon(painterResource(LucideR.drawable.lucide_ic_check), null, tint = Lime, modifier = Modifier.size(14.dp))
+                Text(t.label, color = if (on) Lime else Muted, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(start = if (on) 5.dp else 0.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit, onEditFact: (String, String) -> Unit, onForgetAll: () -> Unit) {
+    var editing by remember { mutableStateOf<MemoryFact?>(null) }
     if (facts.isEmpty()) {
         NilaCard {
             Text("Nothing yet", color = Paper, fontWeight = FontWeight.Bold)
@@ -234,23 +249,64 @@ private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit, o
         }
         return
     }
-    factsByPerson(facts).forEach { (about, known) ->
-        Surface(color = CardInk, shape = RoundedCornerShape(CardRadius), modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(36.dp).background(Panel, CircleShape), contentAlignment = Alignment.Center) {
-                        Text(aboutLabel(about).take(1), color = Lime, fontWeight = FontWeight.Bold)
-                    }
-                    Text(aboutLabel(about), color = Paper, fontWeight = FontWeight.Bold, fontSize = 17.sp, modifier = Modifier.padding(start = 12.dp))
+    val people = factsByPerson(facts)
+    people.forEach { (about, known) ->
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            val isMe = about == ME
+            Box(Modifier.size(AvatarSize).background(if (isMe) Lime else CardInk, CircleShape), contentAlignment = Alignment.Center) {
+                Text(aboutLabel(about).take(1), color = if (isMe) Ink else Paper, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            }
+            Column(Modifier.padding(start = 12.dp)) {
+                Text(aboutLabel(about), color = Paper, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Text(if (known.size == 1) "1 thing NILA knows" else "${known.size} things NILA knows", color = Muted, fontSize = 12.sp)
+            }
+        }
+        known.forEach { fact ->
+            Row(Modifier.padding(start = AvatarSize + 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
+                    Text(fact.text, color = Paper, fontSize = 15.sp, lineHeight = 20.sp)
+                    Text(fact.kind.label, color = Muted, fontSize = 12.sp)
                 }
-                known.forEach { fact ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(fact.text, color = Paper, fontSize = 15.sp)
-                            Text(fact.kind.label, color = Muted, fontSize = 12.sp)
-                        }
-                        TextAction("Forget", onClick = { onForgetFact(fact.id) }, color = Muted)
-                    }
+                FactIcon(LucideR.drawable.lucide_ic_pencil, "Edit: ${fact.text}") { editing = fact }
+                FactIcon(LucideR.drawable.lucide_ic_x, "Forget: ${fact.text}") { onForgetFact(fact.id) }
+            }
+        }
+    }
+    ForgetEverything(factCount = facts.size, peopleCount = people.size, onForgetAll = onForgetAll)
+    editing?.let { fact ->
+        EditFactDialog(fact, onDismiss = { editing = null }) { text -> onEditFact(fact.id, text); editing = null }
+    }
+}
+
+@Composable
+private fun FactIcon(icon: Int, description: String, onClick: () -> Unit) {
+    Box(Modifier.size(IconTouch).clip(CircleShape).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Icon(painterResource(icon), contentDescription = description, tint = Muted, modifier = Modifier.size(18.dp))
+    }
+}
+
+/** One row that asks first: the tap opens a plain question, and only its red link clears everything. */
+@Composable
+private fun ForgetEverything(factCount: Int, peopleCount: Int, onForgetAll: () -> Unit) {
+    var asking by remember { mutableStateOf(false) }
+    Column(Modifier.padding(top = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { asking = !asking }.padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(painterResource(LucideR.drawable.lucide_ic_trash), null, tint = Orange, modifier = Modifier.size(20.dp))
+            Column(Modifier.padding(start = 16.dp)) {
+                Text("Forget everything", color = Orange, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                Text("Clears all people and facts from this phone", color = Muted, fontSize = 12.sp)
+            }
+        }
+        if (asking) {
+            NilaCard(color = CommitInk) {
+                Text("Forget $factCount ${if (factCount == 1) "fact" else "facts"} about $peopleCount ${if (peopleCount == 1) "person" else "people"}?", color = Paper, fontWeight = FontWeight.Bold)
+                Text("NILA won't remember any of it. This can't be undone.", color = Muted, fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TextAction("Keep it", onClick = { asking = false }, color = Paper)
+                    TextAction("Forget everything", onClick = { asking = false; onForgetAll() }, color = Orange)
                 }
             }
         }
@@ -259,6 +315,26 @@ private fun PeopleTab(facts: List<MemoryFact>, onForgetFact: (String) -> Unit, o
     TextAction(if (armed) "Tap again to forget everything about you and your people" else "Forget everything", onClick = {
         if (armed) onForgetAll() else armed = true
     }, color = Orange)
+}
+
+@Composable
+private fun EditFactDialog(fact: MemoryFact, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var text by remember(fact.id) { mutableStateOf(fact.text) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = CardInk,
+        title = { SerifTitle("Change this", size = 22.sp) },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Paper, unfocusedTextColor = Paper, focusedBorderColor = Lime, cursorColor = Lime),
+            )
+        },
+        confirmButton = { TextAction("Save", onClick = { if (text.isNotBlank()) onSave(text.trim()) }) },
+        dismissButton = { TextAction("Cancel", onClick = onDismiss, color = Muted) },
+    )
 }
 
 // ---- Health ------------------------------------------------------------------

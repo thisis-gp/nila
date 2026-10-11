@@ -57,7 +57,11 @@ internal fun NilaScreenCatalogue(
     screen: NilaScreen,
     onOpen: (NilaScreen) -> Unit,
     onBack: () -> Unit,
+    facts: List<MemoryFact>,
     onChooseDefaultHome: () -> Unit,
+    onForgetFact: (String) -> Unit,
+    onForgetAll: () -> Unit,
+    onWelcomeTour: () -> Unit,
     accounts: List<ServiceAccount>,
 ) {
     when (screen) {
@@ -70,9 +74,10 @@ internal fun NilaScreenCatalogue(
         NilaScreen.PreparedOrder -> PreparedOrderScreen(onOpen, onBack)
         NilaScreen.ActionResult -> ActionResultScreen(onOpen)
         NilaScreen.People -> PeopleScreen(onOpen, onBack)
+        NilaScreen.Memory -> MemoryScreen(onOpen, onBack, facts, onForgetFact, onForgetAll)
         NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
-        NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, accounts)
+        NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, onWelcomeTour, facts, accounts)
         NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
         NilaScreen.PhoneAccess -> Page("PHONE ACCESS", onOpen, onBack) { PhoneAccessTab() }
         NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps, NilaScreen.MyNila -> Unit
@@ -188,6 +193,34 @@ private fun PeopleScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Pag
 }
 
 @Composable
+private fun MemoryScreen(
+    onOpen: (NilaScreen) -> Unit,
+    onBack: () -> Unit,
+    facts: List<MemoryFact>,
+    onForgetFact: (String) -> Unit,
+    onForgetAll: () -> Unit,
+) = Page("MY NILA · ON THIS PHONE", onOpen, onBack) {
+    ScreenTitle("My NILA")
+    BodyText("What NILA remembers from your chats. It stays on this phone, and you can forget any of it here.")
+    if (facts.isEmpty()) {
+        SectionCard("Nothing yet", "Just chat: \"my wife loves butter chicken\" or \"I'm vegetarian on Tuesdays\".", "EMPTY")
+    } else {
+        factsByPerson(facts).forEach { (about, known) ->
+            SectionLabel(aboutLabel(about), Modifier.padding(top = 8.dp))
+            known.forEach { fact ->
+                NilaCard {
+                    SectionLabel(fact.kind.label.uppercase(), color = Lime)
+                    Text(fact.text, color = Paper, fontWeight = FontWeight.Bold)
+                    TextAction("Forget", onClick = { onForgetFact(fact.id) })
+                }
+            }
+        }
+        SecondaryButton("Forget everything") { onForgetAll() }
+    }
+    SecondaryButton("Back to chat") { onOpen(NilaScreen.Home) }
+}
+
+@Composable
 private fun CapabilitiesScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("CAPABILITIES", onOpen, onBack) {
     ScreenTitle("What NILA\ncan use.")
     BodyText("Only Android actions marked available work in this build. Integrations marked mock are not live.")
@@ -212,7 +245,7 @@ private fun ActivityScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = P
  * A service NILA can act on, shown in Settings. Sign-in services use [onConnect]; key services (web search)
  * take the key in a hidden field through [saveKey], which returns false for something that is not a key.
  */
-internal data class ServiceAccount(
+private data class LegacyServiceAccount(
     val name: String,
     val detail: String,
     val connected: Boolean,
@@ -224,42 +257,42 @@ internal data class ServiceAccount(
 )
 
 @Composable
-private fun SettingsScreen(
+private fun LegacySettingsScreen(
     onOpen: (NilaScreen) -> Unit,
     onBack: () -> Unit,
     onChooseDefaultHome: () -> Unit,
-    accounts: List<ServiceAccount>,
+    accounts: List<LegacyServiceAccount>,
 ) = Page("SETTINGS", onOpen, onBack) {
     ScreenTitle("Settings")
     BodyText("${accounts.count { it.connected }} of ${accounts.size} services connected. Everything else stays on this phone.")
 
-    SettingsGroup("General") {
-        SettingsRow(LucideR.drawable.lucide_ic_house, "Home screen", "Make NILA your phone's home", onClick = onChooseDefaultHome)
-        SettingsRow(LucideR.drawable.lucide_ic_languages, "Voice languages", "English · हिंदी · മലയാളം") { onOpen(NilaScreen.Languages) }
-        SettingsRow(LucideR.drawable.lucide_ic_lock, "Permissions", "Microphone, location, contacts") { onOpen(NilaScreen.Permissions) }
-        SettingsRow(LucideR.drawable.lucide_ic_lock, "Phone access", "Photos, steps, contacts and more") { onOpen(NilaScreen.PhoneAccess) }
+    LegacySettingsGroup("General") {
+        LegacySettingsRow(LucideR.drawable.lucide_ic_house, "Home screen", "Make NILA your phone's home", onClick = onChooseDefaultHome)
+        LegacySettingsRow(LucideR.drawable.lucide_ic_languages, "Voice languages", "English · हिंदी · മലയാളം") { onOpen(NilaScreen.Languages) }
+        LegacySettingsRow(LucideR.drawable.lucide_ic_lock, "Permissions", "Microphone, location, contacts") { onOpen(NilaScreen.Permissions) }
+        LegacySettingsRow(LucideR.drawable.lucide_ic_lock, "Phone access", "Photos, steps, contacts and more") { onOpen(NilaScreen.PhoneAccess) }
     }
 
-    SettingsGroup("Accounts") {
-        accounts.forEach { AccountRow(it) }
+    LegacySettingsGroup("Accounts") {
+        accounts.forEach { LegacyAccountRow(it) }
     }
 
-    SettingsGroup("Privacy and safety") {
-        SettingsRow(LucideR.drawable.lucide_ic_brain, "My NILA", "What NILA knows about you and your people, on this phone") { onOpen(NilaScreen.MyNila) }
-        SettingsRow(LucideR.drawable.lucide_ic_volume_2, "Spoken replies", "Offline voices for Lakshmi") { onOpen(NilaScreen.Languages) }
+    LegacySettingsGroup("Privacy and safety") {
+        LegacySettingsRow(LucideR.drawable.lucide_ic_brain, "My NILA", "What NILA knows about you and your people, on this phone") { onOpen(NilaScreen.MyNila) }
+        LegacySettingsRow(LucideR.drawable.lucide_ic_volume_2, "Spoken replies", "Offline voices for Lakshmi") { onOpen(NilaScreen.Languages) }
     }
     // A fact about NILA, not a setting: nothing here to switch.
     BodyText("NILA always asks before it pays, sends, books, deletes or shares anything.")
 
-    SettingsGroup("About") {
-        SettingsRow(LucideR.drawable.lucide_ic_sparkles, "What NILA can do", "Every action and the model behind it") { onOpen(NilaScreen.Capabilities) }
-        SettingsRow(LucideR.drawable.lucide_ic_info, "Welcome tour", "The first-run screens again") { onOpen(NilaScreen.Welcome) }
+    LegacySettingsGroup("About") {
+        LegacySettingsRow(LucideR.drawable.lucide_ic_sparkles, "What NILA can do", "Every action and the model behind it") { onOpen(NilaScreen.Capabilities) }
+        LegacySettingsRow(LucideR.drawable.lucide_ic_info, "Welcome tour", "The first-run screens again") { onOpen(NilaScreen.Welcome) }
     }
 }
 
 /** A titled block of rows on one card, like the phone's own settings. */
 @Composable
-private fun SettingsGroup(title: String, rows: @Composable ColumnScope.() -> Unit) {
+private fun LegacySettingsGroup(title: String, rows: @Composable ColumnScope.() -> Unit) {
     SectionLabel(title, Modifier.padding(top = 12.dp, start = 4.dp))
     Surface(color = CardInk, shape = RoundedCornerShape(CardRadius), modifier = Modifier.fillMaxWidth()) {
         Column(content = rows)
@@ -268,14 +301,14 @@ private fun SettingsGroup(title: String, rows: @Composable ColumnScope.() -> Uni
 
 /** One setting: an icon, what it is, a line about it, and either a value or a chevron when it opens something. */
 @Composable
-private fun SettingsRow(icon: Int, title: String, detail: String, value: String? = null, onClick: (() -> Unit)? = null) {
+private fun LegacySettingsRow(icon: Int, title: String, detail: String, value: String? = null, onClick: (() -> Unit)? = null) {
     Row(
         Modifier.fillMaxWidth()
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RowIcon(icon)
+        LegacyRowIcon(icon)
         Column(Modifier.weight(1f).padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
             Text(detail, color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
@@ -286,7 +319,7 @@ private fun SettingsRow(icon: Int, title: String, detail: String, value: String?
 }
 
 @Composable
-private fun RowIcon(icon: Int, tint: Color = Lime) {
+private fun LegacyRowIcon(icon: Int, tint: Color = Lime) {
     Box(Modifier.size(38.dp).background(Panel, CircleShape), contentAlignment = Alignment.Center) {
         Icon(painterResource(icon), contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
     }
@@ -297,7 +330,7 @@ private fun RowIcon(icon: Int, tint: Color = Lime) {
  * reveals Disconnect, so it is never one stray tap away; a key service opens its hidden key field in place.
  */
 @Composable
-private fun AccountRow(account: ServiceAccount) {
+private fun LegacyAccountRow(account: LegacyServiceAccount) {
     var open by remember(account.name) { mutableStateOf(false) }
     var key by remember(account.name) { mutableStateOf("") }
     var keyError by remember(account.name) { mutableStateOf(false) }
@@ -311,7 +344,7 @@ private fun AccountRow(account: ServiceAccount) {
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            RowIcon(account.icon, tint = if (account.connected) Lime else Muted)
+            LegacyRowIcon(account.icon, tint = if (account.connected) Lime else Muted)
             Column(Modifier.weight(1f).padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(account.name, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                 Text(account.detail, color = Muted, fontSize = 13.sp, lineHeight = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)

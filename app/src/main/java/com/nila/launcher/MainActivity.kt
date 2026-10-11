@@ -176,6 +176,7 @@ private fun NilaApp(resumeVersion: Int) {
     LaunchedEffect(installedApps) {
         launcherPreferences.edit().putStringSet("home_pins", pinnedPackages.toSet()).apply()
     }
+    var showWelcome by remember { mutableStateOf(!launcherPreferences.getBoolean(ONBOARDED_KEY, false)) }
     val navigation = remember { NilaNavigation(NilaScreen.Home) }
     var screen by remember { mutableStateOf(navigation.current) }
     var overlayScreen by remember { mutableStateOf(screen) }
@@ -610,6 +611,10 @@ private fun NilaApp(resumeVersion: Int) {
                             NilaScreen.MyNila -> MyNilaScreen(
                                 facts = facts,
                                 onForgetFact = { id -> scope.launch { memory.delete(id) } },
+                                onEditFact = { id, text ->
+                                    val old = facts.firstOrNull { it.id == id }
+                                    if (old != null) scope.launch { memory.delete(id); memory.save(text, old.kind, old.about) }
+                                },
                                 onForgetAll = { scope.launch { memory.clear() } },
                                 health = health,
                                 readReport = brain::readReport,
@@ -627,6 +632,8 @@ private fun NilaApp(resumeVersion: Int) {
                                 onChooseDefaultHome = ::chooseDefaultHome,
                                 onForgetFact = { id -> scope.launch { memory.delete(id) } },
                                 onForgetAll = { scope.launch { memory.clear() } },
+                                onWelcomeTour = { showWelcome = true },
+                                facts = facts,
                                 accounts = accountsRevision.let { listOf(
                                     ServiceAccount(
                                         name = "Swiggy",
@@ -684,6 +691,20 @@ private fun NilaApp(resumeVersion: Int) {
                             )
                         }
                     }
+                }
+                if (showWelcome) {
+                    // First launch, or "Welcome tour" in Settings. The flag is set when it ends, so a tour cut short shows again.
+                    OnboardingScreen(
+                        onSaveFact = { text, kind, about -> facts = memory.save(text, kind, about) },
+                        onFinish = { request ->
+                            launcherPreferences.edit().putBoolean(ONBOARDED_KEY, true).apply()
+                            showWelcome = false
+                            if (request != null) {
+                                openAgent()
+                                submit(request)
+                            } else open(NilaScreen.Home)
+                        },
+                    )
                 }
             }
         }
