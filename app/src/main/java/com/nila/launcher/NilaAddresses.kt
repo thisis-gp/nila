@@ -228,7 +228,8 @@ internal fun sameAddress(a: NilaAddress, b: NilaAddress): Boolean {
     if (a.pin == null || b.pin == null) return sharedWords(a, b).size >= WORDS_WITHOUT_PINCODE
     if (a.pin != b.pin) return false
     distanceMetres(a, b)?.let { return it <= SAME_PLACE_METRES }
-    return sharedWords(a, b).isNotEmpty()
+    val shared = sharedWords(a, b)
+    return shared.size >= WORDS_WITHOUT_PINCODE || samePlaceWords(a, b, shared) || sameStreetWords(a, b, shared)
 }
 
 /**
@@ -296,6 +297,23 @@ private const val EARTH_RADIUS_METRES = 6_371_000.0
 private fun sharedWords(a: NilaAddress, b: NilaAddress): Set<String> {
     val locality = localityWords(a) + localityWords(b)
     return (placeWords(a.line) intersect placeWords(b.line)) - locality
+}
+
+/** One word is enough only when it is the whole distinctive place/street name on both sides. */
+private fun samePlaceWords(a: NilaAddress, b: NilaAddress, shared: Set<String>): Boolean {
+    if (shared.isEmpty()) return false
+    val locality = localityWords(a) + localityWords(b)
+    return placeWords(a.line) - locality == shared && placeWords(b.line) - locality == shared
+}
+
+private fun sameStreetWords(a: NilaAddress, b: NilaAddress, shared: Set<String>): Boolean {
+    fun streetWords(address: NilaAddress) = address.line.split(',')
+        .filter { part -> addressWords(part).any { it in STREET_WORDS } }
+        .flatMap(::addressWords)
+        .filter { it.length >= MIN_WORD && it !in GENERIC_WORDS }
+        .toSet()
+    val first = streetWords(a)
+    return first.isNotEmpty() && first == streetWords(b) && first.all { it in shared }
 }
 
 private fun placeWords(line: String) = addressWords(line).filter { it.length >= MIN_WORD && it.any(Char::isLetter) && it !in GENERIC_WORDS }.toSet()

@@ -108,6 +108,15 @@ class FoodComparisonTest {
     }
 
     @Test
+    fun anAuthChangeReplacesEveryOldQuoteWithTheCurrentConnectionState() {
+        assertEquals(
+            QuoteBoard("cart", mapOf(swiggy.id to ProviderQuote.Checking, zomato.id to ProviderQuote.SignIn)),
+            QuoteBoard("cart", mapOf(swiggy.id to priced(300), zomato.id to priced(290)))
+                .withConnections(listOf(swiggy, zomato), setOf(swiggy.id)),
+        )
+    }
+
+    @Test
     fun quotesRunAtMostThreeAtATime() = runBlocking {
         val running = AtomicInteger()
         val peak = AtomicInteger()

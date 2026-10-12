@@ -58,6 +58,13 @@ class NilaAddressesTest {
     }
 
     @Test
+    fun oneSharedBrandWordDoesNotJoinDifferentBuildings() {
+        val nila = NilaAddress("Office", "Prestige Falcon Towers, Vasanth Nagar, Bengaluru 560001")
+        val other = saved("s1", "Prestige Pinewood, Richmond Town, Bengaluru 560001")
+        assertNull(matchAddress(nila, listOf(other)))
+    }
+
+    @Test
     fun aDifferentPincodeNeverMatches() {
         assertNull(matchAddress(wework, listOf(saved("s1", "WeWork Galaxy, 43 Residency Road, Bengaluru 560001", lat = 12.9716, lng = 77.6070))))
     }

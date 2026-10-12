@@ -4,6 +4,7 @@ import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -104,6 +105,10 @@ private suspend fun <K, T> attempt(item: K, timeoutMillis: Long, failed: (String
 /** Every app's quote for one cart, by provider id. [key] names the cart, so a card never shows another cart's prices. */
 internal data class QuoteBoard(val key: String = "", val quotes: Map<String, ProviderQuote> = emptyMap())
 
+/** A fresh board after sign-in state changes; no quote from the previous account survives. */
+internal fun QuoteBoard.withConnections(providers: List<FoodProvider>, connectedIds: Set<String>): QuoteBoard =
+    copy(quotes = providers.associate { it.id to if (it.id in connectedIds) ProviderQuote.Checking else ProviderQuote.SignIn })
+
 /** The board as a ranking, apps in registry order. */
 internal fun QuoteBoard.ranked(providers: List<FoodProvider> = foodProviders): RankedComparison =
     rank(providers.mapNotNull { p -> quotes[p.id]?.let { p to it } }.toMap())
@@ -140,7 +145,7 @@ internal class FoodQuotes(
         jobs.forEach { it.cancel() }
         jobs.clear()
         val signedIn = providers.filter { it.connected(context) }
-        board.value = QuoteBoard(key, providers.associate { it.id to if (it in signedIn) ProviderQuote.Checking else ProviderQuote.SignIn })
+        board.value = QuoteBoard(key).withConnections(providers, signedIn.mapTo(mutableSetOf()) { it.id })
         run(key, cart, signedIn)
         return key
     }
@@ -154,9 +159,15 @@ internal class FoodQuotes(
         run(key, cart, listOf(provider))
     }
 
-    /** Prices the apps the user just signed in to. */
-    fun refresh() {
-        board.value.quotes.filterValues { it == ProviderQuote.SignIn }.keys.forEach(::retry)
+    /** Re-prices every connected app after sign-in or sign-out, so another account never sees stale totals. */
+    suspend fun refresh() {
+        val cart = request ?: return
+        jobs.toList().forEach { it.cancelAndJoin() }
+        jobs.clear()
+        val signedIn = providers.filter { it.connected(context) }
+        val key = board.value.key
+        board.value = board.value.withConnections(providers, signedIn.mapTo(mutableSetOf()) { it.id })
+        run(key, cart, signedIn)
     }
 
     private fun run(key: String, cart: CartRequest, list: List<FoodProvider>) = scope.launch {
