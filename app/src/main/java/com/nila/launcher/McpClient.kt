@@ -19,8 +19,8 @@ import java.util.concurrent.atomic.AtomicInteger
 internal class McpClient(private val endpoint: String, private val accessToken: String) {
     private val http = OkHttpClient.Builder().readTimeout(30, TimeUnit.SECONDS).build()
     private val nextId = AtomicInteger(1)
-    private var sessionId: String? = null
-    private var initialized = false
+    @Volatile private var sessionId: String? = null
+    @Volatile private var initialized = false
 
     /** Last failure reason, shown in the UI — this vivo ROM drops app logcat output. */
     var lastError: String? = null
@@ -32,14 +32,7 @@ internal class McpClient(private val endpoint: String, private val accessToken: 
      * reason in [lastError]. A tool-level error (`isError`) is also a failure.
      */
     fun callTool(name: String, arguments: JSONObject = JSONObject()): JSONObject? {
-        if (!initialized) {
-            val init = JSONObject()
-                .put("protocolVersion", "2024-11-05")
-                .put("capabilities", JSONObject())
-                .put("clientInfo", JSONObject().put("name", "NILA").put("version", "0.1"))
-            rpc("initialize", init) ?: return null
-            initialized = true
-        }
+        if (!initialize()) return null
         val result = rpc("tools/call", JSONObject().put("name", name).put("arguments", arguments)) ?: return null
         val text = result.optJSONArray("content")?.optJSONObject(0)?.optString("text").orEmpty().trim()
         if (result.optBoolean("isError")) {
@@ -57,6 +50,19 @@ internal class McpClient(private val endpoint: String, private val accessToken: 
         }.getOrNull()
         return fromText ?: result.optJSONObject("structuredContent")?.takeIf { it.length() > 0 }
             ?: JSONObject().put("text", text)
+    }
+
+    /** One handshake per client even when price checks call it from several threads at once. */
+    @Synchronized
+    private fun initialize(): Boolean {
+        if (initialized) return true
+        val init = JSONObject()
+            .put("protocolVersion", "2024-11-05")
+            .put("capabilities", JSONObject())
+            .put("clientInfo", JSONObject().put("name", "NILA").put("version", "0.1"))
+        rpc("initialize", init) ?: return false
+        initialized = true
+        return true
     }
 
     private fun rpc(method: String, params: JSONObject): JSONObject? = runCatching {

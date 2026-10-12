@@ -44,7 +44,7 @@ data class InstamartCart(
 
 /**
  * Swiggy Instamart through Swiggy's own MCP server (`/im`), signed in with the same Swiggy session as food.
- * Delivers to the address the user last chose in NILA, so groceries and food go to the same place.
+ * Delivers to NILA's address, so groceries and food go to the same place.
  * Adding items only updates the Instamart cart; nothing is ordered here.
  */
 internal class InstamartShop(private val context: Context) {
@@ -53,6 +53,9 @@ internal class InstamartShop(private val context: Context) {
     // update_cart replaces the whole cart, so changes run one at a time, in the order they were tapped.
     private val cartLock = Mutex()
     private val memory = NilaMemory(context)
+    private val book = NilaAddressBook(context)
+    /** Instamart's id for NILA's address, by address line, found once per session. */
+    private var addressIds = mapOf<String, String>()
 
     val connected: Boolean get() = SwiggyAuth.currentSession(context) != null
 
@@ -62,10 +65,17 @@ internal class InstamartShop(private val context: Context) {
         c.callTool(tool, args)
     }
 
-    /** The address NILA delivers food to; Instamart shares the Swiggy account's saved addresses. */
-    private suspend fun addressId(): String? =
-        context.getSharedPreferences("nila_food", Context.MODE_PRIVATE).getString("last_address", null)
-            ?: call("get_addresses")?.let { allObjects(it) }?.firstNotNullOfOrNull { it.pick("id", "addressId") }
+    /**
+     * Instamart's id for NILA's address. Instamart shares the Swiggy account's saved addresses, so a missing
+     * one is saved through Swiggy. Null with no NILA address, never another saved address in its place.
+     */
+    private suspend fun addressId(): String? {
+        val nila = book.current { SwiggyProvider.savedAddresses(context) } ?: return null
+        addressIds[nila.line]?.let { return it }
+        val saved = call("get_addresses")?.let(::parseProviderAddresses).orEmpty()
+        val id = matchAddress(nila, saved)?.id ?: SwiggyProvider.ensureAddress(context, nila).providerAddressId ?: return null
+        return id.also { addressIds = addressIds + (nila.line to it) }
+    }
 
     /** Items named in a Preference fact come first, then pack sizes matching what the user asked for, then the cheapest. */
     suspend fun search(query: String, desiredSize: String?): List<InstamartItem> {
@@ -113,16 +123,6 @@ internal class InstamartShop(private val context: Context) {
             parsed.lines.forEach { (item, quantity) -> cart[item.spinId] = item to quantity }
         }
         return parsed
-    }
-
-    /** The address chosen in NILA, with its full line, so Zepto can deliver to the same place. Null without Swiggy. */
-    suspend fun nilaAddress(): FoodAddress? = nilaAddressJson()?.let { parseAddresses(JSONObject().put("addresses", JSONArray().put(it))).firstOrNull() }
-
-    /** The same address as Swiggy returns it, with every field (coordinates, pincode), so it can be saved in Zepto. */
-    suspend fun nilaAddressJson(): JSONObject? {
-        if (!connected) return null
-        val id = addressId() ?: return null
-        return call("get_addresses")?.let { allObjects(it) }?.firstOrNull { it.pick("id", "addressId", "address_id") == id }
     }
 
     suspend fun setLine(item: InstamartItem, quantity: Int): Boolean = setQuantity(item, quantity)
