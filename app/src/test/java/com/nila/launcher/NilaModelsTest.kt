@@ -11,6 +11,15 @@ class NilaModelsTest {
     private val alarm = engine.capabilities.getValue("create_alarm")
 
     @Test
+    fun modelStatusNamesTheSelectedModelAndItsRealCapabilities() {
+        assertEquals(
+            "Jimi Gemma 3 1B v8 · text only; voice unavailable; report image reading unavailable",
+            modelStatus(ModelCatalog.JIMI_GEMMA_3),
+        )
+        assertEquals("No compatible assistant model installed", modelStatus(null))
+    }
+
+    @Test
     fun toolSchemaListsTypedParamsAndRequiredOnes() {
         val schema = toolSchemaJson(alarm)
         assertTrue(schema.startsWith("{\"name\":\"create_alarm\""))

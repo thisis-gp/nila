@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [switch]$BuildOnly,
-    [string]$Serial
+    [string]$Serial,
+    [string]$AssistantModelPath,
+    [string]$RouterModelPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -77,6 +79,39 @@ if (-not ($devices -match "\sdevice$")) { throw 'No authorized Android device fo
 
 & $adb @adbArgs install -r -t $apk
 if ($LASTEXITCODE -ne 0) { throw "ADB install failed with exit code $LASTEXITCODE." }
+
+function Copy-ModelIntoApp([string]$Source, [string]$Name) {
+    if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) { throw "Model file not found: $Source" }
+    $stage = "/data/local/tmp/$Name"
+    $expectedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Source).Hash.ToLowerInvariant()
+    $stagedHash = (& $adb @adbArgs shell sha256sum $stage) -split '\s+' | Select-Object -First 1
+    if ($stagedHash -ne $expectedHash) {
+        & $adb @adbArgs push $Source $stage
+        if ($LASTEXITCODE -ne 0) { throw "Could not copy $Name to the device." }
+        $stagedHash = (& $adb @adbArgs shell sha256sum $stage) -split '\s+' | Select-Object -First 1
+        if ($LASTEXITCODE -ne 0 -or $stagedHash -ne $expectedHash) { throw "Staged SHA-256 verification failed for $Name." }
+    }
+    & $adb @adbArgs shell run-as com.nila.launcher mkdir -p files/models
+    if ($LASTEXITCODE -ne 0) { throw "Could not create NILA's private model directory." }
+    & $adb @adbArgs shell run-as com.nila.launcher cp $stage "files/models/$Name"
+    if ($LASTEXITCODE -ne 0) { throw "Could not install $Name into NILA's private model directory." }
+    $copyHash = (& $adb @adbArgs shell run-as com.nila.launcher sha256sum "files/models/$Name")
+    if ($LASTEXITCODE -ne 0 -or $copyHash -notmatch $expectedHash) { throw "SHA-256 verification failed for $Name." }
+    Write-Host "Verified model: $Name ($expectedHash)"
+}
+
+if ($AssistantModelPath) {
+    $assistantName = switch ([System.IO.Path]::GetFileName($AssistantModelPath)) {
+        'gemma-4-E2B-it.litertlm' { 'gemma-4-E2B-it.litertlm' }
+        'jimi-gemma-v8-1b-int8.litertlm' { 'nila-assistant-jimi-gemma3-1b-v8-wi8-afp32.litertlm' }
+        'nila-assistant-jimi-gemma3-1b-v8-wi8-afp32.litertlm' { 'nila-assistant-jimi-gemma3-1b-v8-wi8-afp32.litertlm' }
+        default { throw "Unsupported assistant filename: $([System.IO.Path]::GetFileName($AssistantModelPath))" }
+    }
+    Copy-ModelIntoApp $AssistantModelPath $assistantName
+}
+if ($RouterModelPath) {
+    Copy-ModelIntoApp $RouterModelPath 'nila-router-functiongemma-run8-q8-ekv2048.litertlm'
+}
 
 & $adb @adbArgs shell am force-stop com.nila.launcher
 & $adb @adbArgs shell am start -n com.nila.launcher/.MainActivity

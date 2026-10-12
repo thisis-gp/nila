@@ -63,6 +63,7 @@ internal fun NilaScreenCatalogue(
     onForgetAll: () -> Unit,
     onWelcomeTour: () -> Unit,
     accounts: List<ServiceAccount>,
+    modelStatus: String,
 ) {
     when (screen) {
         NilaScreen.Welcome -> WelcomeScreen(onOpen)
@@ -77,7 +78,7 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Memory -> MemoryScreen(onOpen, onBack, facts, onForgetFact, onForgetAll)
         NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
-        NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, onWelcomeTour, facts, accounts)
+        NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, onWelcomeTour, facts, accounts, modelStatus)
         NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
         NilaScreen.PhoneAccess -> Page("PHONE ACCESS", onOpen, onBack) { PhoneAccessTab() }
         NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps, NilaScreen.MyNila -> Unit
