@@ -5,6 +5,7 @@ import java.math.RoundingMode
 import java.time.LocalDate
 import java.time.LocalTime
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 data class Choice(
     val title: String,
@@ -94,6 +95,7 @@ sealed interface NilaResponse {
         val capability: CapabilityDescriptor,
         val lines: List<Pair<String, String>>,
     ) : NilaResponse
+    data class McpToolInvocation(val serverId: String, val toolName: String, val arguments: Map<String, Any>) : NilaResponse
 }
 
 /** [extraCapabilities] join the built-in tools. Routing, checking and confirmation all use the same registry. */
@@ -103,6 +105,7 @@ class NilaEngine(
     private val now: () -> LocalTime = { LocalTime.now() },
     private val today: () -> LocalDate = { LocalDate.now() },
 ) {
+    private val dynamicMcpTools = ConcurrentHashMap<String, DynamicMcpTool>()
     private val percentage = Regex("""(\d+(?:\.\d+)?)\s*%\s*(?:of)?\s*(\d+(?:\.\d+)?)""")
     private val percentFollowUp = Regex("""\s*(?:and|what about|how about|now)?\s*(?:with\s+)?(\d+(?:\.\d+)?)\s*(?:%|percent)\s*[?.!]*\s*""")
     private val alarm = Regex("""alarm\s+(?:(?:for|at|on)\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?""")
@@ -131,7 +134,7 @@ class NilaEngine(
     )
 
     /** The tools a router may call. FunctionGemma will receive these same schemas. */
-    val capabilities = listOf(
+    val capabilities: MutableMap<String, CapabilityDescriptor> = ConcurrentHashMap(listOf(
         CapabilityDescriptor(
             id = "create_alarm",
             description = "Set an alarm or wake-up time, for example \"wake me up at 6\" or \"alarm for 7:30 pm\". Give the hour as the user said it and meridiem (am or pm) only if they said one.",
@@ -292,7 +295,24 @@ class NilaEngine(
             permission = PermissionClass.PREPARE,
             label = "Call",
         ),
-    ).plus(moreCapabilities).plus(extraCapabilities).associateBy { it.id }
+    ).plus(moreCapabilities).plus(extraCapabilities).associateBy { it.id })
+
+    /** A failed refresh leaves the last usable snapshot; an empty list removes tools for a disconnected server. */
+    internal fun replaceMcpTools(serverId: String, tools: List<DynamicMcpTool>?) {
+        if (tools == null) return
+        dynamicMcpTools.entries.filter { it.value.serverId == serverId }.forEach { old ->
+            dynamicMcpTools.remove(old.key)
+            capabilities.remove(old.key)
+        }
+        tools.forEach { tool ->
+            if (tool.serverId == serverId && tool.capability.id !in capabilities) {
+                dynamicMcpTools[tool.capability.id] = tool
+                capabilities[tool.capability.id] = tool.capability
+            }
+        }
+    }
+
+    internal fun dynamicMcpTools(): List<DynamicMcpTool> = dynamicMcpTools.values.sortedWith(compareBy(DynamicMcpTool::serverName, DynamicMcpTool::name))
 
     /** Timer length read from the user's words, so the model never decides the duration. */
     fun timerArgs(input: String): Map<String, Any>? = timerSeconds(input)?.let { mapOf("seconds" to it) }
@@ -531,7 +551,8 @@ class NilaEngine(
                 if (hour != null && time == null) NilaResponse.Text("That event time is not valid.")
                 else CalendarEvent(args["title"] as String, eventDate(args["day"] as String? ?: "", today()), time)
             }
-            else -> moreRun(call) ?: NilaResponse.Text("I can't do that yet. Nothing was done.")
+            else -> dynamicMcpTools[call.capabilityId]?.let { NilaResponse.McpToolInvocation(it.serverId, it.name, args) }
+                ?: moreRun(call) ?: NilaResponse.Text("I can't do that yet. Nothing was done.")
         }
     }
 
