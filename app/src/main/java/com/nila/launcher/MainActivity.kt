@@ -206,6 +206,9 @@ private fun NilaApp(resumeVersion: Int) {
     val navigation = remember { NilaNavigation(NilaScreen.Home) }
     var screen by remember { mutableStateOf(navigation.current) }
     var overlayScreen by remember { mutableStateOf(screen) }
+    LaunchedEffect(overlayScreen) {
+        if (overlayScreen == NilaScreen.Settings) brain.refreshModelChoices()
+    }
     if (screen != NilaScreen.Home && screen != NilaScreen.MyNila) overlayScreen = screen
     // 0 = home, 1 = My NILA fully open; dragged by the finger, then settled with a spring.
     val sidePanel = remember { Animatable(0f) }
@@ -780,6 +783,14 @@ private fun NilaApp(resumeVersion: Int) {
                                     ),
                                 ) },
                                 modelStatus = brain.modelStatus,
+                                modelOptions = brain.modelOptions,
+                                selectedModelId = brain.selectedAssistantId,
+                                onSelectModel = { id ->
+                                    scope.launch {
+                                        val selected = brain.selectAssistantModel(id)
+                                        Toast.makeText(context, if (selected) "Assistant model selected." else "That model could not be loaded safely.", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
                             )
                         }
                     }
