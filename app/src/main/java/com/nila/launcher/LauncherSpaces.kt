@@ -68,6 +68,16 @@ import com.composables.icons.lucide.R as LucideR
 
 internal data class InstalledApp(val label: String, val packageName: String, val icon: Drawable)
 
+internal fun resolveAppByName(query: String, apps: List<Pair<String, String>>): Pair<String, String>? {
+    val wanted = query.trim().lowercase()
+    if (wanted.isEmpty()) return null
+    val unique = apps.distinctBy { it.second }
+    val exact = unique.filter { it.first.trim().equals(wanted, ignoreCase = true) }
+    if (exact.size == 1) return exact.single()
+    if (exact.size > 1) return null
+    return unique.filter { it.first.lowercase().contains(wanted) }.singleOrNull()
+}
+
 internal fun loadInstalledApps(context: Context): List<InstalledApp> {
     val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
     return context.packageManager.queryIntentActivities(launcherIntent, PackageManager.MATCH_ALL)

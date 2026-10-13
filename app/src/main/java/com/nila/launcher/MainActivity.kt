@@ -1780,12 +1780,11 @@ private fun settingsAction(page: String) = when (page) {
 
 /** Opens the installed app whose name best matches: exact label first, then a label containing the words. */
 private fun launchByName(context: Context, name: String): String {
-    val wanted = name.lowercase().trim()
     val apps = context.packageManager.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
         .map { it.loadLabel(context.packageManager).toString() to it.activityInfo.packageName }
         .filter { it.second != context.packageName }
-    val match = apps.firstOrNull { it.first.lowercase() == wanted } ?: apps.firstOrNull { it.first.lowercase().contains(wanted) }
-        ?: return "I couldn't find an app called $name on this phone."
+    val match = resolveAppByName(name, apps)
+        ?: return "I couldn't find one unambiguous app called $name. Say its full app name."
     val launch = context.packageManager.getLaunchIntentForPackage(match.second) ?: return "${match.first} can't be opened."
     return runCatching { context.startActivity(launch) }.fold({ "Opening ${match.first}." }, { "${match.first} can't be opened." })
 }
