@@ -14,6 +14,12 @@ This repository proves the interaction model. It is not an independent operating
 - App redirects for movies, games and social media
 - Small, user-controlled memory
 
+## Add an MCP server
+
+Open **Settings → MCP servers**, enter a name and an HTTPS Streamable HTTP endpoint, then add a bearer token if the server requires one. NILA checks the endpoint before saving it. Endpoints and bearer tokens are kept in encrypted app storage and excluded from Android backup; tokens are not sent to the model.
+
+NILA currently discovers only tools with flat scalar inputs (string, integer, number or boolean), up to 16 parameters per tool. Unsupported schemas are skipped. Every discovered tool is treated as consequential: the confirmation card shows the server, tool and supplied arguments, and nothing runs until you confirm. OAuth-only servers and other MCP transports are not supported by this manual setup.
+
 ## Run
 
 Requirements: JDK 17, Android SDK 37, USB debugging and an attached Android device.

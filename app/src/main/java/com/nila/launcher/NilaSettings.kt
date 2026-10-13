@@ -66,6 +66,11 @@ internal fun SettingsScreen(
     onWelcomeTour: () -> Unit,
     facts: List<MemoryFact>,
     accounts: List<ServiceAccount>,
+    customMcpServers: List<McpServer>,
+    mcpServerStatus: String?,
+    mcpBusy: Boolean,
+    onAddMcpServer: (String, String, String) -> Unit,
+    onRemoveMcpServer: (String) -> Unit,
 ) {
     val people = factsByPerson(facts).size
     val context = LocalContext.current
@@ -89,6 +94,9 @@ internal fun SettingsScreen(
 
             GroupLabel("Accounts")
             accounts.forEach { AccountRow(it) }
+
+            GroupLabel("MCP servers")
+            McpServerSettings(customMcpServers, mcpServerStatus, mcpBusy, onAddMcpServer, onRemoveMcpServer)
 
             GroupLabel("Privacy")
             SettingsRow(
@@ -116,6 +124,44 @@ internal fun SettingsScreen(
             SettingsRow(LucideR.drawable.lucide_ic_circle_check, "Setup preview", "The first-run screens, as a demo", onClick = { onOpen(NilaScreen.Welcome) })
         }
     }
+}
+
+@Composable
+private fun McpServerSettings(
+    servers: List<McpServer>,
+    status: String?,
+    busy: Boolean,
+    onAdd: (String, String, String) -> Unit,
+    onRemove: (String) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var endpoint by remember { mutableStateOf("") }
+    var token by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    Text("Add a remote MCP server. NILA accepts HTTPS endpoints and asks before every tool call.", color = Muted, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(vertical = 6.dp))
+    servers.forEach { server ->
+        SettingsRow(LucideR.drawable.lucide_ic_globe, server.name, server.endpoint, trailing = "Remove", onClick = { onRemove(server.id) })
+    }
+    OutlinedTextField(name, { name = it.take(80); error = null }, label = { Text("Server name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(endpoint, { endpoint = it.take(2049); error = null }, label = { Text("HTTPS endpoint") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false), modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(token, { token = it.take(4097); error = null }, label = { Text("Bearer token (optional)") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false), modifier = Modifier.fillMaxWidth())
+    PrimaryAction(
+        if (busy) "Checking server…" else "Add and discover tools",
+        onClick = {
+            val validation = when {
+                name.trim().length !in 1..40 -> "Name must be 1–40 characters."
+                else -> McpEndpoint.validate(endpoint)
+            }
+            if (validation != null) error = validation else {
+                onAdd(name.trim(), endpoint.trim(), token)
+                name = ""; endpoint = ""; token = ""
+                error = null
+            }
+        },
+        enabled = !busy,
+    )
+    (error ?: status)?.let { Text(it, color = if (error != null || it.startsWith("Couldn't")) Orange else Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)) }
+    if (servers.isEmpty()) Text("No custom servers added.", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(vertical = 8.dp))
 }
 
 private fun plural(count: Int, one: String, many: String) = "$count ${if (count == 1) one else many}"

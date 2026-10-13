@@ -63,6 +63,11 @@ internal fun NilaScreenCatalogue(
     onForgetAll: () -> Unit,
     onWelcomeTour: () -> Unit,
     accounts: List<ServiceAccount>,
+    customMcpServers: List<McpServer>,
+    mcpServerStatus: String?,
+    mcpBusy: Boolean,
+    onAddMcpServer: (String, String, String) -> Unit,
+    onRemoveMcpServer: (String) -> Unit,
     mcpTools: List<DynamicMcpTool>,
 ) {
     when (screen) {
@@ -78,7 +83,7 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Memory -> MemoryScreen(onOpen, onBack, facts, onForgetFact, onForgetAll)
         NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack, mcpTools)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
-        NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, onWelcomeTour, facts, accounts)
+        NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, onWelcomeTour, facts, accounts, customMcpServers, mcpServerStatus, mcpBusy, onAddMcpServer, onRemoveMcpServer)
         NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
         NilaScreen.PhoneAccess -> Page("PHONE ACCESS", onOpen, onBack) { PhoneAccessTab() }
         NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps, NilaScreen.MyNila -> Unit
