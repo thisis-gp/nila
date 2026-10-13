@@ -4,7 +4,7 @@ Follows Google's "Fine-tune FunctionGemma 270M for Mobile Actions" notebook (gem
 Kaggle: the base model comes from Kaggle Models (no HF token) and the data from the nila-router-data dataset.
 
 Outputs in /kaggle/working:
-  nila-router_q8_ekv1024.litertlm   copy to the phone as functiongemma-mobile-actions_q8_ekv1024.litertlm
+  functiongemma-mobile-actions_q8_ekv1024.litertlm   ready for the app's model directory
   eval.json                         base vs tuned accuracy per tool on the held-out split
 """
 
@@ -27,12 +27,12 @@ import torch  # noqa: E402
 from datasets import load_dataset  # noqa: E402
 from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
 from trl import SFTConfig, SFTTrainer  # noqa: E402
+from export_gate import export_gate  # noqa: E402
 
 WORK = "/kaggle/working"
 CHECKPOINT = f"{WORK}/nila-router"
 EPOCHS = 2
 LEARNING_RATE = 1e-5
-EVAL_LIMIT = 200
 
 
 def find_one(pattern, what):
@@ -59,8 +59,13 @@ def apply_format(sample):
 data = raw.map(apply_format, remove_columns=[c for c in raw.column_names if c not in ("messages",)])
 train = data.filter(lambda r: r["split"] == "train")
 evaluation = data.filter(lambda r: r["split"] == "eval")
-held_out = evaluation.select(range(min(EVAL_LIMIT, len(evaluation))))
+held_out = evaluation
 longest = max(len(tokenizer.tokenize(r["prompt"] + r["completion"])) for r in data)
+expected_tools = {t["function"]["name"] for t in raw[0]["tools"]}
+eval_tools = {r["messages"][-1]["tool_calls"][0]["function"]["name"] for r in held_out}
+if eval_tools != expected_tools:
+    sys.exit(f"Held-out split does not cover every declared tool: missing={sorted(expected_tools - eval_tools)}, "
+             f"unexpected={sorted(eval_tools - expected_tools)}")
 print(f"train={len(train)} eval={len(held_out)} longest={longest} tokens")
 print("sample prompt tail:", train[0]["prompt"][-300:])
 print("sample completion:", train[0]["completion"])
@@ -137,8 +142,9 @@ tuned = score(model, "tuned")
 with open(f"{WORK}/eval.json", "w") as f:
     json.dump({"base": base, "tuned": tuned}, f, indent=1)
 
-if tuned["accuracy"] <= base["accuracy"]:
-    sys.exit("Tuned model is not better than base; skipping export.")
+allowed, reason = export_gate(base["accuracy"], tuned["accuracy"], tuned["per_tool"], expected_tools)
+if not allowed:
+    sys.exit(f"Tuned model failed export gate ({reason}); skipping export.")
 
 # Export in a fresh process: the converter pins its own torch build.
 del model, trainer
@@ -170,7 +176,7 @@ config.mask_as_input = True
 converter.convert_to_litert(
     gemma3.build_model_270m(checkpoint),
     output_path=out,
-    output_name_prefix="nila-router",
+    output_name_prefix="functiongemma-mobile-actions",
     prefill_seq_len=256,
     kv_cache_max_len=1024,
     quantize="dynamic_int8",
