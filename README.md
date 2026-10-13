@@ -15,6 +15,8 @@ This repository is a working launcher prototype, not an independent operating sy
 - My NILA facts, people, reminders and encrypted health records stored on the phone.
 - Explicit confirmation before consequential actions.
 
+Voice capture is processed by the on-device Gemma 4 E2B model. Transcription language coverage has not been validated across phones. Spoken replies use only voices advertised by the installed Android TTS engine; NILA stays silent if the selected reply language has no installed offline voice. Network-dependent voices are reported separately and are never selected.
+
 FunctionGemma routes a fixed set of tools. Gemma 4 E2B provides conversation, transcription and report reading. Deterministic phone actions still work when a model is unavailable.
 
 Generated apps/skills, dynamic MCP installation, semantic vector memory, cross-app screenshot control, selectable models and NILA Orbit earnings are planned work; they are not part of the current `main` build.
