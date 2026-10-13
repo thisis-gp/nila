@@ -64,9 +64,12 @@ internal fun NilaScreenCatalogue(
     onWelcomeTour: () -> Unit,
     accounts: List<ServiceAccount>,
     skills: List<NilaSkill>,
+    workflows: List<NilaWorkflow>,
     capabilities: List<CapabilityDescriptor>,
     onSaveSkill: (NilaSkill) -> Unit,
     onDeleteSkill: (String) -> Unit,
+    onSaveWorkflow: (NilaWorkflow) -> Boolean,
+    onDeleteWorkflow: (String) -> Unit,
 ) {
     when (screen) {
         NilaScreen.Welcome -> WelcomeScreen(onOpen)
@@ -82,7 +85,7 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
         NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, onWelcomeTour, facts, accounts)
-        NilaScreen.Skills -> SkillBuilderScreen(onOpen, onBack, skills, capabilities, onSaveSkill, onDeleteSkill)
+        NilaScreen.Skills -> SkillBuilderScreen(onOpen, onBack, skills, workflows, capabilities, onSaveSkill, onDeleteSkill, onSaveWorkflow, onDeleteWorkflow)
         NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
         NilaScreen.PhoneAccess -> Page("PHONE ACCESS", onOpen, onBack) { PhoneAccessTab() }
         NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps, NilaScreen.MyNila -> Unit
@@ -94,9 +97,12 @@ private fun SkillBuilderScreen(
     onOpen: (NilaScreen) -> Unit,
     onBack: () -> Unit,
     skills: List<NilaSkill>,
+    workflows: List<NilaWorkflow>,
     capabilities: List<CapabilityDescriptor>,
     onSave: (NilaSkill) -> Unit,
     onDelete: (String) -> Unit,
+    onSaveWorkflow: (NilaWorkflow) -> Boolean,
+    onDeleteWorkflow: (String) -> Unit,
 ) = Page("SKILL BUILDER", onOpen, onBack) {
     var name by remember { mutableStateOf("") }
     var trigger by remember { mutableStateOf("") }
@@ -104,6 +110,10 @@ private fun SkillBuilderScreen(
     var selected by remember { mutableStateOf(capabilities.firstOrNull()?.id.orEmpty()) }
     var menu by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var workflowName by remember { mutableStateOf("") }
+    var workflowTrigger by remember { mutableStateOf("") }
+    var workflowSteps by remember { mutableStateOf("") }
+    var workflowError by remember { mutableStateOf<String?>(null) }
     val capability = capabilities.firstOrNull { it.id == selected }
 
     ScreenTitle("Build a skill")
@@ -138,7 +148,7 @@ private fun SkillBuilderScreen(
             parsed == null -> error = "Use unique key=value arguments, separated by commas."
             candidate == null -> error = "Choose one of NILA's tools."
             skills.size >= MAX_NILA_SKILLS -> error = "NILA can store up to $MAX_NILA_SKILLS skills."
-            skills.any { skillTriggerKey(it.trigger) == skillTriggerKey(candidate.trigger) } -> error = "A skill already uses that phrase."
+            skills.any { skillTriggerKey(it.trigger) == skillTriggerKey(candidate.trigger) } || workflows.any { skillTriggerKey(it.trigger) == skillTriggerKey(candidate.trigger) } -> error = "A skill or workflow already uses that phrase."
             skillCall(candidate, capabilities.associateBy { it.id }) == null -> error = "Provide valid values for the tool's required arguments."
             else -> {
                 onSave(candidate)
@@ -155,6 +165,43 @@ private fun SkillBuilderScreen(
         }
     }
     BodyText("Only the exact phrase runs a skill. Commit tools still stop for NILA's normal confirmation.")
+
+    Spacer(Modifier.height(18.dp))
+    ScreenTitle("Build a workflow")
+    BodyText("Create a private, exact-phrase routine from existing NILA tools. Each line runs in order; no code or background agents are generated. Commit steps stop for your confirmation.")
+    OutlinedTextField(workflowName, { if (it.length <= 60) workflowName = it; workflowError = null }, label = { Text("Workflow name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(workflowTrigger, { if (it.length <= 120) workflowTrigger = it; workflowError = null }, label = { Text("Exact phrase to run") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(
+        workflowSteps,
+        { if (it.length <= 4_000) workflowSteps = it; workflowError = null },
+        label = { Text("One tool per line") },
+        supportingText = { Text("Example: battery\nset_timer: minutes=5") },
+        minLines = 3,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    workflowError?.let { Text(it, color = Orange) }
+    PrimaryButton("Save workflow") {
+        val steps = parseWorkflowSteps(workflowSteps, capabilities.associateBy { it.id })
+        val candidate = NilaWorkflow(NilaWorkflowStore.newId(), workflowName.trim(), workflowTrigger.trim(), steps.orEmpty())
+        when {
+            workflowName.isBlank() || workflowName.length > 60 -> workflowError = "Add a name up to 60 characters."
+            workflowTrigger.isBlank() || workflowTrigger.length > 120 -> workflowError = "Add an exact phrase up to 120 characters."
+            steps == null -> workflowError = "Use up to $MAX_NILA_WORKFLOW_STEPS valid tool lines with typed arguments."
+            workflowCalls(candidate, capabilities.associateBy { it.id }) == null -> workflowError = "Check the steps and their arguments."
+            workflows.size >= MAX_NILA_WORKFLOWS -> workflowError = "NILA stores up to $MAX_NILA_WORKFLOWS workflows."
+            workflows.any { skillTriggerKey(it.trigger) == skillTriggerKey(candidate.trigger) } || skills.any { skillTriggerKey(it.trigger) == skillTriggerKey(candidate.trigger) } -> workflowError = "A skill or workflow already uses that phrase."
+            !onSaveWorkflow(candidate) -> workflowError = "Workflow could not be saved securely."
+            else -> { workflowName = ""; workflowTrigger = ""; workflowSteps = ""; workflowError = null }
+        }
+    }
+    workflows.forEach { workflow ->
+        NilaCard {
+            Text(workflow.name, color = Paper, fontWeight = FontWeight.Bold)
+            BodyText("\"${workflow.trigger}\" · ${workflow.steps.size} sequential steps")
+            TextAction("Delete", onClick = { onDeleteWorkflow(workflow.id) }, color = Orange)
+        }
+    }
+    BodyText("Workflows start only when you use their exact phrase. They preview before running and pause for each Commit confirmation. Interactive provider steps hand off instead of running unattended.")
 }
 
 @Composable

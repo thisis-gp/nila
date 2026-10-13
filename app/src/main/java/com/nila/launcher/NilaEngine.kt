@@ -94,6 +94,14 @@ sealed interface NilaResponse {
         val capability: CapabilityDescriptor,
         val lines: List<Pair<String, String>>,
     ) : NilaResponse
+    data class WorkflowPreview(val workflow: NilaWorkflow) : NilaResponse
+    data class WorkflowCommit(
+        val workflowName: String,
+        val step: Int,
+        val total: Int,
+        val confirmation: NeedsConfirmation,
+    ) : NilaResponse
+    data class WorkflowHandoff(val workflowName: String, val reason: String) : NilaResponse
 }
 
 /** [extraCapabilities] join the built-in tools. Routing, checking and confirmation all use the same registry. */
@@ -543,6 +551,10 @@ class NilaEngine(
         val call = pending.remove(token) ?: return NilaResponse.Text("This confirmation was already used. Nothing was done.")
         val check = checkCall(call, capabilities)
         return if (check is CallCheck.Ok) run(check.call) else NilaResponse.Text("That action is no longer valid. Nothing was done.")
+    }
+
+    fun cancel(token: String) {
+        pending.remove(token)
     }
 
     private fun confirmation(call: ToolCall, capability: CapabilityDescriptor) = NilaResponse.NeedsConfirmation(
