@@ -27,6 +27,8 @@ Each registered capability has a stable ID, typed arguments and one permission c
 
 Unknown tools and invalid arguments are rejected. Numbers proposed by a model are checked against the user's words for sensitive commands. OAuth tokens stay inside provider clients rather than model prompts.
 
+Settings supports user-authored one-step skills: an exact phrase, an existing capability ID and typed arguments. The skill data is encrypted in app-private preferences. At runtime NILA revalidates every call through the same capability registry, and Commit actions still produce the normal confirmation card. Skills cannot add permissions or contain executable code.
+
 The registry is currently compiled into the app. FunctionGemma receives only the tool set used by its training data because adding unseen schemas reduced routing accuracy during device testing.
 
 ## Models
@@ -70,7 +72,7 @@ Provider responses are parsed defensively, but their remote schemas and authenti
 
 The following ideas are not implemented on `main`:
 
-- Declarative generated skills, My Skills and the expense-tracker skill.
+- Multi-step generated skills, generated native apps and the expense-tracker skill.
 - Dynamic MCP discovery, installation, versioned UI-control mappings and arbitrary cross-app computer use.
 - EmbeddingGemma/ObjectBox semantic memory.
 - Dineout, ONDC and Google Maps MCP integrations.
