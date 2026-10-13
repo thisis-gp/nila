@@ -20,6 +20,7 @@ enum class NilaScreen {
     Languages,
     MyNila,
     PhoneAccess,
+    ScreenGuidance,
 }
 
 class NilaNavigation(start: NilaScreen) {

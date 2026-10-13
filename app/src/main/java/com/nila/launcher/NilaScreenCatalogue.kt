@@ -84,6 +84,7 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, onWelcomeTour, facts, accounts, modelStatus, modelOptions, selectedModelId, onSelectModel)
         NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
         NilaScreen.PhoneAccess -> Page("PHONE ACCESS", onOpen, onBack) { PhoneAccessTab() }
+        NilaScreen.ScreenGuidance -> ScreenGuidanceScreen(onBack)
         NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps, NilaScreen.MyNila -> Unit
     }
 }
@@ -232,6 +233,9 @@ private fun CapabilitiesScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit)
     SectionCard("Alarms", "Android intent", "AVAILABLE")
     SectionCard("App redirects", "Installed app or browser fallback", "AVAILABLE")
     SectionCard("Memory", "Typed facts on this device, used by chat and food", "AVAILABLE")
+    androidx.compose.material3.OutlinedButton(onClick = { onOpen(NilaScreen.ScreenGuidance) }) {
+        Text("Suggest screen controls · on-device · no automatic taps")
+    }
     SectionCard("Food", "Hard-coded comparison", "MOCK PROVIDER")
     SectionCard("Messages & routes", "Catalogue preview only", "MOCK")
 }
