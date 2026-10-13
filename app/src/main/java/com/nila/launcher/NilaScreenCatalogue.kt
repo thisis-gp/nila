@@ -63,6 +63,7 @@ internal fun NilaScreenCatalogue(
     onForgetAll: () -> Unit,
     onWelcomeTour: () -> Unit,
     accounts: List<ServiceAccount>,
+    mcpTools: List<DynamicMcpTool>,
 ) {
     when (screen) {
         NilaScreen.Welcome -> WelcomeScreen(onOpen)
@@ -75,7 +76,7 @@ internal fun NilaScreenCatalogue(
         NilaScreen.ActionResult -> ActionResultScreen(onOpen)
         NilaScreen.People -> PeopleScreen(onOpen, onBack)
         NilaScreen.Memory -> MemoryScreen(onOpen, onBack, facts, onForgetFact, onForgetAll)
-        NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
+        NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack, mcpTools)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
         NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, onWelcomeTour, facts, accounts)
         NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
@@ -221,15 +222,22 @@ private fun MemoryScreen(
 }
 
 @Composable
-private fun CapabilitiesScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("CAPABILITIES", onOpen, onBack) {
+private fun CapabilitiesScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit, mcpTools: List<DynamicMcpTool>) = Page("CAPABILITIES", onOpen, onBack) {
     ScreenTitle("What NILA\ncan use.")
     BodyText("Only Android actions marked available work in this build. Integrations marked mock are not live.")
     SectionCard("Calculator", "Deterministic · offline", "AVAILABLE")
     SectionCard("Alarms", "Android intent", "AVAILABLE")
     SectionCard("App redirects", "Installed app or browser fallback", "AVAILABLE")
     SectionCard("Memory", "Typed facts on this device, used by chat and food", "AVAILABLE")
-    SectionCard("Food", "Hard-coded comparison", "MOCK PROVIDER")
-    SectionCard("Messages & routes", "Catalogue preview only", "MOCK")
+    SectionCard("Food", "Swiggy and Zomato MCP; groceries through Zepto and Instamart", "LIVE WHEN CONNECTED")
+    if (mcpTools.isEmpty()) {
+        SectionCard("MCP tools", "Connect Swiggy, Zomato or Zepto in Settings to discover server tools", "NOT CONNECTED")
+    } else {
+        mcpTools.groupBy(DynamicMcpTool::serverName).forEach { (server, tools) ->
+            SectionCard("$server MCP", "${tools.size} tools discovered. Each dynamic call asks before running.", tools.joinToString(", ") { it.name }.take(180))
+        }
+    }
+    SectionCard("Messages & routes", "Drafts and map links use Android apps", "AVAILABLE")
 }
 
 @Composable
