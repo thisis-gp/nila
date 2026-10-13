@@ -103,8 +103,6 @@ function Copy-ModelIntoApp([string]$Source, [string]$Name) {
 if ($AssistantModelPath) {
     $assistantName = switch ([System.IO.Path]::GetFileName($AssistantModelPath)) {
         'gemma-4-E2B-it.litertlm' { 'gemma-4-E2B-it.litertlm' }
-        'jimi-gemma-v8-1b-int8.litertlm' { 'nila-assistant-jimi-gemma3-1b-v8-wi8-afp32.litertlm' }
-        'nila-assistant-jimi-gemma3-1b-v8-wi8-afp32.litertlm' { 'nila-assistant-jimi-gemma3-1b-v8-wi8-afp32.litertlm' }
         default { throw "Unsupported assistant filename: $([System.IO.Path]::GetFileName($AssistantModelPath))" }
     }
     Copy-ModelIntoApp $AssistantModelPath $assistantName

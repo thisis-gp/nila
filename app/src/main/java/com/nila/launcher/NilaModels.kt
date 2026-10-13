@@ -227,8 +227,9 @@ class NilaBrain(
         private set
     internal var selectedAssistant by mutableStateOf<ModelSpec?>(null)
         private set
+    private var inferenceFailed by mutableStateOf(false)
     val modelStatus: String get() = buildString {
-        append(com.nila.launcher.modelStatus(selectedAssistant))
+        append(com.nila.launcher.modelStatus(selectedAssistant, inferenceFailed))
         append(" · ")
         append("FunctionGemma ${routerState.label}")
         loadError?.let { append("\n"); append(it) }
@@ -255,7 +256,7 @@ class NilaBrain(
 
     suspend fun load() = withContext(llm) {
         deviceMemory = ModelCatalog.deviceMemory(context)
-        val installed = setOf(ModelCatalog.GEMMA_4_E2B, ModelCatalog.JIMI_GEMMA_3)
+        val installed = setOf(ModelCatalog.GEMMA_4_E2B)
             .filter { ModelFiles.find(context, it.filename) != null }
             .mapTo(mutableSetOf()) { it.filename }
         selectedAssistant = ModelCatalog.selectAssistant(installed, deviceMemory)
@@ -647,7 +648,8 @@ class NilaBrain(
 
     private fun chat(input: String, allowTools: Boolean = true): NilaResponse? {
         val model = assistant ?: return null
-        val response = runCatching {
+        val startedAt = SystemClock.elapsedRealtime()
+        val response = try {
             model.createConversation(
                 ConversationConfig(
                     systemInstruction = Contents.of(personaWith(PERSONA, facts())),
@@ -658,13 +660,32 @@ class NilaBrain(
                     automaticToolCalling = false,
                 ),
             ).use { it.sendMessage(input) }
-        }.getOrNull() ?: return null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: OutOfMemoryError) {
+            inferenceFailed = true
+            Log.e(TAG, "assistant inference exhausted memory after ${SystemClock.elapsedRealtime() - startedAt} ms")
+            return null
+        } catch (e: Exception) {
+            inferenceFailed = true
+            Log.w(TAG, "assistant inference failed (${e::class.java.simpleName}) after ${SystemClock.elapsedRealtime() - startedAt} ms")
+            return null
+        }
         response.toolCalls.firstOrNull()?.let { proposed ->
             trace("gemma tool=${proposed.name} args=${proposed.arguments.keys}")
-            act(proposed.name, proposed.arguments, input)?.let { return it }
+            act(proposed.name, proposed.arguments, input)?.let {
+                inferenceFailed = false
+                return it
+            }
         }
         val reply = cleanReply(response.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim())
-            ?: return null
+        if (reply == null) {
+            inferenceFailed = true
+            Log.w(TAG, "assistant inference returned no usable text after ${SystemClock.elapsedRealtime() - startedAt} ms")
+            return null
+        }
+        inferenceFailed = false
+        Log.i(TAG, "assistant inference completed after ${SystemClock.elapsedRealtime() - startedAt} ms")
         return NilaResponse.Text(reply)
     }
 
@@ -732,8 +753,8 @@ class NilaBrain(
         """.trimIndent()
         const val ALARM_HELP = "I couldn't read that time, so no alarm is set. Try \"set an alarm for 1:30 pm\"."
         const val NO_ACTION_TAKEN = "I haven't done that. Chat can't take actions. To set an alarm, say a time like \"set an alarm for 1:30 pm\" and tap Set alarm on the card."
-        const val NOT_LOADED_YET = "I'm still starting up on this phone — give it a moment and try again. " +
-            "Exact actions like \"set an alarm for 6\" or \"turn on the flashlight\" work even before I'm fully loaded."
+        const val NOT_LOADED_YET = "On-device chat isn't available on this phone right now. " +
+            "Exact actions like \"set an alarm for 6\" or \"turn on the flashlight\" still work."
 
         /**
          * An escape hatch for FunctionGemma, which otherwise tends to pick some tool for every input

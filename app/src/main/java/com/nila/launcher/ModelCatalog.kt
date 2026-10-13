@@ -37,14 +37,6 @@ internal object ModelCatalog {
         minimumAvailableBytes = 4 * GIB,
     )
 
-    val JIMI_GEMMA_3 = ModelSpec(
-        id = "jimi-gemma-3-1b-v8",
-        filename = "nila-assistant-jimi-gemma3-1b-v8-wi8-afp32.litertlm",
-        label = "Jimi Gemma 3 1B v8",
-        capabilities = setOf(ModelCapability.TEXT),
-        minimumAvailableBytes = 2 * GIB,
-    )
-
     val FUNCTION_GEMMA = ModelSpec(
         id = "functiongemma-run8-q8-ekv2048",
         filename = "nila-router-functiongemma-run8-q8-ekv2048.litertlm",
@@ -59,10 +51,9 @@ internal object ModelCatalog {
         return DeviceMemory(info.totalMem, info.availMem, info.lowMemory)
     }
 
-    fun selectAssistant(installed: Set<String>, memory: DeviceMemory): ModelSpec? =
-        listOf(GEMMA_4_E2B, JIMI_GEMMA_3).firstOrNull { model ->
-            model.filename in installed && !memory.lowMemory && memory.availableBytes >= model.minimumAvailableBytes
-        }
+    fun selectAssistant(installed: Set<String>, memory: DeviceMemory): ModelSpec? = GEMMA_4_E2B.takeIf {
+        it.filename in installed && !memory.lowMemory && memory.availableBytes >= it.minimumAvailableBytes
+    }
 
     fun routerPolicy(memory: DeviceMemory): RouterLoadPolicy =
         if (memory.lowMemory || memory.totalBytes < 10 * GIB || memory.availableBytes < 4 * GIB) {
@@ -72,12 +63,14 @@ internal object ModelCatalog {
         }
 }
 
-internal fun modelStatus(model: ModelSpec?): String = when (model) {
-    null -> "No compatible assistant model installed"
-    else -> buildString {
+internal fun modelStatus(model: ModelSpec?, inferenceFailed: Boolean = false): String = buildString {
+    if (model == null) {
+        append("No compatible general assistant model installed")
+    } else {
         append(model.label)
         append(" · ")
         append(if (ModelCapability.AUDIO in model.capabilities) "voice ready" else "text only; voice unavailable")
         if (ModelCapability.VISION !in model.capabilities) append("; report image reading unavailable")
     }
+    if (inferenceFailed) append(" · assistant reply failed; using fallback")
 }

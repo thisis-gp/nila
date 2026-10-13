@@ -11,12 +11,16 @@ class NilaModelsTest {
     private val alarm = engine.capabilities.getValue("create_alarm")
 
     @Test
-    fun modelStatusNamesTheSelectedModelAndItsRealCapabilities() {
+    fun modelStatusNamesOnlyValidatedGeneralAssistants() {
         assertEquals(
-            "Jimi Gemma 3 1B v8 · text only; voice unavailable; report image reading unavailable",
-            modelStatus(ModelCatalog.JIMI_GEMMA_3),
+            "Gemma 4 E2B · voice ready",
+            modelStatus(ModelCatalog.GEMMA_4_E2B),
         )
-        assertEquals("No compatible assistant model installed", modelStatus(null))
+        assertEquals("No compatible general assistant model installed", modelStatus(null))
+        assertEquals(
+            "Gemma 4 E2B · voice ready · assistant reply failed; using fallback",
+            modelStatus(ModelCatalog.GEMMA_4_E2B, inferenceFailed = true),
+        )
     }
 
     @Test
