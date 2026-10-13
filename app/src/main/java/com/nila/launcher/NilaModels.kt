@@ -506,8 +506,8 @@ class NilaBrain(
             model.createConversation(
                 ConversationConfig(
                     systemInstruction = Contents.of("You are a model that can do function calling with the following functions"),
-                    // Exactly the tools it was fine-tuned on (training/functiongemma/make_dataset.py): more tools than it saw drops accuracy.
-                    tools = (engine.capabilities.values.filter { it.id in ROUTER_TOOLS } + CHAT_TOOL).map { tool(CapabilityTool(it)) },
+                    // Native capabilities are all in the fine-tune set; connected MCP tools join from the live registry.
+                    tools = (engine.capabilities.values.filter { it.id != CHAT_TOOL.id } + CHAT_TOOL).map { tool(CapabilityTool(it)) },
                     automaticToolCalling = false,
                 ),
             ).use { it.sendMessage(input) }
@@ -727,12 +727,6 @@ class NilaBrain(
          * An escape hatch for FunctionGemma, which otherwise tends to pick some tool for every input
          * ("hi" became search_food on the iQOO 15). Choosing it hands the message to Gemma.
          */
-        /** The tools the router was fine-tuned on; "chat" is added separately as CHAT_TOOL. */
-        val ROUTER_TOOLS = setOf(
-            "create_alarm", "remove_alarm", "open_app", "remember_fact", "search_food", "search_groceries",
-            "get_directions", "set_timer", "flashlight", "create_event", "add_note", "open_camera", "call_contact",
-        )
-
         val CHAT_TOOL = CapabilityDescriptor(
             id = "chat",
             description = "Talk with the user: greetings, questions about NILA or anything else, small talk, opinions, or any request the other functions cannot do",

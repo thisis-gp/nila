@@ -2,3 +2,4 @@ data/nila_router.jsonl
 kernel/train.py
 out/
 out.txt
+__pycache__/

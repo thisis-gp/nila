@@ -25,6 +25,7 @@ fi
 until [ "$($KAGGLE datasets status "$DATASET" 2>/dev/null)" = "ready" ]; do sleep 10; done
 
 cp train.py kernel/train.py
+cp export_gate.py kernel/export_gate.py
 $KAGGLE kernels push -p kernel
 
 while true; do
