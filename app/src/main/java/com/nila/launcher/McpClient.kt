@@ -36,10 +36,31 @@ internal class McpClient(private val endpoint: String, private val accessToken: 
         private set
 
     fun listToolsRaw(): JSONArray {
-        ensureInitialized()
-        return rpc("tools/list", JSONObject())?.optJSONArray("tools")
-            ?: error(lastError ?: "MCP server did not return tools")
+        requireInitialized()
+        return listPages("tools/list", "tools")
     }
+
+    fun listResources(): JSONArray { requireInitialized(); return listPages("resources/list", "resources") }
+    fun readResource(uri: String): JSONObject {
+        require(uri.length in 1..2048 && runCatching { java.net.URI(uri) }.isSuccess) { "Resource URI is invalid." }
+        requireInitialized()
+        return rpc("resources/read", JSONObject().put("uri", uri)) ?: error(lastError ?: "MCP resource read failed")
+    }
+    fun listPrompts(): JSONArray { requireInitialized(); return listPages("prompts/list", "prompts") }
+    fun getPrompt(name: String, arguments: JSONObject = JSONObject()): JSONObject {
+        require(name.length in 1..128) { "Prompt name is invalid." }
+        require(arguments.toString().toByteArray(Charsets.UTF_8).size <= MAX_PROMPT_ARGS_BYTES) { "Prompt arguments are too large." }
+        requireInitialized()
+        return rpc("prompts/get", JSONObject().put("name", name).put("arguments", arguments))
+            ?: error(lastError ?: "MCP prompt request failed")
+    }
+
+    private fun listPages(method: String, field: String): JSONArray = collectMcpPages(field) { cursor ->
+        val params = JSONObject().apply { cursor?.let { put("cursor", it) } }
+        rpc(method, params) ?: error(lastError ?: "MCP $method failed")
+    }
+
+    private fun requireInitialized() = check(ensureInitialized()) { lastError ?: "MCP server initialization failed" }
 
     /**
      * Calls one MCP tool and returns its payload: the JSON inside the first
@@ -130,3 +151,23 @@ internal class McpClient(private val endpoint: String, private val accessToken: 
         const val MAX_RESPONSE_BYTES = 1_048_576L
     }
 }
+
+internal fun collectMcpPages(field: String, fetch: (String?) -> JSONObject): JSONArray {
+    val items = JSONArray()
+    val cursors = mutableSetOf<String>()
+    var cursor: String? = null
+    repeat(MAX_TOOL_PAGES) {
+        val page = fetch(cursor)
+        val pageItems = page.optJSONArray(field) ?: error("MCP list response has no $field array")
+        require(items.length() + pageItems.length() <= MAX_LIST_ITEMS) { "MCP server returned too many $field" }
+        for (index in 0 until pageItems.length()) items.put(pageItems.get(index))
+        val nextCursor = page.optString("nextCursor").takeIf(String::isNotBlank) ?: return items
+        require(cursors.add(nextCursor)) { "MCP server repeated a list cursor" }
+        cursor = nextCursor
+    }
+    error("MCP server returned too many list pages")
+}
+
+private const val MAX_TOOL_PAGES = 16
+private const val MAX_LIST_ITEMS = 256
+private const val MAX_PROMPT_ARGS_BYTES = 16_384
