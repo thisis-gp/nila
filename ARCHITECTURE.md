@@ -15,7 +15,7 @@ Voice or text
     -> execution, action history and memory update
 ```
 
-Gemma 4 E2B handles conversation, summaries and skill planning. FunctionGemma owns tool selection. Business rules and permissions stay outside both models.
+The runtime selects an installed assistant only when Android reports enough available memory. Gemma 4 E2B is the current general-assistant catalog entry and supports text, audio and vision. Jimi Gemma 3 1B v8 is excluded: it is a task-specific fine-tune, and a Pixel chat smoke test produced no usable reply. FunctionGemma is a tool router, not a conversation model; its proposals still pass deterministic checks and permissions in NilaEngine.
 
 ## Response modes
 
@@ -104,7 +104,7 @@ Exact data uses exact queries. Vector similarity may suggest context but cannot 
 - EmbeddingGemma 2 Text 270M: semantic retrieval.
 - LiteRT-LM: Android inference with GPU first, NPU only after a measured device win.
 
-Models are loaded lazily. The runtime records load time, first-token time, decode rate, peak memory and failures on the actual iQOO 15. A deterministic path remains available when the assistant model is unavailable.
+Models are loaded lazily and gated by device memory. Gemma 4 E2B requires at least 4 GiB available memory; the Pixel 4a currently has no validated general assistant model in the catalog. FunctionGemma remains on-demand on the Pixel and is not loaded alongside an assistant. When generation fails, NILA records the error category and duration without logging the prompt, shows that it used a fallback, and keeps the deterministic path available.
 
 ## Voice
 
