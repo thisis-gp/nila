@@ -1,6 +1,7 @@
 package com.nila.launcher
 
 import android.content.Context
+import android.app.ActivityManager
 import android.os.SystemClock
 import android.util.Log
 import androidx.compose.runtime.getValue
@@ -24,8 +25,7 @@ import kotlinx.coroutines.withContext
 
 /** Model files pushed with adb into the app's external files dir. Never bundled: Gemma is over the 2 GB APK limit. */
 object ModelFiles {
-    const val ASSISTANT = "gemma-4-E2B-it.litertlm"
-    const val ROUTER = "functiongemma-mobile-actions_q8_ekv1024.litertlm"
+    const val ROUTER = ModelCatalog.ROUTER_FILE
 
     /**
      * Created from the app's own process: a folder made by `adb shell mkdir` is shell-owned and the app
@@ -41,9 +41,14 @@ object ModelFiles {
         listOfNotNull(File(context.filesDir, "models"), dir(context))
             .map { File(it, name) }
             .firstOrNull { it.isFile && it.length() > 0 }
+
+    fun installed(context: Context): Set<String> = listOfNotNull(File(context.filesDir, "models"), dir(context))
+        .flatMap { it.listFiles().orEmpty().toList() }
+        .filter { it.isFile && it.extension == "litertlm" && it.length() > 0 }
+        .mapTo(mutableSetOf()) { it.name }
 }
 
-enum class ModelState(val label: String) { MISSING("not installed"), LOADING("loading…"), READY("ready"), FAILED("failed to load") }
+enum class ModelState(val label: String) { MISSING("not installed"), AVAILABLE("available · loads when needed"), LOADING("loading…"), READY("ready"), FAILED("failed to load") }
 
 /** JSON-safe string literal. */
 private fun json(value: String) = buildString {
@@ -225,6 +230,10 @@ class NilaBrain(
         private set
     var routerState by mutableStateOf(ModelState.MISSING)
         private set
+    var selectedAssistantId by mutableStateOf("")
+        private set
+    var modelOptions by mutableStateOf<List<ModelOption>>(emptyList())
+        private set
     /** Last model load failure, shown in the chat status; this vivo ROM drops app logcat output. */
     var loadError by mutableStateOf<String?>(null)
         private set
@@ -248,8 +257,64 @@ class NilaBrain(
     }
 
     suspend fun load() = withContext(llm) {
-        router = loadModel(ModelFiles.ROUTER, gpuFirst = false, audio = false) { routerState = it }
-        assistant = loadModel(ModelFiles.ASSISTANT, gpuFirst = true, audio = true) { assistantState = it }
+        val memory = availableMemoryMiB()
+        modelOptions = ModelCatalog.choices(ModelFiles.installed(context), memory)
+        val preferences = context.getSharedPreferences("nila_models", Context.MODE_PRIVATE)
+        val preferred = preferences.getString(ModelCatalog.SELECTED_MODEL_KEY, null)
+        val selected = ModelCatalog.select(modelOptions, preferred)
+        selectedAssistantId = selected?.id ?: preferred.orEmpty()
+        if (selected != null && preferred != selected.id) preferences.edit().putString(ModelCatalog.SELECTED_MODEL_KEY, selected.id).apply()
+        assistantState = if (selected == null) ModelState.MISSING else ModelState.AVAILABLE
+        routerState = if (ModelFiles.find(context, ModelFiles.ROUTER) == null) ModelState.MISSING else ModelState.AVAILABLE
+    }
+
+    suspend fun selectAssistantModel(id: String): Boolean = withContext(llm) {
+        val option = modelOptions.firstOrNull { it.model.id == id } ?: return@withContext false
+        if (!option.installed || !option.fitsMemory) return@withContext false
+        assistant?.close()
+        assistant = null
+        router?.close()
+        router = null
+        selectedAssistantId = id
+        context.getSharedPreferences("nila_models", Context.MODE_PRIVATE)
+            .edit().putString(ModelCatalog.SELECTED_MODEL_KEY, id).apply()
+        assistantState = ModelState.AVAILABLE
+        routerState = if (ModelFiles.find(context, ModelFiles.ROUTER) == null) ModelState.MISSING else ModelState.AVAILABLE
+        true
+    }
+
+    private fun availableMemoryMiB(): Long {
+        val info = ActivityManager.MemoryInfo()
+        context.getSystemService(ActivityManager::class.java)?.getMemoryInfo(info)
+        return info.availMem / (1024 * 1024)
+    }
+
+    /** Only one native model is resident at once; swapping models costs load time but avoids peak RAM stacking. */
+    private fun ensureAssistant(): Engine? {
+        assistant?.let { return it }
+        val currentOptions = ModelCatalog.choices(ModelFiles.installed(context), availableMemoryMiB())
+        modelOptions = currentOptions
+        val spec = currentOptions.firstOrNull { it.model.id == selectedAssistantId && it.installed && it.fitsMemory }?.model
+            ?: ModelCatalog.select(currentOptions, selectedAssistantId)
+            ?: return null.also { assistantState = ModelState.FAILED; loadError = "No installed assistant model fits available memory." }
+        selectedAssistantId = spec.id
+        router?.close()
+        router = null
+        routerState = if (ModelFiles.find(context, ModelFiles.ROUTER) == null) ModelState.MISSING else ModelState.AVAILABLE
+        return loadModel(spec.fileName, spec.gpuFirst, ModelFeature.AUDIO_INPUT in spec.features) { assistantState = it }
+            .also { assistant = it }
+    }
+
+    private fun ensureRouter(): Engine? {
+        router?.let { return it }
+        assistant?.close()
+        assistant = null
+        assistantState = if (ModelCatalog.select(modelOptions, selectedAssistantId) == null) ModelState.FAILED else ModelState.AVAILABLE
+        if (availableMemoryMiB() < ModelCatalog.router.minimumAvailableMemoryMiB) {
+            return null.also { routerState = ModelState.FAILED; loadError = "Not enough free memory for the tool router." }
+        }
+        return loadModel(ModelCatalog.router.fileName, gpuFirst = false, audio = false) { routerState = it }
+            .also { router = it }
     }
 
     private fun loadModel(name: String, gpuFirst: Boolean, audio: Boolean, vision: Boolean = false, setState: (ModelState) -> Unit): Engine? {
@@ -332,7 +397,7 @@ class NilaBrain(
         if (favouriteOf(input) != null || askedAbout(input) != null) return@withContext null
         // "remember that …" was already saved by the rules.
         if (Regex("""^\s*(please\s+)?remember\b""", RegexOption.IGNORE_CASE).containsMatchIn(input)) return@withContext null
-        val model = assistant ?: return@withContext null
+        val model = ensureAssistant() ?: return@withContext null
         val proposed = runCatching {
             model.createConversation(
                 ConversationConfig(
@@ -357,7 +422,7 @@ class NilaBrain(
     private suspend fun understand(input: String): NilaResponse? = withContext(llm) {
         if (engine.calculate(input) != null || engine.isSmallTalk(input)) return@withContext null
         if (engine.route(input) is NilaIntent.Call || fileSearch(input) != null) return@withContext null
-        val model = assistant ?: return@withContext null
+        val model = ensureAssistant() ?: return@withContext null
         val today = java.time.LocalDate.now()
         val raw = runCatching {
             model.createConversation(
@@ -387,7 +452,7 @@ class NilaBrain(
     private fun healthAnswer(input: String): NilaResponse {
         val records = healthRecords()
         if (records.isEmpty()) return NilaResponse.Private("There are no health records in My NILA yet. Upload a report in My NILA › Health and I can answer from it.")
-        val model = assistant ?: return NilaResponse.Private("My NILA has ${records.size} health records. Open My NILA › Health to see them.")
+        val model = ensureAssistant() ?: return NilaResponse.Private("My NILA has ${records.size} health records. Open My NILA › Health to see them.")
         val reply = runCatching {
             model.createConversation(
                 ConversationConfig(
@@ -453,7 +518,7 @@ class NilaBrain(
      * null for conversation. A command whose numbers nobody said is dropped: the model may not invent a time.
      */
     private fun rewrite(input: String): String? {
-        val model = assistant ?: return null
+        val model = ensureAssistant() ?: return null
         val transcript = history.joinToString("\n") { (user, nila) -> "User: $user\nNILA: $nila" }
         val raw = runCatching {
             model.createConversation(
@@ -501,7 +566,7 @@ class NilaBrain(
      * so a wrong guess for "hi" becomes a conversation instead of "I can't open that app".
      */
     private fun modelRoute(input: String): NilaResponse? {
-        val model = router ?: return null
+        val model = ensureRouter() ?: return null
         val response = runCatching {
             model.createConversation(
                 ConversationConfig(
@@ -569,7 +634,15 @@ class NilaBrain(
      * ponytail: a second engine per report costs a few seconds and RAM while reading; keep one warm if reports get frequent.
      */
     suspend fun readReport(jpeg: ByteArray): ReportRead = withContext(llm) {
-        val reader = loadModel(ModelFiles.ASSISTANT, gpuFirst = false, audio = false, vision = true) {} ?: return@withContext ReportRead.Unavailable
+        val reportReader = ModelCatalog.choices(ModelFiles.installed(context), availableMemoryMiB())
+            .firstOrNull { ModelFeature.IMAGE_INPUT in it.model.features && it.installed && it.fitsMemory }?.model
+            ?: return@withContext ReportRead.Unavailable
+        assistant?.close()
+        assistant = null
+        router?.close()
+        router = null
+        val reader = loadModel(reportReader.fileName, gpuFirst = false, audio = false, vision = true) { assistantState = it }
+            ?: return@withContext ReportRead.Unavailable
         val start = SystemClock.elapsedRealtime()
         try {
             val reply = try {
@@ -588,6 +661,7 @@ class NilaBrain(
             reply?.let(::parseReportReading)?.let { ReportRead.Read(it) } ?: ReportRead.Unreadable
         } finally {
             runCatching { reader.close() }
+            assistantState = ModelState.AVAILABLE
         }
     }
 
@@ -596,7 +670,7 @@ class NilaBrain(
      * as typing, so voice never skips the rules, checks or confirmations.
      */
     suspend fun transcribe(wav: ByteArray): String? = withContext(llm) {
-        val model = assistant ?: return@withContext null
+        val model = ensureAssistant() ?: return@withContext null
         val start = SystemClock.elapsedRealtime()
         runCatching {
             model.createConversation(ConversationConfig(samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0))).use { conversation ->
@@ -620,7 +694,7 @@ class NilaBrain(
      * only pages, and a list of links was all NILA showed. Null when Gemma isn't loaded or has nothing to say.
      */
     suspend fun answerFromWeb(question: String, results: List<WebResult>): String? = withContext(llm) {
-        val model = assistant ?: return@withContext null
+        val model = ensureAssistant() ?: return@withContext null
         val context = results.take(WEB_RESULTS_READ).mapIndexed { i, r -> "${i + 1}. ${r.title}: ${r.snippet.take(WEB_SNIPPET_CHARS)}" }.joinToString("\n")
         if (context.isBlank()) return@withContext null
         runCatching {
@@ -634,7 +708,7 @@ class NilaBrain(
     }
 
     private fun chat(input: String, allowTools: Boolean = true): NilaResponse? {
-        val model = assistant ?: return null
+        val model = ensureAssistant() ?: return null
         val response = runCatching {
             model.createConversation(
                 ConversationConfig(

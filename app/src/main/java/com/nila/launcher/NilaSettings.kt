@@ -66,6 +66,9 @@ internal fun SettingsScreen(
     onWelcomeTour: () -> Unit,
     facts: List<MemoryFact>,
     accounts: List<ServiceAccount>,
+    modelOptions: List<ModelOption>,
+    selectedModelId: String,
+    onSelectModel: (String) -> Unit,
 ) {
     val people = factsByPerson(facts).size
     val context = LocalContext.current
@@ -86,6 +89,18 @@ internal fun SettingsScreen(
             SettingsRow(LucideR.drawable.lucide_ic_house, "Home screen", "Make NILA your home app", onClick = onChooseDefaultHome)
             SettingsRow(LucideR.drawable.lucide_ic_languages, "Languages", "English, हिंदी, മലയാളം", onClick = { onOpen(NilaScreen.Languages) })
             SettingsRow(LucideR.drawable.lucide_ic_shield_check, "Permissions", "What Android has allowed", onClick = { onOpen(NilaScreen.Permissions) })
+
+            GroupLabel("On-device intelligence")
+            Text("Choose the assistant model here. NILA loads at most one model at a time and checks free memory before loading.", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(vertical = 6.dp))
+            modelOptions.forEach { option ->
+                SettingsRow(
+                    LucideR.drawable.lucide_ic_sparkles,
+                    option.model.name,
+                    option.reason,
+                    trailing = if (option.model.id == selectedModelId) "Selected" else null,
+                    onClick = if (option.installed && option.fitsMemory) ({ onSelectModel(option.model.id) }) else null,
+                )
+            }
 
             GroupLabel("Accounts")
             accounts.forEach { AccountRow(it) }
