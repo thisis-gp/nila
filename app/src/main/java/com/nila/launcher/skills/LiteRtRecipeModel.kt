@@ -11,8 +11,6 @@ import java.util.concurrent.TimeUnit
 
 /** Gemma behind RecipeModel. Greedy decoding, a token cap and a timeout: a runaway answer (#3510) becomes "". */
 class LiteRtRecipeModel(private val engine: Engine, private val timeoutMs: Long = TIMEOUT_MS) : RecipeModel {
-    private val watchdog = Executors.newSingleThreadScheduledExecutor { Thread(it, "recipe-watchdog").apply { isDaemon = true } }
-
     override fun complete(system: String, user: String, schema: String?): String =
         engine.createConversation(
             ConversationConfig(
@@ -33,6 +31,9 @@ class LiteRtRecipeModel(private val engine: Engine, private val timeoutMs: Long 
         }
 
     companion object {
+        private val watchdog = Executors.newSingleThreadScheduledExecutor {
+            Thread(it, "recipe-watchdog").apply { isDaemon = true }
+        }
         /** Spec §7.3. The money example's screen is about 350 tokens. */
         const val MAX_OUTPUT_TOKENS = 512
         const val TIMEOUT_MS = 20_000L

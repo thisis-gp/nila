@@ -32,7 +32,7 @@ import kotlinx.serialization.json.JsonObject
 /** Plain words for what an app may touch, shown before install (spec §7.5, §8). */
 private val PermissionText = mapOf(
     "storage.local" to "Keeps its own data on this phone",
-    "transactions.read" to "Reads your bank and UPI payments on this phone",
+    "transactions.read" to "Bank and UPI payments (not available yet)",
 )
 private const val PREVIEW_DIR = "skill-preview"
 /** Bank and UPI reading is sub-project 3; until then money apps show their empty state. */
@@ -46,6 +46,10 @@ fun MiniAppPage(skills: SkillStore, appId: String, onBack: () -> Unit) {
         PageHeader(app?.title ?: "App", onBack)
         if (app == null) {
             Text("That app is no longer installed.", color = Muted, modifier = Modifier.padding(20.dp))
+            return@Column
+        }
+        if ("transactions.read" in app.grants) {
+            Text("Bank and UPI payment access is not available yet.", color = Muted, modifier = Modifier.padding(20.dp))
             return@Column
         }
         val clock = remember { Clock.systemDefaultZone() }
@@ -77,13 +81,16 @@ fun AppReviewPage(result: BuildResult, onInstall: (JsonObject) -> Unit, onCancel
             Text((result as BuildResult.Gap).reason, color = Paper, fontSize = 15.sp, modifier = Modifier.padding(20.dp))
             return@Column
         }
+        val permissions = (recipe["permissions"] as? JsonArray).orEmpty().mapNotNull { it.stringOrNull() }
+        val transactionsUnavailable = "transactions.read" in permissions
         Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             SerifTitle(recipe.string("title").orEmpty())
             if (result is BuildResult.Fallback) Text("I couldn't shape it exactly, so this is the closest app I can build.", color = Muted, fontSize = 13.sp)
             SectionLabel("This app can")
-            (recipe["permissions"] as? JsonArray).orEmpty().mapNotNull { it.stringOrNull() }.forEach { permission ->
+            permissions.forEach { permission ->
                 Text("• ${PermissionText[permission] ?: permission}", color = Paper, fontSize = 13.sp)
             }
+            if (transactionsUnavailable) Text("This app cannot be installed until bank and UPI payment access is available.", color = Muted, fontSize = 13.sp)
         }
         val context = LocalContext.current
         val preview = remember(recipe) {
@@ -95,7 +102,7 @@ fun AppReviewPage(result: BuildResult, onInstall: (JsonObject) -> Unit, onCancel
         Column(Modifier.weight(1f)) { MiniAppScreen(preview, actions = { _, _, _ -> }, onGrant = {}) }
         Row(Modifier.fillMaxWidth().padding(20.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             TextAction("Cancel", onCancel)
-            PrimaryAction("Install", { onInstall(recipe) }, Modifier.weight(1f))
+            if (!transactionsUnavailable) PrimaryAction("Install", { onInstall(recipe) }, Modifier.weight(1f))
         }
     }
 }
