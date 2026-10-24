@@ -11,6 +11,19 @@ class NilaModelsTest {
     private val alarm = engine.capabilities.getValue("create_alarm")
 
     @Test
+    fun modelStatusNamesOnlyValidatedGeneralAssistants() {
+        assertEquals(
+            "Gemma 4 E2B · voice ready",
+            modelStatus(ModelCatalog.GEMMA_4_E2B),
+        )
+        assertEquals("No compatible general assistant model installed", modelStatus(null))
+        assertEquals(
+            "Gemma 4 E2B · voice ready · assistant reply failed; using fallback",
+            modelStatus(ModelCatalog.GEMMA_4_E2B, inferenceFailed = true),
+        )
+    }
+
+    @Test
     fun toolSchemaListsTypedParamsAndRequiredOnes() {
         val schema = toolSchemaJson(alarm)
         assertTrue(schema.startsWith("{\"name\":\"create_alarm\""))

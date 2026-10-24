@@ -94,7 +94,7 @@ internal fun NilaLine(text: String) {
 
 /** The thinking state in NILA's reply position. */
 @Composable
-internal fun ThinkingLine(text: String = "Looking that up…") {
+internal fun ThinkingLine(text: String) {
     NilaSays(MascotMood.Thinking) {
         Text(text, color = Muted, fontFamily = FontFamily.Serif, fontSize = ReplyTextSize, lineHeight = ReplyTextSize * 1.25f)
     }
