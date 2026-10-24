@@ -40,6 +40,15 @@ class NilaWorkflowsTest {
         assertNull(workflowCalls(workflow.copy(steps = List(MAX_NILA_WORKFLOW_STEPS + 1) { NilaWorkflowStep("s$it", "battery", emptyMap()) }), registry))
     }
 
+    @Test fun dynamicallyDiscoveredMcpToolsAreNotWorkflowSteps() {
+        val mcpTool = CapabilityDescriptor("mcp_demo_write", "A discovered MCP tool", emptyList(), PermissionClass.COMMIT, label = "Demo write")
+        val withMcp = registry + ("mcp_demo_write" to mcpTool)
+
+        assertNull(workflowCalls(workflow.copy(steps = listOf(NilaWorkflowStep("a", "mcp_demo_write", emptyMap()))), withMcp))
+        assertNull(parseWorkflowSteps("mcp_demo_write", withMcp))
+        assertNull(parseWorkflowSteps("battery\nmcp_demo_write", withMcp))
+    }
+
     @Test fun encodingRoundTripsAndMalformedDataFailsClosed() {
         assertEquals(listOf(workflow), decodeWorkflows(encodeWorkflows(listOf(workflow))))
         assertTrue(decodeWorkflows("not-json").isEmpty())

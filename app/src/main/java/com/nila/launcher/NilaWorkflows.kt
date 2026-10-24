@@ -27,6 +27,13 @@ internal data class NilaWorkflowRun(val workflow: NilaWorkflow, val calls: List<
 internal const val MAX_NILA_WORKFLOWS = 20
 internal const val MAX_NILA_WORKFLOW_STEPS = 8
 internal val WORKFLOW_AUTORUN_CAPABILITIES = setOf("battery", "show_notes", "sound", "set_timer", "timer_control", "add_note", "flashlight")
+
+/**
+ * Dynamically discovered MCP tools (`mcp_…`) confirm and run through the interactive chat flow, which a
+ * workflow run cannot host: its Confirm step would produce an invocation nobody executes. Workflows stay
+ * on the built-in capability registry.
+ */
+private const val DYNAMIC_MCP_ID_PREFIX = "mcp_"
 private const val MAX_WORKFLOW_BYTES = 16_384
 
 internal fun workflowCanRunWithoutHandoff(capability: CapabilityDescriptor) =
@@ -59,6 +66,7 @@ internal fun workflowCalls(workflow: NilaWorkflow, registry: Map<String, Capabil
     if (workflow.steps.any { step -> step.dependsOn.any { positions.getValue(it) >= positions.getValue(step.id) } }) return null
     return workflow.steps.map { step ->
         if (step.arguments.size > 12 || step.arguments.any { (key, value) -> key.length !in 1..64 || value.length > 256 }) return null
+        if (step.capabilityId.startsWith(DYNAMIC_MCP_ID_PREFIX)) return null
         val capability = registry[step.capabilityId] ?: return null
         val call = ToolCall(step.capabilityId, coerceArgs(step.arguments.filterValues(String::isNotBlank), capability))
         (checkCall(call, registry) as? CallCheck.Ok)?.call ?: return null
@@ -77,6 +85,7 @@ internal fun parseWorkflowSteps(raw: String, registry: Map<String, CapabilityDes
     if (lines.isEmpty() || lines.size > MAX_NILA_WORKFLOW_STEPS) return null
     val steps = lines.mapIndexed { index, line ->
         val capabilityId = line.substringBefore(':').trim()
+        if (capabilityId.startsWith(DYNAMIC_MCP_ID_PREFIX)) return null
         val args = if (':' in line) parseSkillArguments(line.substringAfter(':')) ?: return null else emptyMap()
         val capability = registry[capabilityId] ?: return null
         NilaWorkflowStep("step${index + 1}", capabilityId, args, if (index == 0) emptyList() else listOf("step$index"))
