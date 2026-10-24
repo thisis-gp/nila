@@ -10,6 +10,14 @@ class SpokenRepliesTest {
     fun voiceLanguageFollowsTheReplysScript() {
         assertEquals("ml-IN", replyLanguage("എനിക്ക് സുഖമില്ല"))
         assertEquals("hi-IN", replyLanguage("मुझे भूख लगी है"))
+        assertEquals("ta-IN", replyLanguage("எனக்கு பசிக்கிறது"))
+        assertEquals("te-IN", replyLanguage("నాకు ఆకలిగా ఉంది"))
+        assertEquals("kn-IN", replyLanguage("ನನಗೆ ಹಸಿವಾಗಿದೆ"))
+        assertEquals("th-TH", replyLanguage("สวัสดี"))
+        assertEquals("ja-JP", replyLanguage("こんにちは"))
+        assertEquals("ko-KR", replyLanguage("안녕하세요"))
+        assertEquals("el-GR", replyLanguage("Καλημέρα"))
+        assertEquals("he-IL", replyLanguage("שלום"))
         assertEquals("en-IN", replyLanguage("Hello! I'm NILA."))
         // Mixed text with any Malayalam is read in Malayalam.
         assertEquals("ml-IN", replyLanguage("Alarm 6:30 സെറ്റ് ചെയ്തു"))

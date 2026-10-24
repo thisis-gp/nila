@@ -5,18 +5,6 @@ import android.content.Intent
 import android.speech.tts.TextToSpeech
 import java.util.Locale
 
-data class VoiceLanguage(val tag: String, val name: String)
-
-/**
- * The finale languages. Gemma 4 E2B listens to all of them on the phone; Lakshmi speaks through whichever
- * offline text-to-speech voice is installed for each.
- */
-val voiceLanguages = listOf(
-    VoiceLanguage("en-IN", "English (India)"),
-    VoiceLanguage("hi-IN", "हिंदी · Hindi"),
-    VoiceLanguage("ml-IN", "മലയാളം · Malayalam"),
-)
-
 enum class SpeechOutputStatus(val label: String) {
     OFFLINE("Offline voice installed"),
     NEEDS_DOWNLOAD("Voice available to download"),
@@ -40,6 +28,10 @@ fun speechOutputStatus(tag: String, voices: List<TtsVoice>): SpeechOutputStatus 
     }
 }
 
+/** Includes only languages actually advertised by the active engine, with their installed/download state. */
+fun availableSpeechOutput(voices: List<TtsVoice>): Map<String, SpeechOutputStatus> =
+    voices.map { it.locale.toLanguageTag() }.distinct().associateWith { tag -> speechOutputStatus(tag, voices) }
+
 /** Reports speech-output status per language from the default TTS engine's voices. */
 fun probeSpeechOutput(context: Context, onResult: (Map<String, SpeechOutputStatus>) -> Unit) {
     var tts: TextToSpeech? = null
@@ -49,7 +41,7 @@ fun probeSpeechOutput(context: Context, onResult: (Map<String, SpeechOutputStatu
             TtsVoice(it.locale, it.isNetworkConnectionRequired, TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED in it.features)
         }
         engine?.shutdown()
-        onResult(voiceLanguages.associate { it.tag to (voices?.let { v -> speechOutputStatus(it.tag, v) } ?: SpeechOutputStatus.UNKNOWN) })
+        onResult(voices?.let(::availableSpeechOutput).orEmpty())
     }
 }
 
