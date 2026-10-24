@@ -100,6 +100,7 @@ import android.content.BroadcastReceiver
 import android.content.IntentFilter
 import java.time.LocalTime
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -147,6 +148,35 @@ class MainActivity : FragmentActivity() {
 }
 
 data class Turn(val user: String, val response: NilaResponse)
+
+private fun executeMcpTool(context: Context, invocation: NilaResponse.McpToolInvocation): NilaResponse.Text = runCatching {
+    val arguments = org.json.JSONObject(invocation.arguments)
+    val result = when (invocation.serverId) {
+        "swiggy" -> {
+            val session = SwiggyAuth.currentSession(context) ?: error("Swiggy session expired; reconnect in Settings.")
+            McpClient("${SWIGGY.base}/food", session.accessToken).callTool(invocation.toolName, arguments)
+                ?: error("Swiggy did not complete this tool.")
+        }
+        "zomato" -> {
+            val session = ZomatoAuth.currentSession(context) ?: error("Zomato session expired; reconnect in Settings.")
+            McpClient("${ZOMATO.base}/mcp", session.accessToken).callTool(invocation.toolName, arguments)
+                ?: error("Zomato did not complete this tool.")
+        }
+        "zepto" -> ZeptoMcpClient(ZeptoAuth(context)).callTool(invocation.toolName, arguments)
+        else -> error("Unknown MCP server.")
+    }
+    if (result.optBoolean("isError")) error("The service reported that this tool failed.")
+    val text = result.optJSONArray("content")?.optJSONObject(0)?.optString("text").orEmpty().trim()
+    val output = text.ifBlank { result.optJSONObject("structuredContent")?.toString(2) ?: result.toString(2) }
+    NilaResponse.Text(output.take(4000).ifBlank { "The service completed the tool without a text result." })
+}.getOrElse { error ->
+    val message = when (error.message) {
+        "Swiggy session expired; reconnect in Settings." -> "Swiggy session expired; reconnect in Settings."
+        "Zomato session expired; reconnect in Settings." -> "Zomato session expired; reconnect in Settings."
+        else -> "The connected service didn't complete this tool."
+    }
+    NilaResponse.Text(message)
+}
 
 internal val Ink = Color(0xFF151513)
 internal val Panel = Color(0xFF22221F)
@@ -346,6 +376,30 @@ private fun NilaApp(resumeVersion: Int) {
     val tavilyAuth = remember { TavilyAuth(context) }
     // Bumped when Settings connects or disconnects an account, so its cards re-read who is signed in.
     var accountsRevision by remember { mutableIntStateOf(0) }
+    var mcpRegistryRevision by remember { mutableIntStateOf(0) }
+    LaunchedEffect(SignIns.revision, accountsRevision) {
+        val swiggy = async(Dispatchers.IO) {
+            val session = swiggySession
+            if (session == null) emptyList() else runCatching {
+                DynamicMcpToolRegistry.parse("swiggy", "Swiggy", McpClient("${SWIGGY.base}/food", session.accessToken).listToolsRaw())
+            }.getOrNull()
+        }
+        val zomato = async(Dispatchers.IO) {
+            val session = zomatoSession
+            if (session == null) emptyList() else runCatching {
+                DynamicMcpToolRegistry.parse("zomato", "Zomato", McpClient("${ZOMATO.base}/mcp", session.accessToken).listToolsRaw())
+            }.getOrNull()
+        }
+        val zepto = async(Dispatchers.IO) {
+            if (!zeptoAuth.isConnected) emptyList() else runCatching {
+                DynamicMcpToolRegistry.parse("zepto", "Zepto", ZeptoMcpClient(zeptoAuth).listToolsRaw())
+            }.getOrNull()
+        }
+        engine.replaceMcpTools("swiggy", swiggy.await())
+        engine.replaceMcpTools("zomato", zomato.await())
+        engine.replaceMcpTools("zepto", zepto.await())
+        mcpRegistryRevision++
+    }
 
     /**
      * Groceries: Zepto and Swiggy Instamart side by side. Reached when the router picks search_groceries;
@@ -784,8 +838,21 @@ private fun NilaApp(resumeVersion: Int) {
                                 confirm = { token ->
                                     // Replace the card with its result so the Confirm button cannot be tapped again.
                                     val index = turns.indexOfFirst { (it.response as? NilaResponse.NeedsConfirmation)?.token == token }
-                                    val result = engine.confirm(token).let { if (it is NilaResponse.DismissAlarm) dismissAlarm(context, it) else it }
-                                    if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
+                                    val confirmed = engine.confirm(token)
+                                    if (confirmed is NilaResponse.McpToolInvocation) {
+                                        if (index >= 0) turns[index] = turns[index].copy(response = NilaResponse.Text("Running ${confirmed.toolName} on ${confirmed.serverId}…"))
+                                        isThinking = true
+                                        scope.launch(Dispatchers.IO) {
+                                            val result = executeMcpTool(context, confirmed)
+                                            withContext(Dispatchers.Main) {
+                                                if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
+                                                isThinking = false
+                                            }
+                                        }
+                                    } else {
+                                        val result = if (confirmed is NilaResponse.DismissAlarm) dismissAlarm(context, confirmed) else confirmed
+                                        if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
+                                    }
                                 },
                                 runWorkflow = ::startWorkflow,
                                 confirmWorkflow = ::confirmWorkflow,
@@ -810,6 +877,7 @@ private fun NilaApp(resumeVersion: Int) {
                                 onForgetAll = { scope.launch { memory.clear() } },
                                 onWelcomeTour = { showWelcome = true },
                                 facts = facts,
+                                mcpTools = remember(engine, mcpRegistryRevision) { engine.dynamicMcpTools() },
                                 skills = skills,
                                 workflows = workflows,
                                 capabilities = engine.capabilities.values.toList(),
@@ -1186,6 +1254,7 @@ private fun ResponseView(
         is WebAnswer -> WebAnswerView(response, context)
         // Confirmation is this card only: the iQOO 15 loan devices have fingerprint locked for the hackathon.
         is NilaResponse.NeedsConfirmation -> CommitCard(response) { confirm(response.token) }
+        is NilaResponse.McpToolInvocation -> AnswerCard("MCP tools run only after confirmation.")
         is NilaResponse.Text -> AnswerCard(response.value)
         is NilaResponse.Private -> PrivateAnswerCard(response.value)
         is HealthPrompt -> ActionCard(
@@ -1644,6 +1713,7 @@ private fun WebAnswerView(response: WebAnswer, context: Context) {
 
 /** Does harmless, reversible actions straight away and reports what happened; everything else is returned as is. */
 private fun performNow(context: Context, response: NilaResponse): NilaResponse = when (response) {
+    is NilaResponse.McpToolInvocation -> NilaResponse.Text("This MCP tool needs a confirmation card before it can run.")
     is Torch -> NilaResponse.Text(setTorch(context, response.on))
     is Camera -> runCatching { context.startActivity(cameraIntent(response)) }.fold(
         { NilaResponse.Text(if (response.video) "Opening the camera to record video." else if (response.front) "Opening the front camera." else "Opening the camera.") },

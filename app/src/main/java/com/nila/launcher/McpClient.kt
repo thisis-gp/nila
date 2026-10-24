@@ -26,20 +26,19 @@ internal class McpClient(private val endpoint: String, private val accessToken: 
     var lastError: String? = null
         private set
 
+    fun listToolsRaw(): JSONArray {
+        ensureInitialized()
+        return rpc("tools/list", JSONObject())?.optJSONArray("tools")
+            ?: error(lastError ?: "MCP server did not return tools")
+    }
+
     /**
      * Calls one MCP tool and returns its payload: the JSON inside the first
      * text content block, or `structuredContent`. Null on failure, with the
      * reason in [lastError]. A tool-level error (`isError`) is also a failure.
      */
     fun callTool(name: String, arguments: JSONObject = JSONObject()): JSONObject? {
-        if (!initialized) {
-            val init = JSONObject()
-                .put("protocolVersion", "2024-11-05")
-                .put("capabilities", JSONObject())
-                .put("clientInfo", JSONObject().put("name", "NILA").put("version", "0.1"))
-            rpc("initialize", init) ?: return null
-            initialized = true
-        }
+        if (!ensureInitialized()) return null
         val result = rpc("tools/call", JSONObject().put("name", name).put("arguments", arguments)) ?: return null
         val text = result.optJSONArray("content")?.optJSONObject(0)?.optString("text").orEmpty().trim()
         if (result.optBoolean("isError")) {
@@ -57,6 +56,17 @@ internal class McpClient(private val endpoint: String, private val accessToken: 
         }.getOrNull()
         return fromText ?: result.optJSONObject("structuredContent")?.takeIf { it.length() > 0 }
             ?: JSONObject().put("text", text)
+    }
+
+    private fun ensureInitialized(): Boolean {
+        if (initialized) return true
+        val init = JSONObject()
+            .put("protocolVersion", "2024-11-05")
+            .put("capabilities", JSONObject())
+            .put("clientInfo", JSONObject().put("name", "NILA").put("version", "0.1"))
+        if (rpc("initialize", init) == null) return false
+        initialized = true
+        return true
     }
 
     private fun rpc(method: String, params: JSONObject): JSONObject? = runCatching {
