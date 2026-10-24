@@ -63,6 +63,10 @@ internal fun NilaScreenCatalogue(
     onForgetAll: () -> Unit,
     onWelcomeTour: () -> Unit,
     accounts: List<ServiceAccount>,
+    skills: List<NilaSkill>,
+    capabilities: List<CapabilityDescriptor>,
+    onSaveSkill: (NilaSkill) -> Unit,
+    onDeleteSkill: (String) -> Unit,
 ) {
     when (screen) {
         NilaScreen.Welcome -> WelcomeScreen(onOpen)
@@ -78,10 +82,79 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
         NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, onWelcomeTour, facts, accounts)
+        NilaScreen.Skills -> SkillBuilderScreen(onOpen, onBack, skills, capabilities, onSaveSkill, onDeleteSkill)
         NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
         NilaScreen.PhoneAccess -> Page("PHONE ACCESS", onOpen, onBack) { PhoneAccessTab() }
         NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps, NilaScreen.MyNila -> Unit
     }
+}
+
+@Composable
+private fun SkillBuilderScreen(
+    onOpen: (NilaScreen) -> Unit,
+    onBack: () -> Unit,
+    skills: List<NilaSkill>,
+    capabilities: List<CapabilityDescriptor>,
+    onSave: (NilaSkill) -> Unit,
+    onDelete: (String) -> Unit,
+) = Page("SKILL BUILDER", onOpen, onBack) {
+    var name by remember { mutableStateOf("") }
+    var trigger by remember { mutableStateOf("") }
+    var arguments by remember { mutableStateOf("") }
+    var selected by remember { mutableStateOf(capabilities.firstOrNull()?.id.orEmpty()) }
+    var menu by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val capability = capabilities.firstOrNull { it.id == selected }
+
+    ScreenTitle("Build a skill")
+    BodyText("Make a phrase for one existing NILA tool. Skills are stored on this phone; they cannot add permissions or run code.")
+    OutlinedTextField(name, { if (it.length <= 60) name = it; error = null }, label = { Text("Skill name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(trigger, { if (it.length <= 120) trigger = it; error = null }, label = { Text("Exact phrase to say") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    Box {
+        SecondaryButton("Tool: ${capability?.id ?: "Choose"}") { menu = true }
+        androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            capabilities.forEach { item ->
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text(item.id, color = Paper) },
+                    onClick = { selected = item.id; menu = false; error = null },
+                )
+            }
+        }
+    }
+    OutlinedTextField(
+        arguments,
+        { if (it.length <= 500) arguments = it; error = null },
+        label = { Text("Arguments (key=value, comma-separated)") },
+        supportingText = { Text(capability?.params?.joinToString { "${it.name}${if (it.required) "*" else ""}" } ?: "") },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    error?.let { Text(it, color = Orange) }
+    PrimaryButton("Save skill") {
+        val parsed = parseSkillArguments(arguments)
+        val candidate = capability?.let {
+            NilaSkill(NilaSkillStore.newId(), name.trim(), trigger.trim(), it.id, parsed.orEmpty())
+        }
+        when {
+            parsed == null -> error = "Use unique key=value arguments, separated by commas."
+            candidate == null -> error = "Choose one of NILA's tools."
+            skills.size >= MAX_NILA_SKILLS -> error = "NILA can store up to $MAX_NILA_SKILLS skills."
+            skills.any { skillTriggerKey(it.trigger) == skillTriggerKey(candidate.trigger) } -> error = "A skill already uses that phrase."
+            skillCall(candidate, capabilities.associateBy { it.id }) == null -> error = "Provide valid values for the tool's required arguments."
+            else -> {
+                onSave(candidate)
+                name = ""; trigger = ""; arguments = ""; error = null
+            }
+        }
+    }
+    if (skills.isEmpty()) NilaCard { BodyText("No skills yet. Create one above.") }
+    skills.forEach { skill ->
+        NilaCard {
+            Text(skill.name, color = Paper, fontWeight = FontWeight.Bold)
+            BodyText("\"${skill.trigger}\" → ${skill.capabilityId}")
+            TextAction("Delete", onClick = { onDelete(skill.id) }, color = Orange)
+        }
+    }
+    BodyText("Only the exact phrase runs a skill. Commit tools still stop for NILA's normal confirmation.")
 }
 
 @Composable
