@@ -16,18 +16,21 @@ Never claim a mock provider, simulated order, local model or unimplemented integ
 
 ## Current architecture
 
-- `app/src/main/java/com/nila/launcher/NilaEngine.kt`: deterministic intent routing used by the demo.
-- `app/src/main/java/com/nila/launcher/MainActivity.kt`: launcher, trusted UI renderer and Android action execution.
-- `app/src/test/`: smallest runnable checks for routing logic.
+- `app/src/main/java/com/nila/launcher/NilaEngine.kt`: deterministic routing, capability policy and confirmation gates.
+- `app/src/main/java/com/nila/launcher/NilaModels.kt`: LiteRT-LM loading, FunctionGemma routing and Gemma conversation, audio and report reading.
+- `app/src/main/java/com/nila/launcher/MainActivity.kt`: launcher orchestration, trusted Compose rendering and Android action execution.
+- `app/src/main/java/com/nila/launcher/SwiggyFood.kt`, `Instamart.kt`, `ZomatoCompare.kt` and `ZeptoCards.kt`: current commerce flows.
+- `app/src/main/java/com/nila/launcher/MemoryDb.kt`, `NilaMemory.kt` and `HealthRecords.kt`: encrypted local memory and health records.
+- `app/src/test/`: JVM checks for routing, parsing, permissions and state transitions.
 - `scripts/build-install-test.ps1`: build, install, launch and smoke check.
 
-Use one orchestrator and a small tool registry. Do not add a multi-agent framework until a measured failure requires one. Generated UI must select trusted native components; never execute model-generated code.
+The capability registry and FunctionGemma tool set are currently fixed in code. Generated UI uses trusted native components; never execute model-generated code. Declarative generated skills, dynamic MCP discovery, semantic/vector memory and NILA Orbit are future work, not current product behavior.
 
 ## 48-hour scope
 
-Prioritize one reliable end-to-end demo: understand a food request, compare providers, generate cards, prepare the action and ask for confirmation. Calculator, alarm, memory and app opening are supporting proof points.
+Prioritize one reliable end-to-end demo: understand a food request, compare available providers, render trusted cards, prepare the action and ask for confirmation. Calculator, alarm, memory, maps, voice and app opening are supporting proof points.
 
-Out of scope: real payments, production ONDC onboarding, unrestricted cross-app control, a custom Android ROM and speculative infrastructure.
+Out of scope: production ONDC onboarding, unrestricted cross-app control, a custom Android ROM and speculative infrastructure. Live provider actions must use the existing visible confirmation gates; automated tests stop before placing a real order.
 
 ## Ownership
 
@@ -48,6 +51,7 @@ Working notes and agent checkpoints belong in the git-ignored `vault/`; durable 
 - Consequential actions require a visible confirmation state.
 - New behavior starts with one failing test; bug fixes reproduce the bug first.
 - Before declaring done, run `.\scripts\build-install-test.ps1 -BuildOnly` and report the actual result.
+- Any PR that changes implemented behavior, setup, architecture or limitations must update the relevant tracked documentation in the same PR. State only claims verified from code or an actual test; label planned work as future work.
 
 ## Token discipline
 
