@@ -1,0 +1,30 @@
+money|I want an expense tracker that shows where my money goes
+money|track my UPI payments and group them by category
+money|how much did I spend on food this month, make me an app for it
+money|monthly budget dashboard from my bank messages
+money|mera kharcha track karo, category wise
+money|show my Swiggy and Zomato spending every week
+money|salary and spending tracker
+log|reading log for books I finish
+log|workout log with exercise and reps
+log|track my weight every morning
+log|log my sleep hours
+log|a journal where I write one line a day
+log|keep a list of movies I watched with ratings
+log|track my car fuel fill-ups and cost
+log|track money I lent to friends
+counter|count how many glasses of water I drink
+counter|cigarette counter to help me quit
+counter|count my pushups every day
+counter|naan evlo coffee kudikiren nu count pannu
+counter|how many times I meditated this week
+checklist|packing list for my Goa trip
+checklist|daily habits checklist: gym, read, no sugar
+checklist|grocery list I can tick off
+checklist|todo list for my wedding planning
+checklist|morning routine checklist
+none|an app that books Uber rides for me
+none|edit my videos and add music
+none|show live cricket scores
+none|scan documents with my camera
+none|chat with my friends in a group

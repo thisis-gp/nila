@@ -100,7 +100,8 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
         NilaScreen.PhoneAccess -> Page("PHONE ACCESS", onOpen, onBack) { PhoneAccessTab() }
         NilaScreen.ScreenGuidance -> ScreenGuidanceScreen(onBack)
-        NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps, NilaScreen.MyNila -> Unit
+        // Drawn by MainActivity, which holds their state (installed apps, the app being built).
+        NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps, NilaScreen.MyNila, NilaScreen.MiniApp, NilaScreen.AppReview -> Unit
     }
 }
 

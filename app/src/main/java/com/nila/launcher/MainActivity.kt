@@ -194,7 +194,9 @@ internal val Orange = Color(0xFFE84619)
 @Composable
 private fun NilaApp(resumeVersion: Int) {
     val context = LocalContext.current
-    val engine = remember { NilaEngine() }
+    // Apps NILA built from the user's ideas; the engine needs their names so "open water" finds them.
+    val skills = remember { com.nila.launcher.skills.SkillStore(java.io.File(context.filesDir, "skills")) }
+    val engine = remember { NilaEngine(installedApps = { skills.list().map { it.id to it.title } }) }
     // Gemma 4 E2B and FunctionGemma load in the background; until then NILA answers with its rules.
     // What the user asked NILA to remember; read by chat, food, groceries and the morning suggestion.
     val memory = remember { NilaMemory(context.applicationContext) }
@@ -202,7 +204,7 @@ private fun NilaApp(resumeVersion: Int) {
     val health = remember { HealthStore(context.applicationContext) }
     val skillStore = remember { NilaSkillStore(context.applicationContext) }
     var skillsRevision by remember { mutableIntStateOf(0) }
-    val skills = remember(skillsRevision) { skillStore.all() }
+    val chatSkills = remember(skillsRevision) { skillStore.all() }
     val workflowStore = remember { NilaWorkflowStore(context.applicationContext) }
     var workflowsRevision by remember { mutableIntStateOf(0) }
     val workflows = remember(workflowsRevision) { workflowStore.all() }
@@ -513,6 +515,21 @@ private fun NilaApp(resumeVersion: Int) {
      * Web search the router picked (web_search): Tavily when the user added a key, else DuckDuckGo's free
      * instant answer. Always ends with "open in browser" so a thin answer is never a dead end.
      */
+    var openedApp by remember { mutableStateOf<String?>(null) }
+    var draftApp by remember { mutableStateOf<com.nila.launcher.skills.BuildResult?>(null) }
+
+    fun buildApp(idea: String) {
+        scope.launch {
+            val result = brain.buildApp(idea)
+            if (result == null) {
+                turns += Turn("App builder", NilaResponse.Text("I'm still loading. Ask me again in a moment."))
+                return@launch
+            }
+            draftApp = result
+            open(NilaScreen.AppReview)
+        }
+    }
+
     fun searchWeb(query: String) {
         scope.launch(Dispatchers.IO) {
             val found = runCatching { tavilyAuth.apiKey?.takeIf(String::isNotBlank)?.let { TavilySearch.search(it, query) } ?: InstantAnswer.search(query) }.getOrNull()
@@ -711,6 +728,19 @@ private fun NilaApp(resumeVersion: Int) {
                         engine.mockFood().let { it.copy(intro = "${it.intro}\nConnect Swiggy in Settings to order for real.") }
                     }
                     is NilaResponse.Navigate -> NilaIntegrations.liveRouteCard(context, routed.destination) ?: routed
+                    is BuildMiniApp -> {
+                        buildApp(routed.idea)
+                        NilaResponse.Text("Building your app. This takes about half a minute.")
+                    }
+                    is OpenMiniApp -> {
+                        openedApp = routed.appId
+                        open(NilaScreen.MiniApp)
+                        NilaResponse.Text("Opening ${skills.get(routed.appId)?.title ?: "your app"}.")
+                    }
+                    is ShowMiniApps -> NilaResponse.Text(
+                        skills.list().takeIf { it.isNotEmpty() }?.joinToString(prefix = "Your apps: ", postfix = ".") { it.title }
+                            ?: "You haven't built any apps yet. Try \"build me an expense tracker\".",
+                    )
                     is WebSearch -> {
                         searchWeb(routed.query)
                         NilaResponse.Text("Searching the web for \"${routed.query}\"…")
@@ -942,7 +972,15 @@ private fun NilaApp(resumeVersion: Int) {
                                             }
                                         }
                                     } else {
-                                        val result = if (confirmed is NilaResponse.DismissAlarm) dismissAlarm(context, confirmed) else confirmed
+                                        val result = when (confirmed) {
+                                            is NilaResponse.DismissAlarm -> dismissAlarm(context, confirmed)
+                                            is RemoveMiniApp -> {
+                                                val title = skills.get(confirmed.appId)?.title ?: "That app"
+                                                skills.uninstall(confirmed.appId)
+                                                NilaResponse.Text("Deleted $title and everything saved in it.")
+                                            }
+                                            else -> confirmed
+                                        }
                                         if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
                                     }
                                 },
@@ -960,6 +998,30 @@ private fun NilaApp(resumeVersion: Int) {
                                 },
                             ) { label, next -> turns += Turn(label, next) }
                             NilaScreen.Home -> Unit
+                            NilaScreen.MiniApp -> openedApp?.let { id -> com.nila.launcher.skills.MiniAppPage(skills, id, onBack = ::closeOverlay) }
+                            NilaScreen.AppReview -> draftApp?.let { draft ->
+                                com.nila.launcher.skills.AppReviewPage(
+                                    result = draft,
+                                    onInstall = { recipe ->
+                                        val asked = (recipe["permissions"] as? kotlinx.serialization.json.JsonArray).orEmpty()
+                                            .mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.toSet()
+                                        when (val installed = skills.install(recipe, asked)) {
+                                            is com.nila.launcher.skills.InstallResult.Installed -> {
+                                                draftApp = null
+                                                openedApp = installed.app.id
+                                                // Replace the review page, so Back from the new app does not land on an empty review.
+                                                screen = navigation.replace(NilaScreen.MiniApp)
+                                            }
+                                            is com.nila.launcher.skills.InstallResult.Invalid ->
+                                                Toast.makeText(context, "That app didn't pass the safety check.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    onCancel = {
+                                        draftApp = null
+                                        closeOverlay()
+                                    },
+                                )
+                            }
                             else -> NilaScreenCatalogue(
                                 screen = overlayScreen,
                                 onOpen = ::open,
@@ -975,7 +1037,7 @@ private fun NilaApp(resumeVersion: Int) {
                                 mcpBusy = mcpBusy,
                                 onAddMcpServer = ::addMcpServer,
                                 onRemoveMcpServer = ::removeMcpServer,
-                                skills = skills,
+                                skills = chatSkills,
                                 workflows = workflows,
                                 capabilities = engine.capabilities.values.toList(),
                                 onSaveSkill = { skill -> skillStore.save(skill); skillsRevision++ },
@@ -1352,6 +1414,11 @@ private fun ResponseView(
         // Resolved into the live flow in submit(); shown only if that ever fails to happen.
         is NilaResponse.FoodSearch -> AnswerCard("Looking for ${response.query}…")
         is NilaResponse.GrocerySearch -> AnswerCard("Comparing Zepto and Swiggy Instamart for ${response.query}…")
+        // Resolved in submit() and confirm; shown only if that ever fails to happen.
+        is BuildMiniApp -> AnswerCard("Building your app…")
+        is OpenMiniApp -> AnswerCard("Opening your app…")
+        ShowMiniApps -> AnswerCard("Your apps")
+        is RemoveMiniApp -> AnswerCard("Deleting the app…")
         is WebAnswer -> WebAnswerView(response, context)
         // Confirmation is this card only: the iQOO 15 loan devices have fingerprint locked for the hackathon.
         is NilaResponse.NeedsConfirmation -> CommitCard(response) { confirm(response.token) }

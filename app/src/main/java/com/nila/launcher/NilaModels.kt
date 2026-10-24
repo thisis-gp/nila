@@ -350,6 +350,14 @@ class NilaBrain(
         return null
     }
 
+    /** Builds an app recipe from the user's idea with Gemma, on the LLM thread. */
+    suspend fun buildApp(idea: String): com.nila.launcher.skills.BuildResult? = withContext(llm) {
+        val model = assistant ?: return@withContext null
+        return@withContext com.nila.launcher.skills.AppBuilder(
+            com.nila.launcher.skills.LiteRtRecipeModel(model),
+        ).build(idea)
+    }
+
     /**
      * My NILA first: "what do you know about my wife" answers from memory, and "order my wife's favourite"
      * becomes "order butter chicken" before anything routes it. Unknown favourites are asked for, never guessed.

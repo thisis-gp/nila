@@ -55,6 +55,8 @@ dependencies {
 
     // Swiggy MCP (OAuth 2.1 + JSON-RPC) and OSM Maps (Nominatim/OSRM) network clients.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // App recipes are parsed as JsonElement trees; no serialization compiler plugin needed.
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("androidx.browser:browser:1.9.0")
     // Food/restaurant images from Swiggy's CDN inside NILA's own cards.
     implementation("io.coil-kt.coil3:coil-compose:3.3.0")
@@ -64,5 +66,7 @@ dependencies {
     // Real org.json for unit tests: Android's copy is a stub off-device. Parses Instamart's get_cart in tests.
     testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

@@ -22,6 +22,10 @@ enum class NilaScreen {
     PhoneAccess,
     ScreenGuidance,
     Skills,
+    /** An app NILA built, opened full screen. */
+    MiniApp,
+    /** What the App Builder made, before install. */
+    AppReview,
 }
 
 class NilaNavigation(start: NilaScreen) {
@@ -38,6 +42,13 @@ class NilaNavigation(start: NilaScreen) {
 
     fun open(screen: NilaScreen): NilaScreen {
         if (screen != current) history.add(screen)
+        return current
+    }
+
+    /** Swaps the top screen, so Back skips a step that is finished (an app's review page after it was installed). */
+    fun replace(screen: NilaScreen): NilaScreen {
+        history.removeLast()
+        history.add(screen)
         return current
     }
 
