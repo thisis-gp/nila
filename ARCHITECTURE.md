@@ -15,6 +15,8 @@ Voice or text
 
 `MainActivity.kt` coordinates the launcher and renders responses. `NilaEngine.kt` owns deterministic routing, the fixed capability registry and confirmation tokens. `NilaModels.kt` loads the two LiteRT-LM models and passes proposed calls through the same registry checks. Model output never bypasses business rules or confirmation.
 
+The runtime selects an installed assistant only when Android reports enough available memory. Gemma 4 E2B is the current general-assistant catalog entry and supports text, audio and vision. Jimi Gemma 3 1B v8 is excluded: it is a task-specific fine-tune, and a Pixel chat smoke test produced no usable reply. FunctionGemma is a tool router, not a conversation model; its proposals still pass deterministic checks and permissions in NilaEngine.
+
 The current response modes are direct text, trusted native cards and forms, Android actions, live provider flows, and redirects into immersive apps. NILA does not execute model-generated Kotlin, JavaScript or shell code.
 
 ## Capabilities and permission boundary
@@ -37,7 +39,7 @@ The registry is currently compiled into the app. FunctionGemma receives only the
 - `functiongemma-mobile-actions_q8_ekv1024.litertlm`: the small tool router.
 - LiteRT-LM 0.17.1: Android inference runtime.
 
-The files are not bundled in the APK. NILA looks for them in its internal or app-specific external `models` directory. Both assistant and router are loaded in the background and remain resident while the launcher screen owns `NilaBrain`; deterministic behavior remains available if a model is missing.
+The files are not bundled in the APK. NILA looks for them in its internal or app-specific external `models` directory. An installed assistant loads only when Android reports enough available memory; Gemma 4 E2B requires at least 4 GiB, and the Pixel 4a currently has no validated general assistant model in the catalog. FunctionGemma remains on demand on memory-tight devices and is not loaded alongside an assistant. When generation fails, NILA records the error category and duration without logging the prompt, shows that it used a fallback, and keeps the deterministic path available.
 
 The assistant tries GPU for text inference. Audio and vision use CPU backends. The current model names and loading policy are fixed in code; selectable models, single-model low-memory loading and completed Pixel 4a calibration are future work.
 
