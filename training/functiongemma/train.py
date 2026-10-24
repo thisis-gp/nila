@@ -4,7 +4,7 @@ Follows Google's "Fine-tune FunctionGemma 270M for Mobile Actions" notebook (gem
 Kaggle: the base model comes from Kaggle Models (no HF token) and the data from the nila-router-data dataset.
 
 Outputs in /kaggle/working:
-  functiongemma-mobile-actions_q8_ekv1024.litertlm   ready for the app's model directory
+  nila-router-functiongemma-run8-q8-ekv2048.litertlm   the exact filename NILA's ModelCatalog loads
   eval.json                         base vs tuned accuracy per tool on the held-out split
 """
 
@@ -176,9 +176,9 @@ config.mask_as_input = True
 converter.convert_to_litert(
     gemma3.build_model_270m(checkpoint),
     output_path=out,
-    output_name_prefix="functiongemma-mobile-actions",
+    output_name_prefix="nila-router-functiongemma-run8-q8-ekv2048",
     prefill_seq_len=256,
-    kv_cache_max_len=1024,
+    kv_cache_max_len=2048,
     quantize="dynamic_int8",
     export_config=config,
     tokenizer_model_path=os.path.join(checkpoint, "tokenizer.model"),

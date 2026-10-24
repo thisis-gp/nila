@@ -12,6 +12,9 @@ This repository is a working launcher prototype, not an independent operating sy
 - Trusted native cards for food, groceries, routes, files, photos, health records and fitness.
 - User-authored, one-step skills: exact phrases can invoke an existing NILA tool; their data is encrypted locally.
 - User-authored workflows: exact phrases preview up to eight existing tools, then run supported read/prepare steps in order; each Commit pauses for confirmation and interactive provider steps hand off to the user.
+- Private App Builder mini-apps: a described idea becomes a declarative recipe rendered by trusted Compose code; apps with transaction views are labelled unavailable and cannot be installed until real bank/UPI access exists.
+- On-device model selection in Settings, gated by available memory; deterministic behavior remains when no model fits.
+- Screen-control suggestions from a user-picked screenshot: on-device vision proposes visible controls only; NILA never taps automatically.
 - Swiggy Food, Swiggy Instamart, Zomato and Zepto account connections and guarded commerce flows.
 - OpenStreetMap place lookup and route estimates, with a maps-app handoff for navigation.
 - My NILA facts, people, reminders and encrypted health records stored on the phone.
@@ -21,7 +24,7 @@ Voice capture is processed by the on-device Gemma 4 E2B model. Transcription lan
 
 FunctionGemma routes a fixed set of tools. Gemma 4 E2B provides conversation, transcription and report reading. Deterministic phone actions still work when a model is unavailable.
 
-Generated code/apps/agents, unattended cross-app control, semantic vector memory, selectable models and NILA Orbit earnings remain future work. Workflows are declarative data, not generated code. Dynamic MCP installation and screen guidance are tracked in separate open pull requests.
+Generated code/agents, unattended cross-app control, semantic vector memory and NILA Orbit earnings remain future work. Workflows and mini-apps are declarative data, not generated code.
 
 ## Add an MCP server
 
@@ -49,10 +52,10 @@ Build without a device:
 
 The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
-The two model files are not bundled in the APK:
+The model files are not bundled in the APK:
 
-- `gemma-4-E2B-it.litertlm`
-- `functiongemma-mobile-actions_q8_ekv1024.litertlm`
+- `gemma-4-E2B-it.litertlm` (assistant; `gemma3-1b-it-int4.litertlm` is an optional lower-memory choice)
+- `nila-router-functiongemma-run8-q8-ekv2048.litertlm` (tool router)
 
 NILA looks for them in its internal or app-specific external `models` directory. Without them, the app reports the missing model and keeps its deterministic fallback behavior. The repository does not distribute model weights.
 
