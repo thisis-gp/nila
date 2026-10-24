@@ -66,6 +66,7 @@ internal fun SettingsScreen(
     onWelcomeTour: () -> Unit,
     facts: List<MemoryFact>,
     accounts: List<ServiceAccount>,
+    modelStatus: String,
 ) {
     val people = factsByPerson(facts).size
     val context = LocalContext.current
@@ -85,6 +86,7 @@ internal fun SettingsScreen(
             GroupLabel("General")
             SettingsRow(LucideR.drawable.lucide_ic_house, "Home screen", "Make NILA your home app", onClick = onChooseDefaultHome)
             SettingsRow(LucideR.drawable.lucide_ic_languages, "Languages", "English, हिंदी, മലയാളം", onClick = { onOpen(NilaScreen.Languages) })
+            SettingsRow(LucideR.drawable.lucide_ic_brain, "On-device models", modelStatus)
             SettingsRow(LucideR.drawable.lucide_ic_shield_check, "Permissions", "What Android has allowed", onClick = { onOpen(NilaScreen.Permissions) })
 
             GroupLabel("Accounts")
