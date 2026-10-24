@@ -84,6 +84,15 @@ TOOLS = [
         [],
     ),
     tool("flashlight", "Turn the phone's flashlight (torch) on or off.", [("on", "boolean", "on")], ["on"]),
+    tool("timer_control", "Pause, resume or stop the running timer, or tell how much time is left (status).", [("action", "string", "action")], ["action"]),
+    tool("set_reminder", "Set a one-time reminder at a time the user says, sent as a notification by My NILA.", [("text", "string", "text")], ["text"]),
+    tool(
+        "monthly_reminder",
+        "A reminder that repeats every month. Give what to do, the day of the month and the time if said.",
+        [("title", "string", "title"), ("day", "integer", "day"), ("hour", "integer", "hour"),
+         ("minute", "integer", "minute"), ("meridiem", "string", "meridiem")],
+        ["title"],
+    ),
     tool(
         "create_event",
         "Add an event, meeting or appointment to the calendar. Give the title, the day (today, tomorrow or a weekday) and the time if said.",
@@ -94,6 +103,7 @@ TOOLS = [
     tool("add_note", 'Save a note the user dictates, for example "take a note that the gate code is 4521".', [("text", "string", "text")], ["text"]),
     tool("open_camera", "Open the camera to take a photo or record a video.", [("video", "boolean", "video")], []),
     tool("call_contact", "Call a person by name or a phone number. NILA opens the dialer; the user presses call.", [("who", "string", "who")], ["who"]),
+    tool("record_audio", "Open the phone's voice recorder to record the user's voice or a voice note.", [], []),
     tool(
         "chat",
         "Talk with the user: greetings, questions about NILA or anything else, small talk, opinions, "
@@ -220,14 +230,20 @@ def split_by_template(examples, eval_share, rng):
 
     families = list(groups)
     rng.shuffle(families)
-    eval_families = set()
-    eval_count = 0
+    tool_families = {}
+    for family, items in groups.items():
+        for _, answer in items:
+            name = answer["tool_calls"][0]["function"]["name"]
+            tool_families.setdefault(name, set()).add(family)
+    eval_families = {rng.choice(sorted(candidates)) for candidates in tool_families.values()}
+    eval_count = sum(len(groups[family]) for family in eval_families)
     target = int(len(examples) * eval_share)
     for family in families[:-1]:
         if eval_count >= target and eval_families:
             break
-        eval_families.add(family)
-        eval_count += len(groups[family])
+        if family not in eval_families:
+            eval_families.add(family)
+            eval_count += len(groups[family])
 
     return [
         ("eval" if family in eval_families else "train", user, answer)
@@ -283,6 +299,19 @@ def rows(rng):
                         (False, ["turn off the flashlight", "torch off", "switch off the torch", "flashlight off"])]:
         for t in phrases:
             out.append((t, call("flashlight", {"on": on})))
+    for action, phrases in {
+        "pause": ["pause the timer", "hold my timer"],
+        "resume": ["resume the timer", "continue the timer"],
+        "stop": ["stop the timer", "cancel the timer"],
+        "status": ["how much time is left on my timer", "check the timer"],
+    }.items():
+        out.extend((text, call("timer_control", {"action": action})) for text in phrases)
+    for text in ["remind me to take medicine at 8 pm", "remind me to call Amma tomorrow", "set a reminder to pay the bill at 6"]:
+        out.append((text, call("set_reminder", {"text": text})))
+    for title, day in [("pay electricity bill", 5), ("pay rent", 1), ("change water filter", 15)]:
+        out.extend((text, call("monthly_reminder", {"title": title, "day": day})) for text in [
+            f"remind me every month on the {day} to {title}", f"monthly reminder for {title} on day {day}",
+        ])
     for title, day, hour, meridiem in EVENTS:
         for t in rng.sample(["add {x} {d} at {h} {m}", "schedule {x} {d} at {h}{m}", "put {x} on my calendar for {d} {h} {m}", "remind me of {x} {d} at {h} {m} in the calendar"], 2):
             out.append((t.format(x=title, d=day, h=hour, m=meridiem),
@@ -294,6 +323,8 @@ def rows(rng):
                            (True, ["record a video", "start a video", "open the video camera"])]:
         for t in phrases:
             out.append((t, call("open_camera", {"video": video} if video else {})))
+    for text in ["open voice recorder", "record a voice note", "start recording my voice"]:
+        out.append((text, call("record_audio", {})))
     for who in NAMES:
         for t in rng.sample(["call {x}", "phone {x}", "dial {x}", "give {x} a call", "{x} ko call karo"], 2):
             out.append((t.format(x=who), call("call_contact", {"who": who})))

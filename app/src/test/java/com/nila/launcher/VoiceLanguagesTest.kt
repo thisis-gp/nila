@@ -19,4 +19,14 @@ class VoiceLanguagesTest {
         assertEquals(SpeechOutputStatus.UNAVAILABLE, speechOutputStatus("en-IN", listOf(englishUs)))
     }
 
+    @Test
+    fun reportedLanguagesComeOnlyFromTheEngineVoiceList() {
+        val tamilOffline = TtsVoice(Locale.forLanguageTag("ta-IN"), needsNetwork = false, notInstalled = false)
+        val tamilDownload = TtsVoice(Locale.forLanguageTag("ta-IN"), needsNetwork = false, notInstalled = true)
+        val output = availableSpeechOutput(listOf(tamilOffline, tamilDownload))
+
+        assertEquals(mapOf("ta-IN" to SpeechOutputStatus.OFFLINE), output)
+        assertEquals(emptyMap<String, SpeechOutputStatus>(), availableSpeechOutput(emptyList()))
+    }
+
 }

@@ -32,8 +32,6 @@ data class CurrentPlace(
 internal object CurrentPlaces {
     private const val FIX_TIMEOUT_MS = 6_000L
 
-    /** Same pincode or area. A city match alone (HSR Layout for someone in Ashokanagar) is not "nearest". */
-    const val NEARBY_SCORE = 2
     private const val USER_AGENT = "NILA-Launcher-Hackathon/0.1 (contact: team@nila.app)"
     private val http = OkHttpClient()
 
@@ -83,17 +81,12 @@ internal object CurrentPlaces {
     }.getOrNull()
 
     /**
-     * Saved addresses closest to [here] first: Swiggy returns no coordinates, so the address text is
-     * matched on pincode, then area, then city. Ties keep Swiggy's own order.
+     * How close an address line is to [here], for ranking the picker: pincode, then area, then city.
+     * Never a match by itself; [matchAddress] decides whether two addresses are one place.
      */
-    fun rank(addresses: List<FoodAddress>, here: CurrentPlace?): List<FoodAddress> {
-        if (here == null) return addresses
-        return addresses.sortedByDescending { matchScore(it, here) }
-    }
-
-    fun matchScore(address: FoodAddress, here: CurrentPlace): Int {
-        val line = address.line.lowercase()
-        fun has(part: String) = part.length > 2 && line.contains(part.lowercase())
+    fun matchScore(line: String, here: CurrentPlace): Int {
+        val text = line.lowercase()
+        fun has(part: String) = part.length > 2 && text.contains(part.lowercase())
         return (if (has(here.pincode)) 4 else 0) + (if (has(here.area)) 2 else 0) + (if (has(here.city)) 1 else 0)
     }
 }

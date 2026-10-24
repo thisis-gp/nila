@@ -27,13 +27,6 @@ class ZomatoDishesTest {
     }
 
     @Test
-    fun theCheaperAppIsSaidInWords() {
-        assertEquals("₹20 cheaper on Zomato", priceGap(swiggy = 299, zomato = 279))
-        assertEquals("₹15 cheaper on Swiggy", priceGap(swiggy = 280, zomato = 295))
-        assertEquals("Same price on Zomato", priceGap(swiggy = 250, zomato = 250))
-    }
-
-    @Test
     fun theSameDishAtTheSameShopIsMatched() {
         val shop = ZomatoShop("Meghana Foods", listOf(ZomatoDish("Chicken Boneless Biryani", 330), ZomatoDish("Mutton Biryani", 380)))
         assertEquals(330, shop.sameAs("Chicken Boneless Biryani · Regular")?.price)
@@ -51,20 +44,12 @@ class ZomatoDishesTest {
     }
 
     @Test
-    fun thePriceLineIsTyped() {
+    fun theMenuLineUsesTheSharedPriceLine() {
         val shop = ZomatoShop("Meghana Foods", listOf(ZomatoDish("Butter Chicken", 280)))
-        val cheaper = zomatoLine(ZomatoLookup(loading = false, shop = shop), "Butter Chicken", "₹299.50")
-        assertEquals("Zomato ₹280 · ₹19 cheaper on Zomato", cheaper.text)
-        assertTrue(cheaper.cheaperOnZomato)
-        assertFalse(zomatoLine(ZomatoLookup(loading = false, shop = shop), "Paneer Butter Masala", "₹250").cheaperOnZomato)
-        assertEquals("Zomato: $NO_ANSWER", zomatoLine(ZomatoLookup(false, ZomatoShop("X", emptyList(), NO_ANSWER)), "Butter Chicken", "₹1").text)
+        assertEquals(DishPrice.Found(28_000), shopDishPrice(ZomatoLookup(loading = false, shop = shop), "Butter Chicken · Regular"))
+        assertEquals(DishPrice.Missing, shopDishPrice(ZomatoLookup(loading = false, shop = shop), "Paneer Butter Masala"))
+        assertNull(shopDishPrice(ZomatoLookup(loading = true, shop = null), "Butter Chicken"))
+        assertEquals(DishPrice.Failed(NO_ANSWER), shopDishPrice(ZomatoLookup(false, ZomatoShop("X", emptyList(), NO_ANSWER)), "Butter Chicken"))
         assertEquals(199.5, priceRupees("₹199.50")!!, 0.0)
-    }
-
-    @Test
-    fun addressFailureIsDifferentFromNoMatchingAddress() {
-        assertEquals(ZomatoAddress.Failed, addressResult(answered = false, id = null))
-        assertEquals(ZomatoAddress.Empty, addressResult(answered = true, id = null))
-        assertEquals(ZomatoAddress.Found("42"), addressResult(answered = true, id = "42"))
     }
 }

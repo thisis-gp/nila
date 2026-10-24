@@ -1,5 +1,6 @@
 package com.nila.launcher
 
+import java.util.Locale
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -63,6 +64,23 @@ internal fun NilaScreenCatalogue(
     onForgetAll: () -> Unit,
     onWelcomeTour: () -> Unit,
     accounts: List<ServiceAccount>,
+    mcpTools: List<DynamicMcpTool>,
+    customMcpServers: List<McpServer>,
+    mcpServerStatus: String?,
+    mcpBusy: Boolean,
+    onAddMcpServer: (String, String, String) -> Unit,
+    onRemoveMcpServer: (String) -> Unit,
+    modelStatus: String,
+    modelOptions: List<ModelOption>,
+    selectedModelId: String?,
+    onSelectModel: (String) -> Unit,
+    skills: List<NilaSkill>,
+    workflows: List<NilaWorkflow>,
+    capabilities: List<CapabilityDescriptor>,
+    onSaveSkill: (NilaSkill) -> Unit,
+    onDeleteSkill: (String) -> Unit,
+    onSaveWorkflow: (NilaWorkflow) -> Boolean,
+    onDeleteWorkflow: (String) -> Unit,
 ) {
     when (screen) {
         NilaScreen.Welcome -> WelcomeScreen(onOpen)
@@ -75,14 +93,128 @@ internal fun NilaScreenCatalogue(
         NilaScreen.ActionResult -> ActionResultScreen(onOpen)
         NilaScreen.People -> PeopleScreen(onOpen, onBack)
         NilaScreen.Memory -> MemoryScreen(onOpen, onBack, facts, onForgetFact, onForgetAll)
-        NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
+        NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack, mcpTools)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
-        NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, onWelcomeTour, facts, accounts)
+        NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, onWelcomeTour, facts, accounts, customMcpServers, mcpServerStatus, mcpBusy, onAddMcpServer, onRemoveMcpServer, modelStatus, modelOptions, selectedModelId, onSelectModel)
+        NilaScreen.Skills -> SkillBuilderScreen(onOpen, onBack, skills, workflows, capabilities, onSaveSkill, onDeleteSkill, onSaveWorkflow, onDeleteWorkflow)
         NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
         NilaScreen.PhoneAccess -> Page("PHONE ACCESS", onOpen, onBack) { PhoneAccessTab() }
+        NilaScreen.ScreenGuidance -> ScreenGuidanceScreen(onBack)
         // Drawn by MainActivity, which holds their state (installed apps, the app being built).
         NilaScreen.Home, NilaScreen.Nila, NilaScreen.Apps, NilaScreen.MyNila, NilaScreen.MiniApp, NilaScreen.AppReview -> Unit
     }
+}
+
+@Composable
+private fun SkillBuilderScreen(
+    onOpen: (NilaScreen) -> Unit,
+    onBack: () -> Unit,
+    skills: List<NilaSkill>,
+    workflows: List<NilaWorkflow>,
+    capabilities: List<CapabilityDescriptor>,
+    onSave: (NilaSkill) -> Unit,
+    onDelete: (String) -> Unit,
+    onSaveWorkflow: (NilaWorkflow) -> Boolean,
+    onDeleteWorkflow: (String) -> Unit,
+) = Page("SKILL BUILDER", onOpen, onBack) {
+    var name by remember { mutableStateOf("") }
+    var trigger by remember { mutableStateOf("") }
+    var arguments by remember { mutableStateOf("") }
+    var selected by remember { mutableStateOf(capabilities.firstOrNull()?.id.orEmpty()) }
+    var menu by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var workflowName by remember { mutableStateOf("") }
+    var workflowTrigger by remember { mutableStateOf("") }
+    var workflowSteps by remember { mutableStateOf("") }
+    var workflowError by remember { mutableStateOf<String?>(null) }
+    val capability = capabilities.firstOrNull { it.id == selected }
+
+    ScreenTitle("Build a skill")
+    BodyText("Make a phrase for one existing NILA tool. Skills are stored on this phone; they cannot add permissions or run code.")
+    OutlinedTextField(name, { if (it.length <= 60) name = it; error = null }, label = { Text("Skill name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(trigger, { if (it.length <= 120) trigger = it; error = null }, label = { Text("Exact phrase to say") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    Box {
+        SecondaryButton("Tool: ${capability?.id ?: "Choose"}") { menu = true }
+        androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            capabilities.forEach { item ->
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text(item.id, color = Paper) },
+                    onClick = { selected = item.id; menu = false; error = null },
+                )
+            }
+        }
+    }
+    OutlinedTextField(
+        arguments,
+        { if (it.length <= 500) arguments = it; error = null },
+        label = { Text("Arguments (key=value, comma-separated)") },
+        supportingText = { Text(capability?.params?.joinToString { "${it.name}${if (it.required) "*" else ""}" } ?: "") },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    error?.let { Text(it, color = Orange) }
+    PrimaryButton("Save skill") {
+        val parsed = parseSkillArguments(arguments)
+        val candidate = capability?.let {
+            NilaSkill(NilaSkillStore.newId(), name.trim(), trigger.trim(), it.id, parsed.orEmpty())
+        }
+        when {
+            parsed == null -> error = "Use unique key=value arguments, separated by commas."
+            candidate == null -> error = "Choose one of NILA's tools."
+            skills.size >= MAX_NILA_SKILLS -> error = "NILA can store up to $MAX_NILA_SKILLS skills."
+            skills.any { skillTriggerKey(it.trigger) == skillTriggerKey(candidate.trigger) } || workflows.any { skillTriggerKey(it.trigger) == skillTriggerKey(candidate.trigger) } -> error = "A skill or workflow already uses that phrase."
+            skillCall(candidate, capabilities.associateBy { it.id }) == null -> error = "Provide valid values for the tool's required arguments."
+            else -> {
+                onSave(candidate)
+                name = ""; trigger = ""; arguments = ""; error = null
+            }
+        }
+    }
+    if (skills.isEmpty()) NilaCard { BodyText("No skills yet. Create one above.") }
+    skills.forEach { skill ->
+        NilaCard {
+            Text(skill.name, color = Paper, fontWeight = FontWeight.Bold)
+            BodyText("\"${skill.trigger}\" → ${skill.capabilityId}")
+            TextAction("Delete", onClick = { onDelete(skill.id) }, color = Orange)
+        }
+    }
+    BodyText("Only the exact phrase runs a skill. Commit tools still stop for NILA's normal confirmation.")
+
+    Spacer(Modifier.height(18.dp))
+    ScreenTitle("Build a workflow")
+    BodyText("Create a private, exact-phrase routine from existing NILA tools. Each line runs in order; no code or background agents are generated. Commit steps stop for your confirmation.")
+    OutlinedTextField(workflowName, { if (it.length <= 60) workflowName = it; workflowError = null }, label = { Text("Workflow name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(workflowTrigger, { if (it.length <= 120) workflowTrigger = it; workflowError = null }, label = { Text("Exact phrase to run") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(
+        workflowSteps,
+        { if (it.length <= 4_000) workflowSteps = it; workflowError = null },
+        label = { Text("One tool per line") },
+        supportingText = { Text("Example: battery\nset_timer: minutes=5") },
+        minLines = 3,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    workflowError?.let { Text(it, color = Orange) }
+    PrimaryButton("Save workflow") {
+        val steps = parseWorkflowSteps(workflowSteps, capabilities.associateBy { it.id })
+        val candidate = NilaWorkflow(NilaWorkflowStore.newId(), workflowName.trim(), workflowTrigger.trim(), steps.orEmpty())
+        when {
+            workflowName.isBlank() || workflowName.length > 60 -> workflowError = "Add a name up to 60 characters."
+            workflowTrigger.isBlank() || workflowTrigger.length > 120 -> workflowError = "Add an exact phrase up to 120 characters."
+            steps == null -> workflowError = "Use up to $MAX_NILA_WORKFLOW_STEPS valid tool lines with typed arguments."
+            workflowCalls(candidate, capabilities.associateBy { it.id }) == null -> workflowError = "Check the steps and their arguments."
+            workflows.size >= MAX_NILA_WORKFLOWS -> workflowError = "NILA stores up to $MAX_NILA_WORKFLOWS workflows."
+            workflows.any { skillTriggerKey(it.trigger) == skillTriggerKey(candidate.trigger) } || skills.any { skillTriggerKey(it.trigger) == skillTriggerKey(candidate.trigger) } -> workflowError = "A skill or workflow already uses that phrase."
+            !onSaveWorkflow(candidate) -> workflowError = "Workflow could not be saved securely."
+            else -> { workflowName = ""; workflowTrigger = ""; workflowSteps = ""; workflowError = null }
+        }
+    }
+    workflows.forEach { workflow ->
+        NilaCard {
+            Text(workflow.name, color = Paper, fontWeight = FontWeight.Bold)
+            BodyText("\"${workflow.trigger}\" · ${workflow.steps.size} sequential steps")
+            TextAction("Delete", onClick = { onDeleteWorkflow(workflow.id) }, color = Orange)
+        }
+    }
+    BodyText("Workflows start only when you use their exact phrase. They preview before running and pause for each Commit confirmation. Interactive provider steps hand off instead of running unattended.")
 }
 
 @Composable
@@ -222,15 +354,25 @@ private fun MemoryScreen(
 }
 
 @Composable
-private fun CapabilitiesScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = Page("CAPABILITIES", onOpen, onBack) {
+private fun CapabilitiesScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit, mcpTools: List<DynamicMcpTool>) = Page("CAPABILITIES", onOpen, onBack) {
     ScreenTitle("What NILA\ncan use.")
     BodyText("Only Android actions marked available work in this build. Integrations marked mock are not live.")
     SectionCard("Calculator", "Deterministic · offline", "AVAILABLE")
     SectionCard("Alarms", "Android intent", "AVAILABLE")
     SectionCard("App redirects", "Installed app or browser fallback", "AVAILABLE")
     SectionCard("Memory", "Typed facts on this device, used by chat and food", "AVAILABLE")
-    SectionCard("Food", "Hard-coded comparison", "MOCK PROVIDER")
-    SectionCard("Messages & routes", "Catalogue preview only", "MOCK")
+    androidx.compose.material3.OutlinedButton(onClick = { onOpen(NilaScreen.ScreenGuidance) }) {
+        Text("Suggest screen controls · on-device · no automatic taps")
+    }
+    SectionCard("Food", "Swiggy and Zomato MCP; groceries through Zepto and Instamart", "LIVE WHEN CONNECTED")
+    if (mcpTools.isEmpty()) {
+        SectionCard("MCP tools", "Connect Swiggy, Zomato or Zepto in Settings to discover server tools", "NOT CONNECTED")
+    } else {
+        mcpTools.groupBy(DynamicMcpTool::serverName).forEach { (server, tools) ->
+            SectionCard("$server MCP", "${tools.size} tools discovered. Each dynamic call asks before running.", tools.joinToString(", ") { it.name }.take(180))
+        }
+    }
+    SectionCard("Messages & routes", "Drafts and map links use Android apps", "AVAILABLE")
 }
 
 @Composable
@@ -392,30 +534,34 @@ private fun LanguagesScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = 
     val context = LocalContext.current
     var output by remember { mutableStateOf<Map<String, SpeechOutputStatus>>(emptyMap()) }
     var checks by remember { mutableStateOf(0) }
+    var probed by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(checks) { probeSpeechOutput(context) { output = it } }
+    LaunchedEffect(checks) { probeSpeechOutput(context) { output = it; probed = true } }
 
     ScreenTitle("Speak in your\nlanguage.")
-    BodyText("Gemma 4 E2B listens to every language on this phone, with nothing sent online. Just speak: it works out which language you used. Typing always works too.")
-    voiceLanguages.forEach { language ->
-        val speaking = output[language.tag]
+    BodyText("Voice capture and transcription use on-device Gemma 4 E2B. Transcription language coverage has not been validated on this phone. Typing always works too.")
+    output.forEach { (tag, speaking) ->
+        val language = Locale.forLanguageTag(tag).getDisplayName(Locale.getDefault()).ifBlank { tag }
         SectionCard(
-            title = language.name,
-            detail = "Listening: Gemma 4 E2B on this phone\nSpeaking:${(speaking ?: SpeechOutputStatus.UNKNOWN).label}",
+            title = language,
+            detail = "Transcription: not verified\nSpeaking: ${speaking.label}",
             status = when (speaking) {
-                null -> "CHECKING…"
-                SpeechOutputStatus.OFFLINE -> "LISTENS AND SPEAKS · OFFLINE"
-                else -> "LISTENS · REPLIES IN TEXT"
+                SpeechOutputStatus.OFFLINE -> "SPEECH OUTPUT · OFFLINE"
+                SpeechOutputStatus.NEEDS_DOWNLOAD -> "SPEECH OUTPUT · DOWNLOAD VOICE"
+                SpeechOutputStatus.ONLINE_ONLY -> "SPEECH OUTPUT · NETWORK-DEPENDENT"
+                else -> "SPEECH OUTPUT · NOT AVAILABLE OFFLINE"
             },
         )
     }
-    if (output.values.any { it == SpeechOutputStatus.NEEDS_DOWNLOAD || it == SpeechOutputStatus.UNAVAILABLE }) {
+    if (!probed) BodyText("Checking the voices installed on this phone…")
+    else if (output.isEmpty()) BodyText("No available text-to-speech voices were reported by Android.")
+    if (output.values.any { it != SpeechOutputStatus.OFFLINE }) {
         SecondaryButton("Install speaking voices") {
             if (!installSpeechOutput(context)) message = "No voice installer is available on this phone."
         }
     }
     message?.let { BodyText(it, Lime) }
-    PrimaryButton("Check again") { message = null; checks++ }
+    PrimaryButton("Check again") { message = null; probed = false; checks++ }
 }
 
 @Composable

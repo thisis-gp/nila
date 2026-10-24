@@ -20,6 +20,8 @@ enum class NilaScreen {
     Languages,
     MyNila,
     PhoneAccess,
+    ScreenGuidance,
+    Skills,
     /** An app NILA built, opened full screen. */
     MiniApp,
     /** What the App Builder made, before install. */

@@ -100,6 +100,7 @@ import android.content.BroadcastReceiver
 import android.content.IntentFilter
 import java.time.LocalTime
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -148,6 +149,40 @@ class MainActivity : FragmentActivity() {
 
 data class Turn(val user: String, val response: NilaResponse)
 
+private fun executeMcpTool(context: Context, invocation: NilaResponse.McpToolInvocation): NilaResponse.Text = runCatching {
+    val arguments = org.json.JSONObject(invocation.arguments)
+    val result = when (invocation.serverId) {
+        "swiggy" -> {
+            val session = SwiggyAuth.currentSession(context) ?: error("Swiggy session expired; reconnect in Settings.")
+            McpClient("${SWIGGY.base}/food", session.accessToken).callTool(invocation.toolName, arguments)
+                ?: error("Swiggy did not complete this tool.")
+        }
+        "zomato" -> {
+            val session = ZomatoAuth.currentSession(context) ?: error("Zomato session expired; reconnect in Settings.")
+            McpClient("${ZOMATO.base}/mcp", session.accessToken).callTool(invocation.toolName, arguments)
+                ?: error("Zomato did not complete this tool.")
+        }
+        "zepto" -> ZeptoMcpClient(ZeptoAuth(context)).callTool(invocation.toolName, arguments)
+        else -> {
+            val server = McpServerStore(context).all().firstOrNull { it.id == invocation.serverId }
+                ?: error("This MCP server was removed.")
+            McpClient(server.endpoint, server.bearerToken.takeIf(String::isNotBlank)).callTool(invocation.toolName, arguments)
+                ?: error("${server.name} did not complete this tool.")
+        }
+    }
+    if (result.optBoolean("isError")) error("The service reported that this tool failed.")
+    val text = result.optJSONArray("content")?.optJSONObject(0)?.optString("text").orEmpty().trim()
+    val output = text.ifBlank { result.optJSONObject("structuredContent")?.toString(2) ?: result.toString(2) }
+    NilaResponse.Text(output.take(4000).ifBlank { "The service completed the tool without a text result." })
+}.getOrElse { error ->
+    val message = when (error.message) {
+        "Swiggy session expired; reconnect in Settings." -> "Swiggy session expired; reconnect in Settings."
+        "Zomato session expired; reconnect in Settings." -> "Zomato session expired; reconnect in Settings."
+        else -> "The connected service didn't complete this tool."
+    }
+    NilaResponse.Text(message)
+}
+
 internal val Ink = Color(0xFF151513)
 internal val Panel = Color(0xFF22221F)
 internal val CardInk = Color(0xFF2D2D29)
@@ -167,9 +202,15 @@ private fun NilaApp(resumeVersion: Int) {
     val memory = remember { NilaMemory(context.applicationContext) }
     val facts by memory.factsFlow.collectAsState()
     val health = remember { HealthStore(context.applicationContext) }
+    val skillStore = remember { NilaSkillStore(context.applicationContext) }
+    var skillsRevision by remember { mutableIntStateOf(0) }
+    val chatSkills = remember(skillsRevision) { skillStore.all() }
+    val workflowStore = remember { NilaWorkflowStore(context.applicationContext) }
+    var workflowsRevision by remember { mutableIntStateOf(0) }
+    val workflows = remember(workflowsRevision) { workflowStore.all() }
     LaunchedEffect(health) { withContext(Dispatchers.IO) { health.sweep() } }
     val reminders = remember { NilaReminders(context.applicationContext) }
-    val brain = remember { NilaBrain(context.applicationContext, engine, { memory.facts() }, { health.records() }) }
+    val brain = remember { NilaBrain(context.applicationContext, engine, { memory.facts() }, { health.records() }, skillStore::all) }
     // Lakshmi speaks replies to spoken requests; typed requests stay silent.
     val lakshmi = remember { Lakshmi(context) }
     DisposableEffect(lakshmi) { onDispose { lakshmi.close() } }
@@ -187,6 +228,7 @@ private fun NilaApp(resumeVersion: Int) {
         if (needsNotificationPermission(context)) askNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
     }
     var input by remember { mutableStateOf("") }
+    var workflowRun by remember { mutableStateOf<NilaWorkflowRun?>(null) }
     val installedApps = remember(context, resumeVersion) { loadInstalledApps(context) }
     val launcherPreferences = remember(context) { context.getSharedPreferences("nila_launcher", Context.MODE_PRIVATE) }
     val pinnedPackages = remember(installedApps, launcherPreferences) {
@@ -208,6 +250,9 @@ private fun NilaApp(resumeVersion: Int) {
     val navigation = remember { NilaNavigation(NilaScreen.Home) }
     var screen by remember { mutableStateOf(navigation.current) }
     var overlayScreen by remember { mutableStateOf(screen) }
+    LaunchedEffect(overlayScreen) {
+        if (overlayScreen == NilaScreen.Settings) brain.refreshModelChoices()
+    }
     if (screen != NilaScreen.Home && screen != NilaScreen.MyNila) overlayScreen = screen
     // 0 = home, 1 = My NILA fully open; dragged by the finger, then settled with a spring.
     val sidePanel = remember { Animatable(0f) }
@@ -229,10 +274,28 @@ private fun NilaApp(resumeVersion: Int) {
 
     val scope = rememberCoroutineScope()
     var isThinking by remember { mutableStateOf(false) }
+    var thinkingMessage by remember { mutableStateOf("Looking that up…") }
+    LaunchedEffect(isThinking) {
+        thinkingMessage = "Looking that up…"
+        if (isThinking) {
+            delay(1800)
+            thinkingMessage = "Sorting the useful bits…"
+            delay(3500)
+            thinkingMessage = "Still with you — checking one more thing…"
+        }
+    }
     var justReplied by remember { mutableStateOf(false) }
     val swiggySession = remember(SignIns.revision) { SwiggyAuth.currentSession(context) }
     val zomatoSession = remember(SignIns.revision) { ZomatoAuth.currentSession(context) }
-    val foodFlow = remember { FoodFlow(context.applicationContext) }
+    val foodQuotes = remember { FoodQuotes(context.applicationContext, scope) }
+    val dishQuotes = remember { DishQuotes(context.applicationContext, scope) }
+    val addressSync = remember { NilaAddressSync(context.applicationContext, scope) }
+    val zeptoAuth = remember { ZeptoAuth(context) }
+    val foodFlow = remember {
+        FoodFlow(context.applicationContext, foodQuotes, dishQuotes, addressSync, listOf("Zepto" to suspend { zeptoSavedAddresses(zeptoAuth) }))
+    }
+    // A sign-in from the comparison's "Sign in" row prices that app on the open card.
+    LaunchedEffect(SignIns.revision) { foodQuotes.refresh() }
     val instamart = remember { InstamartShop(context.applicationContext) }
 
     /** Runs one Swiggy step as its own chat turn, with the same thinking state as a typed request. */
@@ -262,15 +325,28 @@ private fun NilaApp(resumeVersion: Int) {
     val foodActions = remember {
         object : FoodActions {
             override fun locate(query: String) =
-                runFood("Use my current location") { foodFlow.start(query) }
+                runFood("Use my current location") { foodFlow.chooseAddress(query) }
             override fun refine(address: FoodAddress, search: NilaResponse.FoodSearch) =
                 runFood(foodIntentTitle(search)) { foodFlow.refine(address, search) }
-            override fun pickAddress(address: FoodAddress, query: String) =
+            override fun pickAddress(address: NilaAddress, query: String) =
                 runFood("Deliver to ${address.label}") { foodFlow.deliverTo(address, query) }
+            override fun addressSync() = addressSync.state
             override fun applyCoupon(payment: FoodCard.Payment, coupon: FoodCoupon) =
                 runFood("Apply ${coupon.code}") { foodFlow.applyCoupon(payment, coupon) }
-            override fun zomatoTotal(payment: FoodCard.Payment, method: String) =
-                runFood("Check Zomato total") { foodFlow.zomatoTotal(payment, method) }
+            override fun quotes() = foodQuotes.state
+            override fun dishPrices() = dishQuotes.state
+            override fun retryQuote(providerId: String) = foodQuotes.retry(providerId)
+            override fun signIn(provider: FoodProvider) =
+                SignIns.start(provider.auth, context) {
+                    Toast.makeText(context.applicationContext, "${provider.name} sign-in didn't complete.", Toast.LENGTH_SHORT).show()
+                }
+            override fun openApp(provider: FoodProvider) {
+                val pkg = provider.appPackage ?: return
+                val launch = context.packageManager.getLaunchIntentForPackage(pkg)
+                    ?: Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pkg"))
+                runCatching { context.startActivity(launch) }
+                    .onFailure { Toast.makeText(context, "${provider.name} can't be opened.", Toast.LENGTH_SHORT).show() }
+            }
             override fun back(card: FoodCard) = runFood("Back") { NilaResponse.Food(card) }
             override suspend fun zomatoShop(address: FoodAddress, restaurant: FoodRestaurant) = foodFlow.zomatoShop(address, restaurant)
             override suspend fun zomatoNearby(address: FoodAddress) = foodFlow.zomatoNearby(address)
@@ -312,7 +388,6 @@ private fun NilaApp(resumeVersion: Int) {
     }
 
     val keyboard = LocalSoftwareKeyboardController.current
-    val zeptoAuth = remember { ZeptoAuth(context) }
     // Zepto runs as the same step-by-step sheet as Swiggy food (ZeptoCards.kt).
     val groceryFlow = remember { GroceryFlow(context.applicationContext, zeptoAuth, instamart, scope) { turns += Turn("Zepto", NilaResponse.Text(it)) } }
 
@@ -338,6 +413,86 @@ private fun NilaApp(resumeVersion: Int) {
     val tavilyAuth = remember { TavilyAuth(context) }
     // Bumped when Settings connects or disconnects an account, so its cards re-read who is signed in.
     var accountsRevision by remember { mutableIntStateOf(0) }
+    var mcpRegistryRevision by remember { mutableIntStateOf(0) }
+    val mcpServerStore = remember { McpServerStore(context.applicationContext) }
+    val customMcpServers = remember(accountsRevision) { mcpServerStore.all() }
+    var mcpServerStatus by remember { mutableStateOf<String?>(null) }
+    var mcpBusy by remember { mutableStateOf(false) }
+    LaunchedEffect(SignIns.revision, accountsRevision) {
+        val swiggy = async(Dispatchers.IO) {
+            val session = swiggySession
+            if (session == null) emptyList() else runCatching {
+                DynamicMcpToolRegistry.parse("swiggy", "Swiggy", McpClient("${SWIGGY.base}/food", session.accessToken).listToolsRaw())
+            }.getOrNull()
+        }
+        val zomato = async(Dispatchers.IO) {
+            val session = zomatoSession
+            if (session == null) emptyList() else runCatching {
+                DynamicMcpToolRegistry.parse("zomato", "Zomato", McpClient("${ZOMATO.base}/mcp", session.accessToken).listToolsRaw())
+            }.getOrNull()
+        }
+        val zepto = async(Dispatchers.IO) {
+            if (!zeptoAuth.isConnected) emptyList() else runCatching {
+                DynamicMcpToolRegistry.parse("zepto", "Zepto", ZeptoMcpClient(zeptoAuth).listToolsRaw())
+            }.getOrNull()
+        }
+        engine.replaceMcpTools("swiggy", swiggy.await())
+        engine.replaceMcpTools("zomato", zomato.await())
+        engine.replaceMcpTools("zepto", zepto.await())
+        val custom = customMcpServers.map { server ->
+            async(Dispatchers.IO) {
+                server to runCatching {
+                    val raw = McpClient(server.endpoint, server.bearerToken.takeIf(String::isNotBlank)).listToolsRaw()
+                    DynamicMcpToolRegistry.parse(server.id, server.name, raw)
+                }.getOrNull()
+            }
+        }
+        custom.forEach { task ->
+            val (server, tools) = task.await()
+            engine.replaceMcpTools(server.id, tools)
+        }
+        mcpRegistryRevision++
+    }
+
+    fun addMcpServer(name: String, endpoint: String, token: String) {
+        if (mcpBusy) return
+        mcpBusy = true
+        mcpServerStatus = "Checking the HTTPS endpoint and supported tools…"
+        scope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                val raw = McpClient(endpoint, token.takeIf(String::isNotBlank)).listToolsRaw()
+                val preview = DynamicMcpToolRegistry.parse("candidate", name, raw)
+                require(preview.isNotEmpty()) { "No supported flat tools were found. Server was not saved." }
+                val server = mcpServerStore.add(name, endpoint, token).getOrThrow()
+                server to DynamicMcpToolRegistry.parse(server.id, server.name, raw)
+            }
+            withContext(Dispatchers.Main) {
+                mcpBusy = false
+                result.onSuccess { (server, tools) ->
+                    engine.replaceMcpTools(server.id, tools)
+                    mcpServerStatus = "Added ${server.name}; ${tools.size} supported tools discovered. Calls always need confirmation."
+                    accountsRevision++
+                }.onFailure { error ->
+                    // Do not surface server response bodies or request exceptions that could contain secrets.
+                    mcpServerStatus = when (error.message) {
+                        "No supported flat tools were found. Server was not saved." -> error.message
+                        else -> "Couldn't add that server. Check its HTTPS endpoint, token and supported MCP schema."
+                    }
+                }
+            }
+        }
+    }
+
+    fun removeMcpServer(id: String) {
+        val server = customMcpServers.firstOrNull { it.id == id } ?: return
+        if (!mcpServerStore.remove(id)) {
+            mcpServerStatus = "Couldn't remove this server securely."
+            return
+        }
+        engine.replaceMcpTools(id, emptyList())
+        mcpServerStatus = "Removed ${server.name}."
+        accountsRevision++
+    }
 
     /**
      * Groceries: Zepto and Swiggy Instamart side by side. Reached when the router picks search_groceries;
@@ -383,6 +538,75 @@ private fun NilaApp(resumeVersion: Int) {
             val answer = found?.summary ?: brain.answerFromWeb(query, sources) ?: "I couldn't find a clear answer to that."
             withContext(Dispatchers.Main) { turns += Turn("Web search", WebAnswer(query, answer, sources)) }
         }
+    }
+
+    fun runWorkflowStep(index: Int) {
+        val run = workflowRun ?: return
+        if (index >= run.calls.size) {
+            workflowRun = null
+            turns += Turn("Workflow complete", NilaResponse.Text("${run.workflow.name} finished."))
+            return
+        }
+        val call = run.calls[index]
+        val capability = engine.capabilities.getValue(call.capabilityId)
+        val heading = "${run.workflow.name} · step ${index + 1}/${run.calls.size}"
+        if (capability.needsConfirmation) {
+            val pending = engine.execute(NilaIntent.Call(call)) as? NilaResponse.NeedsConfirmation
+            if (pending != null) {
+                workflowRun = run.copy(nextIndex = index, pendingToken = pending.token)
+                turns += Turn(heading, NilaResponse.WorkflowCommit(run.workflow.name, index + 1, run.calls.size, pending))
+            } else {
+                workflowRun = null
+                turns += Turn(heading, NilaResponse.WorkflowHandoff(run.workflow.name, "This commit step could not be prepared; later steps were not run."))
+            }
+            return
+        }
+        if (!workflowCanRunWithoutHandoff(capability)) {
+            workflowRun = null
+            turns += Turn(heading, NilaResponse.WorkflowHandoff(run.workflow.name, "${capability.label} needs an interactive app or provider review. No later steps were run."))
+            return
+        }
+        val response = performNow(context, engine.execute(NilaIntent.Call(call)))
+        turns += Turn(heading, response)
+        workflowRun = run.copy(nextIndex = index + 1)
+        runWorkflowStep(index + 1)
+    }
+
+    fun startWorkflow(workflow: NilaWorkflow) {
+        if (workflowRun != null) {
+            turns += Turn(workflow.name, NilaResponse.Text("Another workflow is already running."))
+            return
+        }
+        val calls = workflowCalls(workflow, engine.capabilities)
+        if (calls == null) {
+            turns += Turn(workflow.name, NilaResponse.Text("This workflow is no longer valid. Nothing was run."))
+            return
+        }
+        workflowRun = NilaWorkflowRun(workflow, calls, 0)
+        runWorkflowStep(0)
+    }
+
+    fun confirmWorkflow(token: String) {
+        val run = workflowRun
+        val pending = turns.indexOfFirst { (it.response as? NilaResponse.WorkflowCommit)?.confirmation?.token == token }
+        if (pending < 0 || run?.pendingToken != token) return
+        val result = engine.confirm(token).let { if (it is NilaResponse.DismissAlarm) dismissAlarm(context, it) else it }
+        turns[pending] = turns[pending].copy(response = result)
+        if (result is NilaResponse.Text) {
+            workflowRun = run.copy(nextIndex = run.nextIndex + 1, pendingToken = null)
+            runWorkflowStep(run.nextIndex + 1)
+        } else {
+            workflowRun = null
+            turns += Turn("Workflow paused", NilaResponse.WorkflowHandoff(run.workflow.name, "The confirmed action needs an interactive follow-up. Later steps were not run."))
+        }
+    }
+
+    fun cancelWorkflow(token: String) {
+        engine.cancel(token)
+        val index = turns.indexOfFirst { (it.response as? NilaResponse.WorkflowCommit)?.confirmation?.token == token }
+        if (index < 0) return
+        turns[index] = turns[index].copy(response = NilaResponse.Text("Canceled. This commit and later workflow steps were not run."))
+        workflowRun = null
     }
 
     fun submit(prompt: String = input) {
@@ -476,6 +700,7 @@ private fun NilaApp(resumeVersion: Int) {
         scope.launch {
             delay(550) // a visible thinking beat, so a reply doesn't feel like a canned instant lookup
             val normalized = prompt.lowercase()
+            val matchedWorkflow = matchingWorkflow(prompt, workflows)
             val response = if (asksForSteps(prompt)) {
                 val today = java.time.LocalDate.now()
                 val store = FitnessStore(context)
@@ -487,6 +712,8 @@ private fun NilaApp(resumeVersion: Int) {
                     week = lastDays(state, today),
                     trackingStarted = hasStepPermission(context) && !baselineExists,
                 )
+            } else if (matchedWorkflow != null) {
+                NilaResponse.WorkflowPreview(matchedWorkflow)
             } else if (normalized.contains("what do you remember")) {
                 NilaResponse.Private(memorySummary(facts))
             } else if (Regex("""\b(show|read|list|open|what are)\b.*\bnotes?\b""").containsMatchIn(prompt.lowercase())) {
@@ -718,8 +945,8 @@ private fun NilaApp(resumeVersion: Int) {
                                 turns = turns,
                                 input = input,
                                 isThinking = isThinking,
-                                modelStatus = "Gemma 4 E2B ${brain.assistantState.label} · FunctionGemma ${brain.routerState.label}" +
-                                    (brain.loadError?.let { "\n$it" } ?: ""),
+                                thinkingMessage = thinkingMessage,
+                                modelStatus = brain.modelStatus,
                                 transcribe = brain::transcribe,
                                 onInput = { input = it },
                                 onSubmit = ::submit,
@@ -733,19 +960,33 @@ private fun NilaApp(resumeVersion: Int) {
                                 confirm = { token ->
                                     // Replace the card with its result so the Confirm button cannot be tapped again.
                                     val index = turns.indexOfFirst { (it.response as? NilaResponse.NeedsConfirmation)?.token == token }
-                                    val result = engine.confirm(token).let {
-                                        when (it) {
-                                            is NilaResponse.DismissAlarm -> dismissAlarm(context, it)
+                                    val confirmed = engine.confirm(token)
+                                    if (confirmed is NilaResponse.McpToolInvocation) {
+                                        if (index >= 0) turns[index] = turns[index].copy(response = NilaResponse.Text("Running ${confirmed.toolName} on ${confirmed.serverId}…"))
+                                        isThinking = true
+                                        scope.launch(Dispatchers.IO) {
+                                            val result = executeMcpTool(context, confirmed)
+                                            withContext(Dispatchers.Main) {
+                                                if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
+                                                isThinking = false
+                                            }
+                                        }
+                                    } else {
+                                        val result = when (confirmed) {
+                                            is NilaResponse.DismissAlarm -> dismissAlarm(context, confirmed)
                                             is RemoveMiniApp -> {
-                                                val title = skills.get(it.appId)?.title ?: "That app"
-                                                skills.uninstall(it.appId)
+                                                val title = skills.get(confirmed.appId)?.title ?: "That app"
+                                                skills.uninstall(confirmed.appId)
                                                 NilaResponse.Text("Deleted $title and everything saved in it.")
                                             }
-                                            else -> it
+                                            else -> confirmed
                                         }
+                                        if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
                                     }
-                                    if (index >= 0) turns[index] = turns[index].copy(response = result) else turns += Turn("Action result", result)
                                 },
+                                runWorkflow = ::startWorkflow,
+                                confirmWorkflow = ::confirmWorkflow,
+                                cancelWorkflow = ::cancelWorkflow,
                                 food = foodActions,
                                 suggestion = homeSuggestion(facts, java.time.LocalDateTime.now()),
                                 grocery = groceryActions,
@@ -790,6 +1031,19 @@ private fun NilaApp(resumeVersion: Int) {
                                 onForgetAll = { scope.launch { memory.clear() } },
                                 onWelcomeTour = { showWelcome = true },
                                 facts = facts,
+                                mcpTools = remember(engine, mcpRegistryRevision) { engine.dynamicMcpTools() },
+                                customMcpServers = customMcpServers,
+                                mcpServerStatus = mcpServerStatus,
+                                mcpBusy = mcpBusy,
+                                onAddMcpServer = ::addMcpServer,
+                                onRemoveMcpServer = ::removeMcpServer,
+                                skills = chatSkills,
+                                workflows = workflows,
+                                capabilities = engine.capabilities.values.toList(),
+                                onSaveSkill = { skill -> skillStore.save(skill); skillsRevision++ },
+                                onDeleteSkill = { id -> skillStore.delete(id); skillsRevision++ },
+                                onSaveWorkflow = { workflow -> workflowStore.save(workflow, engine.capabilities).also { if (it) workflowsRevision++ } },
+                                onDeleteWorkflow = { id -> workflowStore.delete(id); workflowsRevision++ },
                                 accounts = accountsRevision.let { listOf(
                                     ServiceAccount(
                                         name = "Swiggy",
@@ -844,6 +1098,15 @@ private fun NilaApp(resumeVersion: Int) {
                                         },
                                     ),
                                 ) },
+                                modelStatus = brain.modelStatus,
+                                modelOptions = brain.modelOptions,
+                                selectedModelId = brain.selectedAssistantId,
+                                onSelectModel = { id ->
+                                    scope.launch {
+                                        val selected = brain.selectAssistantModel(id)
+                                        Toast.makeText(context, if (selected) "Assistant model selected." else "That model could not be loaded safely.", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
                             )
                         }
                     }
@@ -947,6 +1210,7 @@ private fun AgentSpace(
     turns: List<Turn>,
     input: String,
     isThinking: Boolean,
+    thinkingMessage: String,
     modelStatus: String,
     transcribe: suspend (wav: ByteArray) -> String?,
     onInput: (String) -> Unit,
@@ -958,6 +1222,9 @@ private fun AgentSpace(
     context: Context,
     prepare: (Choice) -> NilaResponse.Confirmation,
     confirm: (String) -> Unit,
+    runWorkflow: (NilaWorkflow) -> Unit,
+    confirmWorkflow: (String) -> Unit,
+    cancelWorkflow: (String) -> Unit,
     food: FoodActions,
     suggestion: MemorySuggestion?,
     grocery: GroceryActions,
@@ -1023,13 +1290,16 @@ private fun AgentSpace(
                         when {
                             busy && (turn.response is NilaResponse.Food || turn.response is NilaResponse.Grocery) -> {
                                 // Keep the booking card on screen while Swiggy answers, faded so taps wait.
-                                ThinkingLine()
+                                ThinkingLine(thinkingMessage)
                                 Box(Modifier.alpha(BUSY_CARD_ALPHA)) {
-                                    ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, grocery = grocery, forget = forget, addTurn = addTurn)
+                                    ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, runWorkflow = runWorkflow, confirmWorkflow = confirmWorkflow, cancelWorkflow = cancelWorkflow, food = food, grocery = grocery, forget = forget, addTurn = addTurn)
                                 }
                             }
-                            busy -> ThinkingLine()
-                            else -> ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, food = food, grocery = grocery, forget = forget, addTurn = addTurn)
+                            busy -> ThinkingLine(thinkingMessage)
+                            else -> {
+                                if (turn.response is NilaResponse.Food || turn.response is NilaResponse.Grocery) NilaMark()
+                                ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, runWorkflow = runWorkflow, confirmWorkflow = confirmWorkflow, cancelWorkflow = cancelWorkflow, food = food, grocery = grocery, forget = forget, addTurn = addTurn)
+                            }
                         }
                     }
                 }
@@ -1123,12 +1393,22 @@ private fun ResponseView(
     context: Context,
     prepare: (Choice) -> NilaResponse.Confirmation,
     confirm: (String) -> Unit,
+    runWorkflow: (NilaWorkflow) -> Unit,
+    confirmWorkflow: (String) -> Unit,
+    cancelWorkflow: (String) -> Unit,
     food: FoodActions,
     grocery: GroceryActions,
     forget: (NilaResponse.Remember) -> Unit,
     addTurn: (String, NilaResponse) -> Unit,
 ) {
     when (response) {
+        is NilaResponse.WorkflowPreview -> WorkflowPreviewCard(response.workflow) { runWorkflow(response.workflow) }
+        is NilaResponse.WorkflowCommit -> WorkflowCommitCard(
+            response,
+            onConfirm = { confirmWorkflow(response.confirmation.token) },
+            onCancel = { cancelWorkflow(response.confirmation.token) },
+        )
+        is NilaResponse.WorkflowHandoff -> AnswerCard("${response.workflowName} paused. ${response.reason}")
         is NilaResponse.Food -> FoodCardView(response.card, food)
         is NilaResponse.Grocery -> GroceryCardView(response.card, grocery)
         // Resolved into the live flow in submit(); shown only if that ever fails to happen.
@@ -1142,6 +1422,7 @@ private fun ResponseView(
         is WebAnswer -> WebAnswerView(response, context)
         // Confirmation is this card only: the iQOO 15 loan devices have fingerprint locked for the hackathon.
         is NilaResponse.NeedsConfirmation -> CommitCard(response) { confirm(response.token) }
+        is NilaResponse.McpToolInvocation -> AnswerCard("MCP tools run only after confirmation.")
         is NilaResponse.Text -> AnswerCard(response.value)
         is NilaResponse.Private -> PrivateAnswerCard(response.value)
         is HealthPrompt -> ActionCard(
@@ -1365,6 +1646,32 @@ private fun CommitCard(response: NilaResponse.NeedsConfirmation, onConfirm: () -
     }
 }
 
+@Composable
+private fun WorkflowPreviewCard(workflow: NilaWorkflow, onRun: () -> Unit) {
+    NilaCard {
+        SectionLabel("Workflow preview", color = Lime)
+        SerifTitle(workflow.name)
+        workflow.steps.forEachIndexed { index, step ->
+            DetailRow("${index + 1}. ${step.capabilityId}", step.arguments.entries.joinToString { (key, value) -> "$key=$value" }.ifBlank { "No arguments" })
+        }
+        BoundaryNote("Runs only after you start it. Every consequential step asks separately; interactive app/provider steps pause for you.")
+        PrimaryAction("Run workflow", onRun)
+    }
+}
+
+@Composable
+private fun WorkflowCommitCard(response: NilaResponse.WorkflowCommit, onConfirm: () -> Unit, onCancel: () -> Unit) {
+    val tap = rememberSingleTap(onConfirm)
+    NilaCard(color = CommitInk) {
+        SectionLabel("${response.workflowName} · commit ${response.step}/${response.total}", color = Orange)
+        SerifTitle(response.confirmation.capability.label)
+        response.confirmation.lines.forEach { (name, value) -> DetailRow(name, value) }
+        BoundaryNote("Only this step is authorized by Confirm. Later steps remain paused.")
+        PrimaryAction("Confirm this step", tap::fire, enabled = !tap.used)
+        TextAction("Cancel workflow", onClick = onCancel, color = Muted)
+    }
+}
+
 /** One option in a list: image-led when there is an image, with its action on the right. */
 @Composable
 private fun OptionRow(title: String, detail: String, imageUrl: String?, trailing: @Composable () -> Unit) {
@@ -1574,6 +1881,7 @@ private fun WebAnswerView(response: WebAnswer, context: Context) {
 
 /** Does harmless, reversible actions straight away and reports what happened; everything else is returned as is. */
 private fun performNow(context: Context, response: NilaResponse): NilaResponse = when (response) {
+    is NilaResponse.McpToolInvocation -> NilaResponse.Text("This MCP tool needs a confirmation card before it can run.")
     is Torch -> NilaResponse.Text(setTorch(context, response.on))
     is Camera -> runCatching { context.startActivity(cameraIntent(response)) }.fold(
         { NilaResponse.Text(if (response.video) "Opening the camera to record video." else if (response.front) "Opening the front camera." else "Opening the camera.") },
@@ -1713,12 +2021,11 @@ private fun settingsAction(page: String) = when (page) {
 
 /** Opens the installed app whose name best matches: exact label first, then a label containing the words. */
 private fun launchByName(context: Context, name: String): String {
-    val wanted = name.lowercase().trim()
     val apps = context.packageManager.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
         .map { it.loadLabel(context.packageManager).toString() to it.activityInfo.packageName }
         .filter { it.second != context.packageName }
-    val match = apps.firstOrNull { it.first.lowercase() == wanted } ?: apps.firstOrNull { it.first.lowercase().contains(wanted) }
-        ?: return "I couldn't find an app called $name on this phone."
+    val match = resolveAppByName(name, apps)
+        ?: return "I couldn't find one unambiguous app called $name. Say its full app name."
     val launch = context.packageManager.getLaunchIntentForPackage(match.second) ?: return "${match.first} can't be opened."
     return runCatching { context.startActivity(launch) }.fold({ "Opening ${match.first}." }, { "${match.first} can't be opened." })
 }
