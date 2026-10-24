@@ -220,6 +220,7 @@ class NilaBrain(
     private val facts: () -> List<MemoryFact>,
     /** My NILA's health records, for questions like "when was my last blood test". */
     private val healthRecords: () -> List<HealthRecord> = { emptyList() },
+    private val skills: () -> List<NilaSkill> = { emptyList() },
 ) {
     init { ScreenGuidanceRuntime.bind(this) }
     /** Set when Gemma read the last message as a personal fact, so [learn] keeps it whatever its wording. */
@@ -354,6 +355,9 @@ class NilaBrain(
      * becomes "order butter chicken" before anything routes it. Unknown favourites are asked for, never guessed.
      */
     suspend fun respond(input: String): NilaResponse {
+        matchingSkill(input, skills())?.let { skill ->
+            skillCall(skill, engine.capabilities)?.let { return engine.execute(NilaIntent.Call(it)) }
+        }
         // "photos I took on Dec 18 2024": searched on the phone itself, by the day the user named.
         photoSearch(input, java.time.LocalDate.now())?.let { return it }
         myNilaAnswer(input)?.let { return it }

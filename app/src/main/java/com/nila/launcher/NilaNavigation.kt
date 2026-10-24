@@ -21,6 +21,7 @@ enum class NilaScreen {
     MyNila,
     PhoneAccess,
     ScreenGuidance,
+    Skills,
 }
 
 class NilaNavigation(start: NilaScreen) {
