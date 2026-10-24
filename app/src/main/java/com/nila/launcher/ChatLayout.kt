@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.sp
 // The chat's voice: the person's line is small and plain, NILA answers with the mascot and one serif line,
 // and a card appears only for structured data, always with the same header.
 
-private val ReplyMascotSize = 32.dp
+private val ReplyMascotSize = 40.dp
 private val ReplyTextSize = 19.sp
 private val UserLineSize = 15.sp
 private val CardIconSize = 16.dp
@@ -58,6 +58,12 @@ internal fun UserLine(text: String, modifier: Modifier = Modifier) {
         textAlign = TextAlign.End,
         modifier = modifier.fillMaxWidth().padding(start = USER_LINE_INDENT.dp),
     )
+}
+
+/** The mascot alone in NILA's reply position, above a card that brings its own title, such as food results. */
+@Composable
+internal fun NilaMark() {
+    NilaMascot(mood = LocalFreshReplyMood.current ?: MascotMood.Idle, size = ReplyMascotSize)
 }
 
 /** NILA's reply position: the small mascot, then the content beside it. */

@@ -34,6 +34,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -49,6 +50,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -60,12 +66,20 @@ import coil3.compose.AsyncImage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /** What the food cards can ask NILA to do next. Implemented in MainActivity. */
 internal interface FoodActions {
     fun locate(query: String)
-    fun zomatoTotal(payment: FoodCard.Payment, method: String)
+    /** Every app's price for the cart at checkout, filled in as each app answers. */
+    fun quotes(): StateFlow<QuoteBoard>
+    fun retryQuote(providerId: String)
+    /** Each top search result's price on every signed-in app, by [dishKey] then provider id. */
+    fun dishPrices(): StateFlow<Map<String, Map<String, DishPrice>>>
+    fun signIn(provider: FoodProvider)
+    /** Opens a delivery app NILA can't order on, so the user finishes there. */
+    fun openApp(provider: FoodProvider)
     fun applyCoupon(payment: FoodCard.Payment, coupon: FoodCoupon)
     fun back(card: FoodCard)
     /** The same shop on Zomato with its prices for this request; null when Zomato isn't connected. */
@@ -77,7 +91,10 @@ internal interface FoodActions {
     fun lastCart(): FoodCard.Cart?
     fun changeAddress(query: String)
     fun refine(address: FoodAddress, search: NilaResponse.FoodSearch)
-    fun pickAddress(address: FoodAddress, query: String)
+    /** Makes [address] NILA's address and orders there; the other apps get it in the background. */
+    fun pickAddress(address: NilaAddress, query: String)
+    /** Which apps have NILA's address, for the quiet "Added WeWork Galaxy to Swiggy" note. */
+    fun addressSync(): StateFlow<AddressSyncState>
     fun addAddress(query: String, form: NewAddressForm)
     fun openRestaurant(address: FoodAddress, restaurant: FoodRestaurant, query: String)
     fun changeItem(address: FoodAddress, restaurant: FoodRestaurant, item: FoodItem, delta: Int)
@@ -107,7 +124,7 @@ internal fun FoodCardView(card: FoodCard, actions: FoodActions) {
         is FoodCard.Order -> OrderCard(card, actions)
         is FoodCard.Problem -> Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                SectionLabel("Swiggy", color = Orange)
+                SectionLabel(orderingProvider.name, color = Orange)
                 Text(card.message, color = Paper)
             }
         }
@@ -126,7 +143,7 @@ internal fun BackLink(label: String, onBack: () -> Unit) {
 }
 
 @Composable
-internal fun StepHeader(step: Int, title: String, source: String = "Swiggy · live") {
+internal fun StepHeader(step: Int, title: String, source: String = "${orderingProvider.name} · live") {
     SourceLabel(source)
     Spacer(Modifier.height(4.dp))
     Text(title, color = Paper, fontSize = 26.sp, fontFamily = FontFamily.Serif, lineHeight = 30.sp)
@@ -171,9 +188,22 @@ private fun VegMark(veg: Boolean?) {
 
 // ---- Step 1: address ---------------------------------------------------------
 
+/** "To WeWork Galaxy · Change", and under it a quiet note when NILA just saved the address in an app. */
+@Composable
+internal fun DeliverToLine(address: FoodAddress, actions: FoodActions, onChange: () -> Unit) {
+    val sync by actions.addressSync().collectAsState()
+    Column {
+        Row(Modifier.clickable(onClick = onChange).padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("To ${address.label}", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(" · Change", color = Lime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+        sync.takeIf { it.address?.line == address.line }?.let(::addedNote)?.let { Text(it, color = Muted, fontSize = 12.sp) }
+    }
+}
+
 @Composable
 private fun AddressesCard(card: FoodCard.Addresses, actions: FoodActions) {
-    var showForm by rememberSaveable { mutableStateOf(card.addresses.isEmpty()) }
+    var showForm by rememberSaveable { mutableStateOf(card.choices.isEmpty()) }
     var showAll by rememberSaveable { mutableStateOf(false) }
     var asked by rememberSaveable { mutableStateOf(false) }
     val askLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -186,22 +216,26 @@ private fun AddressesCard(card: FoodCard.Addresses, actions: FoodActions) {
             askLocation.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
         }
     }
-    val nearest = card.here?.let { here -> card.addresses.firstOrNull { CurrentPlaces.matchScore(it, here) >= CurrentPlaces.NEARBY_SCORE } }
-    val others = card.addresses.filter { it != nearest }
+    val nearest = card.here?.let { here -> nilaAddressOf(here).let { spot -> card.choices.firstOrNull { sameAddress(spot, it.address) } } }
+    val others = card.choices.filter { it != nearest }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         StepHeader(1, foodIntentTitle(card.intent))
         IntentChips(card.intent, onChange = null)
         Text("Where should I deliver?", color = Paper, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
+        Text(card.note ?: "Every app delivers to the address you pick here.", color = if (card.note != null) Orange else Muted, fontSize = 13.sp)
         HereCard(card, nearest, actions, onAddHere = { showForm = true }, onAllow = { askLocation.launch(Manifest.permission.ACCESS_COARSE_LOCATION) })
         if (others.isNotEmpty()) {
-            SectionLabel("Saved addresses", Modifier.padding(top = 6.dp))
+            Text("Your addresses", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
             Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
                 Column {
                     val shown = if (showAll) others else others.take(SAVED_PREVIEW)
-                    shown.forEachIndexed { index, address ->
+                    shown.forEachIndexed { index, choice ->
                         if (index > 0) HorizontalDivider(color = Panel, modifier = Modifier.padding(start = 62.dp))
-                        AddressRow(address) { actions.pickAddress(address, card.query) }
+                        AddressRow(
+                            FoodAddress("", choice.address.label, choice.address.line),
+                            detail = choice.sources.joinToString(" · "),
+                        ) { actions.pickAddress(choice.address, card.query) }
                     }
                     if (!showAll && others.size > SAVED_PREVIEW) {
                         HorizontalDivider(color = Panel)
@@ -231,11 +265,11 @@ private fun AddressesCard(card: FoodCard.Addresses, actions: FoodActions) {
 
 private const val SAVED_PREVIEW = 3
 
-/** The phone's own location on top: the nearest saved address to deliver to, or a one-tap way to add it. */
+/** The phone's own location on top: the saved address the user is at, or a one-tap way to add it. */
 @Composable
 private fun HereCard(
     card: FoodCard.Addresses,
-    nearest: FoodAddress?,
+    nearest: AddressChoice?,
     actions: FoodActions,
     onAddHere: () -> Unit,
     onAllow: () -> Unit,
@@ -253,7 +287,7 @@ private fun HereCard(
                     Text("◎", color = Lime, fontSize = 20.sp)
                 }
                 Column(Modifier.weight(1f)) {
-                    Text("CURRENT LOCATION", color = Lime, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    Text("Current location", color = Lime, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     Text(
                         when {
                             here != null -> here.title
@@ -279,13 +313,13 @@ private fun HereCard(
             }
             when {
                 nearest != null -> {
-                    Text("Nearest saved address: ${nearest.label} · ${nearest.line.substringAfter(": ")}", color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text("You're at ${nearest.address.label} · ${nearest.address.line.substringAfter(": ")}", color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Button(
-                        onClick = { actions.pickAddress(nearest, card.query) },
+                        onClick = { actions.pickAddress(nearest.address, card.query) },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink),
-                    ) { Text("Deliver to ${nearest.label}", fontWeight = FontWeight.Bold) }
+                    ) { Text("Deliver to ${nearest.address.label}", fontWeight = FontWeight.Bold) }
                 }
                 here != null -> Button(
                     onClick = onAddHere,
@@ -299,14 +333,15 @@ private fun HereCard(
                     border = BorderStroke(1.dp, Lime.copy(alpha = 0.5f)),
                     shape = RoundedCornerShape(14.dp),
                 ) { Text("Use my current location", color = Lime) }
-                else -> Text("Pick a saved address below.", color = Muted, fontSize = 12.sp)
+                else -> Text("Pick an address below.", color = Muted, fontSize = 12.sp)
             }
         }
     }
 }
 
+/** One address: its label, its line, and [detail] (the apps that have it) when given. */
 @Composable
-internal fun AddressRow(address: FoodAddress, onPick: () -> Unit) {
+internal fun AddressRow(address: FoodAddress, detail: String? = null, onPick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onPick).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -325,6 +360,7 @@ internal fun AddressRow(address: FoodAddress, onPick: () -> Unit) {
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
             Text(address.label, color = Paper, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(address.line.substringAfter(": "), color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            detail?.let { Text(it, color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
         Text("›", color = Muted, fontSize = 22.sp, modifier = Modifier.padding(start = 8.dp))
     }
@@ -382,7 +418,7 @@ private fun NewAddressFormCard(prefill: CurrentPlace?, onSave: (NewAddressForm) 
                 enabled = valid && !saving,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
-            ) { Text(if (saving) "Saving to Swiggy…" else "Save and deliver here") }
+            ) { Text(if (saving) "Saving…" else "Save and deliver here") }
         }
     }
 }
@@ -408,13 +444,7 @@ private fun RestaurantsCard(card: FoodCard.Restaurants, actions: FoodActions) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         StepHeader(2, if (card.picks.isEmpty()) "Nothing open right now" else foodIntentTitle(card.intent))
         IntentChips(card.intent) { actions.refine(card.address, it) }
-        Row(
-            Modifier.clickable { actions.changeAddress(card.query) }.padding(vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("To ${card.address.label}", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(" · Change", color = Lime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        }
+        DeliverToLine(card.address, actions) { actions.changeAddress(card.query) }
         card.picks.forEachIndexed { index, (restaurant, reason) ->
             PickCard(restaurant, reason, badge = pickLabel(card.intent).takeIf { index == 0 }) { actions.openRestaurant(card.address, restaurant, card.query) }
         }
@@ -613,16 +643,13 @@ private const val DISH_PREVIEW = 6
 @Composable
 private fun DishesCard(card: FoodCard.Dishes, actions: FoodActions) {
     var showAll by rememberSaveable { mutableStateOf(false) }
+    val dishPrices by actions.dishPrices().collectAsState()
+    val context = LocalContext.current
+    val compareApps = foodProviders.filter { it.connected(context) }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         StepHeader(2, foodIntentTitle(card.intent))
         IntentChips(card.intent) { actions.refine(card.address, it) }
-        Row(
-            Modifier.clickable { actions.changeAddress(card.query) }.padding(vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("To ${card.address.label}", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(" · Change", color = Lime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        }
+        DeliverToLine(card.address, actions) { actions.changeAddress(card.query) }
         // The comparison in one line: what the same dish costs across the places that have it.
         val prices = card.dishes.mapNotNull { Regex("""\d+""").find(it.item.chosenSize?.price ?: it.item.price)?.value?.toIntOrNull() }
         if (prices.size > 1) {
@@ -632,10 +659,34 @@ private fun DishesCard(card: FoodCard.Dishes, actions: FoodActions) {
                 fontSize = 12.sp,
             )
         }
+        // An app that compares but isn't signed in (or whose sign-in expired) says so once, with the way back in.
+        foodProviders.filter { !it.canOrder && !it.connected(context) }.forEach { app ->
+            Text(
+                "Sign in to ${app.name} to compare prices",
+                color = Lime,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clickable { actions.signIn(app) }.padding(vertical = 2.dp),
+            )
+        }
+        // An app without NILA's exact address says so once: it prices from a saved address nearby, or can't compare
+        // until the address is added there. Either way the way to add it is one tap.
+        val nila = deliveryAddress(card.address).toNila()
+        val place = shortPlaceName(card.address.line, card.address.label)
+        compareApps.forEach { app ->
+            val nearby = app.nearbyAddress(context, nila)
+            val missing = dishPrices.values.any { it[app.id] == DishPrice.NoAddress }
+            if (nearby == null && !missing) return@forEach
+            AddAddressNote(
+                lead = nearby?.let { "${app.name} prices from ${nearbyText(it)}" },
+                action = if (nearby != null) "Add $place in ${app.name}" else "Add $place in ${app.name} once to compare prices",
+            ) { actions.openApp(app) }
+        }
         val shown = if (showAll) card.dishes else card.dishes.take(DISH_PREVIEW)
-        val zomato = rememberZomatoShops(card.address, shown.map { it.restaurant }, actions)
         shown.forEachIndexed { index, dish ->
-            DishRow(dish, badge = pickLabel(card.intent).takeIf { index == 0 && dish.caution == null }, zomato = zomato[dish.restaurant.id]) { item -> actions.changeItem(card.address, dish.restaurant, item, +1) }
+            val compared = dishPrices[dishKey(dishRequest(orderingProvider.id, card.address, dish))]
+            val priceLine = compared?.let { found -> dishPriceLine(compareApps.map { it to found[it.id] }) }
+            DishRow(dish, priceLine, badge = pickLabel(card.intent).takeIf { index == 0 && dish.caution == null }) { item -> actions.changeItem(card.address, dish.restaurant, item, +1) }
         }
         if (!showAll && card.dishes.size > DISH_PREVIEW) {
             Text(
@@ -651,8 +702,21 @@ private fun DishesCard(card: FoodCard.Dishes, actions: FoodActions) {
     }
 }
 
+/** One quiet line under the results: [lead] in muted text, then [action], which is the tappable part. */
 @Composable
-private fun DishRow(dish: FoodDish, badge: String?, zomato: ZomatoLookup?, onAdd: (FoodItem) -> Unit) {
+private fun AddAddressNote(lead: String?, action: String, onAdd: () -> Unit) {
+    val text = buildAnnotatedString {
+        if (lead != null) {
+            append(lead)
+            append(" · ")
+        }
+        withLink(LinkAnnotation.Clickable("add-address", TextLinkStyles(SpanStyle(color = Lime, fontWeight = FontWeight.SemiBold))) { onAdd() }) { append(action) }
+    }
+    Text(text, color = Muted, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(vertical = 2.dp))
+}
+
+@Composable
+private fun DishRow(dish: FoodDish, priceLine: String?, badge: String?, onAdd: (FoodItem) -> Unit) {
     val best = badge != null
     var size by remember(dish.item.id) { mutableStateOf(dish.item.chosenSize) }
     val item = dish.item.copy(chosenSize = size)
@@ -698,7 +762,8 @@ private fun DishRow(dish: FoodDish, badge: String?, zomato: ZomatoLookup?, onAdd
                 Text(item.name, color = Paper, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(size?.price ?: item.price, color = Paper, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 if (item.sizes.size > 1) SizeChips(item.sizes, size) { size = it }
-                ZomatoPriceLine(zomato, item.name, size?.price ?: item.price)
+                // The other apps' prices are for the size shown at first; another size has no comparison yet.
+                if (priceLine != null && size == dish.item.chosenSize) Text(priceLine, color = Paper, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 Text(dish.reason, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -729,7 +794,9 @@ private fun MenuCard(card: FoodCard.Menu, actions: FoodActions) {
                     Text(item.name, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                     Text(size?.price ?: item.price, color = Paper, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     if (item.sizes.size > 1) SizeChips(item.sizes, size) { size = it }
-                    ZomatoPriceLine(zomato, item.name, size?.price ?: item.price)
+                    // The same line as under a search result: each app's price for this dish at this shop.
+                    zomato?.let { lookup -> dishPriceLine(listOf(orderingProvider to paiseOf(size?.price ?: item.price)?.let { DishPrice.Found(it) }, ZomatoProvider to shopDishPrice(lookup, item.name))) }
+                        ?.let { Text(it, color = Paper, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
                     if (item.description.isNotBlank()) {
                         Text(item.description, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp)
                     }
@@ -838,6 +905,14 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
             armed = false
         }
     }
+    val board by actions.quotes().collectAsState()
+    // This card's own bill stands for the ordering app, so an older card (before a coupon) never shows newer numbers.
+    val own = orderingProvider.id to swiggyQuote(card.cart, card.restaurant.eta, card.applied?.code)
+    val ranked = board.takeIf { card.compareKey != null && it.key == card.compareKey }?.let { it.copy(quotes = it.quotes + own) }?.ranked()
+    // One primary action: order here when the cheapest app is the one NILA orders on, else open the cheapest app.
+    val openInstead = ranked?.winner?.provider?.takeIf { !it.canOrder && it.appPackage != null }
+    // A late answer can change the cheapest app; the order gate closes so the user sees the new choice first.
+    LaunchedEffect(openInstead) { armed = false }
     val upi = card.options.filter { !it.method.equals("Cash", true) }
     val cash = card.options.filter { it.method.equals("Cash", true) }
 
@@ -861,6 +936,15 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         actions.lastCart()?.let { cart -> BackLink("Edit cart") { actions.back(cart) } }
         StepHeader(5, "Review and pay")
+        ranked?.let { CompareSection(it, actions) }
+        openInstead?.let { app ->
+            Button(
+                onClick = { actions.openApp(app) },
+                modifier = Modifier.fillMaxWidth().height(PrimaryActionHeight),
+                shape = RoundedCornerShape(ActionRadius),
+                colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink),
+            ) { Text("Open in ${app.name}", fontWeight = FontWeight.Bold) }
+        }
         // One method shown: the one used last time, or the first. The rest stay one tap away.
         if (showAll) {
             Group("PAY BY UPI APP", upi)
@@ -876,7 +960,6 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
             )
         }
         OffersBlock(card, enabled = !placed) { actions.applyCoupon(card, it) }
-        card.zomato?.let { compared -> CompareBlock(card, compared, selected?.method.orEmpty(), enabled = !placed) { actions.zomatoTotal(card, it) } }
         Spacer(Modifier.height(4.dp))
         Surface(color = CommitInk, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -903,74 +986,25 @@ private fun PaymentCard(card: FoodCard.Payment, actions: FoodActions) {
                         }
                     },
                     enabled = selected != null && !placed,
-                    colors = ButtonDefaults.buttonColors(containerColor = if (armed) Orange else Lime, contentColor = Ink),
+                    colors = when {
+                        armed -> ButtonDefaults.buttonColors(containerColor = Orange, contentColor = Ink)
+                        openInstead == null -> ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)
+                        else -> ButtonDefaults.buttonColors(containerColor = Color.Transparent, contentColor = Lime)
+                    },
+                    border = if (openInstead != null && !armed) BorderStroke(1.dp, Lime.copy(alpha = 0.5f)) else null,
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                     shape = RoundedCornerShape(16.dp),
                 ) {
                     Text(
                         when {
                             placed -> "Placing order…"
-                            armed -> "Tap again to place · ${card.cart.total}"
-                            else -> "Place order · ${card.cart.total}"
+                            armed -> "Tap again to order · ${card.cart.total}"
+                            else -> "Order on ${orderingProvider.name} · ${card.cart.total}"
                         },
                         fontWeight = FontWeight.Bold,
                     )
                 }
-                Text("This places a real Swiggy order and charges you.", color = Muted, fontSize = 11.sp)
-            }
-        }
-    }
-}
-
-/**
- * The same order on Zomato: dish prices first (both apps add their own fees), then Zomato's real total
- * once the user asks for it. A gap is said plainly, never filled with a guessed match.
- */
-@Composable
-private fun CompareBlock(card: FoodCard.Payment, compared: ZomatoComparison, method: String, enabled: Boolean, onTotal: (String) -> Unit) {
-    SectionLabel("Compare", Modifier.padding(top = 4.dp))
-    Surface(color = CardInk, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            when (compared) {
-                is ZomatoGap -> Text("Zomato · ${compared.reason}", color = Muted, fontSize = 13.sp)
-                is ZomatoQuote -> {
-                    val swiggyItems = card.cart.bill.firstOrNull { it.first == "Item total" }?.second?.let(::digitsOf)
-                        ?: card.cart.lines.sumOf { digitsOf(it.price) ?: 0 }
-                    val swiggyTotal = digitsOf(card.cart.total)
-                    val zomatoTotal = compared.total
-                    val (zomatoAmount, swiggyAmount, what) =
-                        if (zomatoTotal != null && swiggyTotal != null) Triple(zomatoTotal, swiggyTotal, "total to pay")
-                        else Triple(compared.itemsTotal, swiggyItems, "dish prices")
-                    val gap = zomatoAmount - swiggyAmount
-                    Text(
-                        when {
-                            gap < 0 -> "Zomato is ₹${-gap} cheaper (${what})"
-                            gap > 0 -> "Swiggy is ₹$gap cheaper (${what})"
-                            else -> "Same price on both (${what})"
-                        },
-                        color = if (gap < 0) Lime else Paper,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                    )
-                    Text("Swiggy ₹$swiggyAmount · Zomato ₹$zomatoAmount", color = Paper, fontSize = 13.sp)
-                    Text(
-                        listOf(compared.restaurantName, compared.eta).filter(String::isNotBlank).joinToString(" · "),
-                        color = Muted,
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (compared.missing.isNotEmpty()) Text("Not on Zomato: ${compared.missing.joinToString()}", color = Muted, fontSize = 12.sp)
-                    if (zomatoTotal == null) {
-                        Text(
-                            "Check Zomato total with fees · makes a Zomato cart, no order",
-                            color = Lime,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.clickable(enabled = enabled) { onTotal(method) }.padding(vertical = 2.dp),
-                        )
-                    }
-                }
+                Text("This places a real ${orderingProvider.name} order and charges you.", color = Muted, fontSize = 11.sp)
             }
         }
     }
@@ -1084,7 +1118,7 @@ private fun OrderCard(card: FoodCard.Order, actions: FoodActions) {
                 }
                 Text("Ordered.\nYou stayed in control.", color = Ink, fontSize = 30.sp, fontFamily = FontFamily.Serif, lineHeight = 34.sp)
                 Text(card.detail, color = Ink.copy(alpha = 0.75f), fontSize = 13.sp)
-                card.orderId?.let { Text("Swiggy order $it", color = Ink.copy(alpha = 0.6f), fontSize = 11.sp) }
+                card.orderId?.let { Text("${orderingProvider.name} order $it", color = Ink.copy(alpha = 0.6f), fontSize = 11.sp) }
                 Button(
                     onClick = { actions.track(card.orderId) },
                     modifier = Modifier.fillMaxWidth().height(50.dp),
@@ -1163,49 +1197,28 @@ private fun rememberZomatoShops(address: FoodAddress, restaurants: List<FoodRest
     return shops
 }
 
-/** What the line under a Swiggy dish says, and whether Zomato is the cheaper app (it then stands out). */
-internal data class ZomatoLineText(val text: String, val cheaperOnZomato: Boolean = false)
-
 /** Swiggy's price as a number, decimals kept: "₹199.50" is 199.5, not 199. */
+internal fun priceRupees(price: String): Double? = Regex("""\d+(\.\d+)?""").find(price.replace(",", ""))?.value?.toDoubleOrNull()
+
 /** ₹ amount without a trailing ".0": 249.0 shows as 249, 249.5 as 249.5. */
 internal fun rupeeText(rupees: Double) = if (rupees % 1.0 == 0.0) rupees.toLong().toString() else "%.2f".format(rupees).trimEnd('0')
 
-internal fun priceRupees(price: String): Double? = Regex("""\d+(\.\d+)?""").find(price.replace(",", ""))?.value?.toDoubleOrNull()
-
-internal fun zomatoLine(lookup: ZomatoLookup, swiggyName: String, swiggyPrice: String): ZomatoLineText {
+/**
+ * The same shop's Zomato answer as one dish price, for the shared price line: still loading is null, a failed
+ * lookup is left out, and only an exact dish match carries a price.
+ */
+internal fun shopDishPrice(lookup: ZomatoLookup, swiggyName: String): DishPrice? {
     val shop = lookup.shop
     return when {
-        lookup.loading -> ZomatoLineText("Checking Zomato…")
-        shop?.gap != null -> ZomatoLineText("Zomato: ${shop.gap}")
-        shop == null -> ZomatoLineText("")
-        else -> {
-            val same = shop.sameAs(swiggyName)
-            val swiggy = priceRupees(swiggyPrice)?.toInt()
-            when {
-                same != null && swiggy != null -> ZomatoLineText("Zomato ₹${same.price} · ${priceGap(swiggy, same.price)}", same.price < swiggy)
-                same != null -> ZomatoLineText("Zomato ₹${same.price}")
-                // No exact match: say what Zomato has, with no price verdict.
-                else -> ZomatoLineText("Not on its Zomato menu · Zomato has ${shop.dishes.take(2).joinToString { "${it.name} ₹${it.price}" }}")
-            }
-        }
+        lookup.loading -> null
+        shop == null -> DishPrice.Failed("not connected")
+        shop.gap == NO_ANSWER -> DishPrice.Failed(shop.gap)
+        shop.gap != null -> DishPrice.Gap(shop.gap)
+        else -> shop.sameAs(swiggyName)?.let { DishPrice.Found(it.price * PAISE_IN_RUPEE) } ?: DishPrice.Missing
     }
 }
 
-/** Under a Swiggy dish: its price at the same shop on Zomato and which app is cheaper, or the nearest Zomato dish. */
-@Composable
-private fun ZomatoPriceLine(lookup: ZomatoLookup?, swiggyName: String, swiggyPrice: String) {
-    if (lookup == null || (!lookup.loading && lookup.shop == null)) return
-    val line = zomatoLine(lookup, swiggyName, swiggyPrice)
-    val cheaperOnZomato = line.cheaperOnZomato
-    Text(
-        line.text,
-        color = if (cheaperOnZomato) ZomatoRed else Muted,
-        fontSize = 12.sp,
-        fontWeight = if (cheaperOnZomato) FontWeight.SemiBold else FontWeight.Normal,
-        maxLines = 2,
-        overflow = TextOverflow.Ellipsis,
-    )
-}
+private const val PAISE_IN_RUPEE = 100L
 
 /** Above a Swiggy menu: the same shop's dishes on Zomato, so a different biryani or a better price is not missed. */
 @Composable
@@ -1311,4 +1324,3 @@ private fun ZomatoNearbyBlock(card: FoodCard.Dishes, actions: FoodActions) {
 }
 
 private const val ZOMATO_DISHES_PER_SHOP = 3
-private const val ZOMATO_PACKAGE = "com.application.zomato"

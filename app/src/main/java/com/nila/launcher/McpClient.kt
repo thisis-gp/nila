@@ -24,8 +24,8 @@ internal class McpClient(private val endpoint: String, private val accessToken: 
         .followSslRedirects(false)
         .build()
     private val nextId = AtomicInteger(1)
-    private var sessionId: String? = null
-    private var initialized = false
+    @Volatile private var sessionId: String? = null
+    @Volatile private var initialized = false
 
     init {
         require(McpEndpoint.validate(endpoint) == null) { "MCP endpoint must be a valid HTTPS URL without embedded credentials." }
@@ -88,6 +88,8 @@ internal class McpClient(private val endpoint: String, private val accessToken: 
             ?: JSONObject().put("text", text)
     }
 
+    /** One handshake per client even when price checks call it from several threads at once. */
+    @Synchronized
     private fun ensureInitialized(): Boolean {
         if (initialized) return true
         val init = JSONObject()
