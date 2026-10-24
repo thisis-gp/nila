@@ -27,7 +27,7 @@ Each registered capability has a stable ID, typed arguments and one permission c
 
 Unknown tools and invalid arguments are rejected. Numbers proposed by a model are checked against the user's words for sensitive commands. OAuth tokens stay inside provider clients rather than model prompts.
 
-Settings supports user-authored one-step skills: an exact phrase, an existing capability ID and typed arguments. The skill data is encrypted in app-private preferences. At runtime NILA revalidates every call through the same capability registry, and Commit actions still produce the normal confirmation card. Skills cannot add permissions or contain executable code.
+Settings supports private one-step skills and declarative workflows. A workflow has an exact phrase and up to eight ordered, typed calls to existing capabilities; its encrypted app-private data contains no executable code. Dependencies must point to earlier steps and cycles are rejected. NILA previews the full sequence before starting, revalidates every call at runtime, and asks again before each Commit. Supported local read/prepare actions run in order; provider and app flows hand off to the user and stop later steps. Generated apps, generated code, background agents, and arbitrary cross-app control are not implemented.
 
 The registry is currently compiled into the app. FunctionGemma receives only the tool set used by its training data because adding unseen schemas reduced routing accuracy during device testing.
 
