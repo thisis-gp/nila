@@ -71,6 +71,10 @@ internal fun SettingsScreen(
     mcpBusy: Boolean,
     onAddMcpServer: (String, String, String) -> Unit,
     onRemoveMcpServer: (String) -> Unit,
+    modelStatus: String,
+    modelOptions: List<ModelOption>,
+    selectedModelId: String?,
+    onSelectModel: (String) -> Unit,
 ) {
     val people = factsByPerson(facts).size
     val context = LocalContext.current
@@ -90,6 +94,16 @@ internal fun SettingsScreen(
             GroupLabel("General")
             SettingsRow(LucideR.drawable.lucide_ic_house, "Home screen", "Make NILA your home app", onClick = onChooseDefaultHome)
             SettingsRow(LucideR.drawable.lucide_ic_languages, "Languages", "English, हिंदी, മലയാളം", onClick = { onOpen(NilaScreen.Languages) })
+            SettingsRow(LucideR.drawable.lucide_ic_brain, "On-device models", modelStatus)
+            modelOptions.forEach { option ->
+                SettingsRow(
+                    LucideR.drawable.lucide_ic_sparkles,
+                    option.model.label,
+                    option.reason,
+                    trailing = if (option.model.id == selectedModelId) "Selected" else null,
+                    onClick = if (option.installed && option.fitsMemory) ({ onSelectModel(option.model.id) }) else null,
+                )
+            }
             SettingsRow(LucideR.drawable.lucide_ic_shield_check, "Permissions", "What Android has allowed", onClick = { onOpen(NilaScreen.Permissions) })
 
             GroupLabel("Accounts")
@@ -114,6 +128,7 @@ internal fun SettingsScreen(
             )
             SettingsRow(LucideR.drawable.lucide_ic_smartphone, "Phone access", "Photos, files, contacts", onClick = { onOpen(NilaScreen.PhoneAccess) })
             SettingsRow(LucideR.drawable.lucide_ic_history, "Activity and approvals", "What NILA has done for you", onClick = { onOpen(NilaScreen.Activity) })
+            SettingsRow(LucideR.drawable.lucide_ic_sparkles, "Build skills and workflows", "Create private phrase-triggered tool routines", onClick = { onOpen(NilaScreen.Skills) })
             SettingsRow(LucideR.drawable.lucide_ic_hand, "Confirm before acting", "NILA always asks before paying, sending or booking", trailing = "Always")
 
             GroupLabel("About")
@@ -125,6 +140,8 @@ internal fun SettingsScreen(
         }
     }
 }
+
+private fun plural(count: Int, one: String, many: String) = "$count ${if (count == 1) one else many}"
 
 @Composable
 private fun McpServerSettings(
@@ -163,8 +180,6 @@ private fun McpServerSettings(
     (error ?: status)?.let { Text(it, color = if (error != null || it.startsWith("Couldn't")) Orange else Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)) }
     if (servers.isEmpty()) Text("No custom servers added.", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(vertical = 8.dp))
 }
-
-private fun plural(count: Int, one: String, many: String) = "$count ${if (count == 1) one else many}"
 
 @Composable
 private fun GroupLabel(text: String) = Text(

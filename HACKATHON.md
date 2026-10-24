@@ -1,168 +1,87 @@
-# 48-hour finale build plan
+# NILA demo status
 
-## Goal
+This file records what the current `main` branch can demonstrate and what still needs proof. Planned work is listed separately so it is not mistaken for shipped behavior.
 
-Win with one coherent demonstration: NILA understands an outcome on the phone, uses a real service, generates the interface needed for the decision, remembers relevant context, and creates a reusable personal skill without executing generated code.
+## Demonstrable now
 
-## Official schedule
+### Launcher and phone actions
 
-- Friday 17:00: check-in and device distribution.
-- Friday 19:00: build clock starts.
-- Saturday 10:00: scored checkpoint 1.
-- Saturday 19:00: scored checkpoint 2.
-- Sunday 09:00: scored checkpoint 3.
-- Sunday: final submission and jury presentation at the announced time.
-- Sunday 18:00: results.
+- Android home screen, app drawer, dock, wallpaper and app launching.
+- Typed chat and microphone input through the same request path.
+- Calculator, alarms, timers, flashlight, camera, notes, calendar, calls, messages, media controls and Android settings redirects.
+- Trusted Compose result cards and visible confirmation gates for consequential actions.
+- Animated NILA mascot with listening, thinking, talking, success and error states.
 
-The finale page assigns 25% to HackTracker device data and 75% to jury evaluation. Keep the iQOO phone connected through Office Kit during real work, use shared clipboard and file transfer, and preserve device evidence. Do not manufacture activity.
+### On-device intelligence
 
-## Build lock
+- FunctionGemma 270M routes a fixed set of trained tools.
+- Gemma 4 E2B handles conversation, speech transcription and health-report reading when its model file is installed.
+- Deterministic routing remains available when a model is missing.
+- English, Hindi and Malayalam replies can use installed offline Android TTS voices.
 
-### Core demonstration
+The repository contains FunctionGemma dataset generation and a Kaggle fine-tune/export script. A tuned model is accepted only when its held-out tool-name accuracy beats the base model. The repository does not contain a completed calibration report for the Pixel 4a.
 
-1. Ask by voice or text: "Find chicken biryani for three under ₹800, arriving before 8 PM."
-2. FunctionGemma emits a typed Swiggy search call.
-3. NILA renders comparable trusted cards from real Food MCP results.
-4. The user chooses an option and reviews the exact cart, address, price and provider.
-5. NILA stops at a visible confirmation card before the commit action, and runs it only after the user taps Confirm.
-6. NILA records the approved or cancelled action locally.
+### Personal data
 
-### Ecosystem proof
+- My NILA stores people, relations and facts in an encrypted Room/SQLCipher database.
+- Users can add, edit, forget and clear facts, and optionally link a person to a contact.
+- My NILA can be protected by the phone's biometric or device credential.
+- Health reports and attachments are encrypted locally; follow-up reminders and fitness entries are supported.
+- Memory and health data are excluded from Android cloud backup and device transfer.
 
-- Instamart: search for one grocery item and prepare a cart.
-- Dineout: find a restaurant and prepare a time slot.
-- Google Maps: show the selected place or route.
-- Android: calculate, set an alarm and open an immersive app.
+### Network services
 
-### Self-building phone proof
+- Swiggy Food supports signed-in search, menus, carts, coupons, payment options and a confirmed order path.
+- Zomato can compare matching dishes and quote the same cart when connected.
+- Zepto and Swiggy Instamart can be searched side by side and have guarded cart/order flows.
+- OpenStreetMap Nominatim and OSRM provide place lookup and driving distance/ETA; turn-by-turn navigation opens a maps app.
+- Tavily web search is available when the user adds a key in Settings.
 
-The user says, "Build me an expense tracker." NILA generates a declarative skill, explains the SMS permission, asks the user to enable it, extracts structured transactions locally, and renders a reusable expense dashboard. The skill appears in My Skills and can be disabled or deleted.
+Provider results are live only after the relevant account is connected. The disconnected food fallback is labelled as an offline fixture. Public OSM services and remote MCP schemas are demo dependencies, not production guarantees.
 
-## Locked stack
+## Safe demo sequence
 
-- Gemma 4 E2B: conversation, summaries and skill specifications.
-- FunctionGemma 270M: fine-tuned tool routing.
-- EmbeddingGemma 2 Text 270M: semantic memory.
-- LiteRT-LM: local model runtime, GPU first.
-- ObjectBox 5.4.2: structured data and vector search.
-- Android SpeechRecognizer and TextToSpeech: offline voice path.
-- Lakshmi: NILA's voice identity.
-- Swiggy Food, Instamart and Dineout MCP.
-- Google Maps MCP.
-- Jetpack Compose trusted component catalogue.
+1. Build and install NILA, then select it as the home app.
+2. Confirm the assistant and router model status from the empty chat screen.
+3. Try a typed calculator or phone action, then the same kind of request by voice.
+4. Save a harmless preference, inspect it in My NILA, edit it and delete it.
+5. Ask for a route and open the result in the installed maps app.
+6. Connect one commerce provider in Settings and complete search, selection, cart and review.
+7. Compare the same item or cart on a second connected provider.
+8. Stop at the final review unless the user explicitly confirms a real order with provider, address, items, total and payment method visible.
 
-## Permission policy
+Use real device observations for every performance or offline claim. Never describe a fixture, failed authentication or missing model as live.
 
-- Read: search, inspect, calculate, retrieve and compare automatically.
-- Prepare: draft, plan, generate a skill, build a cart and create UI automatically.
-- Commit: pay, place an order, book, send, publish, delete or share only after explicit confirmation.
+## Validation still required
 
-A generated skill may use only manifest-declared permissions and registered capabilities. Vector retrieval never bypasses this policy.
+- Copy both expected `.litertlm` files to the Pixel 4a and measure load time, response latency, memory pressure, thermals and failure recovery.
+- Calibrate microphone end-of-speech behavior in quiet and noisy rooms.
+- Verify English, Hindi and Malayalam transcription and offline TTS in airplane mode.
+- Exercise My NILA across process death, reboot, screen lock, report import and reminder delivery.
+- Test Maps with permission denied, location disabled, no network and ambiguous destinations.
+- Test each provider after fresh sign-in and retain sanitized response fixtures for parser regression tests.
+- Compare final basket totals, not only headline item prices.
+- Run repeated chat, voice and provider operations long enough to expose memory or thermal failures.
 
-## Checkpoint plan
+## Future work, not current behavior
 
-### Checkpoint 1: working phone core
+- A selectable low-memory assistant model and one-large-model-at-a-time loading.
+- Dynamic MCP discovery and installation.
+- Declarative generated apps/skills, My Skills and an expense tracker.
+- Semantic/vector memory, provenance, confidence and encrypted export.
+- Versioned screenshot-to-action mappings for controlled cross-app computer use.
+- Dineout, ONDC and a production maps service.
+- Progressive waiting stages, elapsed time, cancellation and background continuation.
+- NILA Orbit advertising, verified impressions, earnings and payouts.
+- A custom Android ROM or independent operating system.
 
-Target: Saturday 10:00.
+## Definition of done for a release candidate
 
-- Confirm the organiser's ruling on the pre-event scaffold and record it.
-- Pair Office Kit and establish the event branch.
-- Build, install and select NILA as the home launcher.
-- Load FunctionGemma on the iQOO phone.
-- Convert English, Hindi and Malayalam requests into typed tool calls.
-- Connect Swiggy authentication and list Food tools.
-- Render one real search response in trusted cards.
-- Keep a deterministic fixture fallback with a visible "offline fixture" label.
-
-Checkpoint evidence: phone demo, commit hash, model latency, screenshot and one passing routing test.
-
-### Checkpoint 2: complete transaction boundary
-
-Target: Saturday 19:00.
-
-- Complete Food search, item selection, cart preparation and confirmation.
-- Add one Instamart search and one Dineout search.
-- Add Google Maps place or route output.
-- Add action history and visible Read, Prepare and Commit states.
-- Add Android alarm and app redirect.
-- Load Gemma 4 E2B for answers and summaries.
-
-Checkpoint evidence: one uninterrupted food flow, clear real/simulated labels, actual device timings and failure recovery.
-
-### Checkpoint 3: memory and generated skill
-
-Target: Sunday 09:00.
-
-- Add ObjectBox memory records and EmbeddingGemma retrieval.
-- Generate and validate a skill manifest.
-- Implement the expense tracker skill with synthetic fixtures first.
-- Request SMS access only with a clear explanation and user action.
-- Add My Skills, inspect, disable and delete.
-- Test English, Hindi and Malayalam voice requests.
-
-Checkpoint evidence: create the skill live, retrieve a relevant memory, show permission denial behavior and delete the skill's data.
-
-### Final block
-
-- Fix only demo-breaking issues.
-- Measure cold start, tool-routing latency, first-token latency and peak memory.
-- Test without network and with expired provider authentication.
-- Test permission denial and cancellation.
-- Record a backup demo video outside the repository.
-- Update the README with only verified claims.
-- Prepare the final pitch after the working demo is stable.
-
-## Team ownership
-
-- Gurupriyan: integration, architecture, permissions, confirmations, review, Office Kit evidence and final demo.
-- Devananda: Compose launcher, trusted component catalogue, Swiggy result surfaces, My Skills and visual polish.
-- Habis: FunctionGemma, Gemma runtime, MCP adapters, ObjectBox memory, EmbeddingGemma and evaluation.
-
-Each owner works on `owner/short-topic`, opens a focused pull request and includes the exact command result. Do not modify another owner's active files without coordinating first.
-
-## Definition of done
-
-- A clean clone builds through `scripts/build-install-test.ps1`.
-- The APK installs and runs as the iQOO 15 home launcher.
-- The primary demo works from voice request to prepared Swiggy action and confirmation.
-- A generated expense-tracker skill can be created, used and deleted.
-- All model inference and personal memory used in the demo stay on-device.
-- Real, fixture and simulated data are visibly distinguished.
-- Denied permissions, missing network and failed authentication degrade safely.
-- No pay, order, send, book, delete or share action runs without confirmation.
-
-## Scope cuts
-
-- No custom Android ROM.
-- No arbitrary code or APK generation.
-- No online payment gateway, wallet or UPI reserve-pay integration. Cash-on-Delivery order placement is in scope (confirm-then-place, same as any other Commit action) since it moves no money through NILA itself.
-- No unofficial provider API.
-- No multi-agent framework.
-- No community MCP in the critical path.
-- No attempt to perfect every screen before the main demo works.
-
-## Judge answers
-
-**Is this only a launcher?**
-
-The finale build is a launcher because it is the fastest way to prove the interaction model on a real phone. The capability registry, skills, memory and permission policy are the reusable runtime for a future OS.
-
-**How is this different from Gemini or Siri?**
-
-NILA treats an intent as the primary interface. It can create a persistent skill and its temporary UI from trusted building blocks, connect to service tools, and keep personal memory under one visible permission policy.
-
-**Does the model generate applications?**
-
-It generates validated skill manifests and component trees. It cannot execute generated code or call tools outside NILA's registry.
-
-**What runs locally?**
-
-Tool routing, assistant inference, embeddings, memory, skill validation and supported speech paths. Swiggy and Maps calls leave the device because they are network services.
-
-**Can it work on cheaper phones?**
-
-The architecture is tiered. FunctionGemma and deterministic tools provide the minimum experience. Larger assistant and embedding models are downloaded capabilities for devices that can support them.
-
-**Why a vector database?**
-
-Structured storage answers exact questions. Vector search finds relevant preferences and past context when the user's wording changes. Permissions and financial records remain structured.
+- `.\scripts\build-install-test.ps1 -BuildOnly` passes from a clean checkout.
+- The APK installs and launches on the target phone.
+- Typed and voice requests degrade safely when either model is missing.
+- Personal data remains encrypted and excluded from backup.
+- Real, fixture and unavailable states are visibly distinct.
+- Permission denial, missing network and expired authentication do not crash the app.
+- No order, payment, send, publish, booking, deletion or share happens without explicit confirmation.
+- Claims in `README.md` and `ARCHITECTURE.md` match the tested build.
