@@ -1,127 +1,85 @@
 # NILA architecture
 
-## Runtime flow
+## Current runtime
 
 ```text
 Voice or text
-    -> Android on-device speech recognition when needed
-    -> deterministic fast paths for calculator and exact device commands
-    -> FunctionGemma typed intent and tool call
-    -> permission policy
-    -> Android capability / MCP provider / generated skill / app redirect
-    -> boundary validation and normalized result
-    -> answer or trusted Compose component tree
-    -> explicit confirmation for Commit actions
-    -> execution, action history and memory update
+    -> voice capture and on-device Gemma transcription, when spoken
+    -> deterministic fast paths for exact phone actions
+    -> FunctionGemma tool routing or Gemma conversation/tool fallback
+    -> capability lookup, argument checks and permission class
+    -> Android action, MCP provider, local store or app redirect
+    -> trusted Compose response
+    -> explicit confirmation before Commit actions
 ```
 
-Gemma 4 E2B handles conversation, summaries and skill planning. FunctionGemma owns tool selection. Business rules and permissions stay outside both models.
+`MainActivity.kt` coordinates the launcher and renders responses. `NilaEngine.kt` owns deterministic routing, the fixed capability registry and confirmation tokens. `NilaModels.kt` loads the two LiteRT-LM models and passes proposed calls through the same registry checks. Model output never bypasses business rules or confirmation.
 
-## Response modes
+The runtime selects an installed assistant only when Android reports enough available memory. Gemma 4 E2B is the current general-assistant catalog entry and supports text, audio and vision. Jimi Gemma 3 1B v8 is excluded: it is a task-specific fine-tune, and a Pixel chat smoke test produced no usable reply. FunctionGemma is a tool router, not a conversation model; its proposals still pass deterministic checks and permissions in NilaEngine.
 
-1. Answer: calculations, questions and summaries.
-2. Act: Android or MCP operations allowed by the policy.
-3. Generate: trusted cards, forms, maps, timelines and saved skills.
-4. Redirect: open movies, games, social media or another immersive experience.
+The current response modes are direct text, trusted native cards and forms, Android actions, live provider flows, and redirects into immersive apps. NILA does not execute model-generated Kotlin, JavaScript or shell code.
 
-## Capability registry
+## Capabilities and permission boundary
 
-Every capability has a stable ID, typed input and output, owner, permission class, confirmation level and availability check.
+Each registered capability has a stable ID, typed arguments and one permission class:
 
-Finale capability groups:
+- Read: search, inspect, calculate and retrieve automatically.
+- Prepare: create alarms, timers, notes, calendar drafts, carts and other reversible state.
+- Commit: require a visible confirmation before an order, deletion or other consequential action.
 
-- Android: alarms, app opening, speech, contacts, messages and permission requests.
-- Swiggy: Food, Instamart and Dineout MCP tools.
-- Maps: place and route tools.
-- Memory: exact lookup, semantic retrieval, store, correct and forget.
-- Skills: create, validate, enable, run, disable and delete.
+Unknown tools and invalid arguments are rejected. Numbers proposed by a model are checked against the user's words for sensitive commands. OAuth tokens stay inside provider clients rather than model prompts.
 
-The model never receives credentials. OAuth tokens stay at the transport boundary. External responses are validated before they reach UI or memory.
+Settings supports private one-step skills and declarative workflows. A workflow has an exact phrase and up to eight ordered, typed calls to existing capabilities; its encrypted app-private data contains no executable code. Dependencies must point to earlier steps and cycles are rejected. NILA previews the full sequence before starting, revalidates every call at runtime, and asks again before each Commit. Supported local read/prepare actions run in order; provider and app flows hand off to the user and stop later steps. Generated apps, generated code, background agents, and arbitrary cross-app control are not implemented.
 
-## Generated skill runtime
+The registry is currently compiled into the app. FunctionGemma receives only the tool set used by its training data because adding unseen schemas reduced routing accuracy during device testing.
 
-NILA skills are data interpreted by trusted code. They cannot contain Kotlin, JavaScript, shell commands, URLs to executable code or unregistered tool names.
+## Models
 
-```text
-SkillManifest
-├── id, name, purpose and version
-├── triggers and typed inputs
-├── capability IDs
-├── required Android permissions
-├── workflow steps
-├── local record schemas
-├── trusted component tree
-├── Read / Prepare / Commit policy
-└── provenance, state and deletion rules
-```
+- `gemma-4-E2B-it.litertlm`: conversation, tool fallback, speech transcription and health-report reading.
+- `functiongemma-mobile-actions_q8_ekv1024.litertlm`: the small tool router.
+- LiteRT-LM 0.17.1: Android inference runtime.
 
-Creation flow:
+The files are not bundled in the APK. NILA looks for them in its internal or app-specific external `models` directory. An installed assistant loads only when Android reports enough available memory; Gemma 4 E2B requires at least 4 GiB, and the Pixel 4a currently has no validated general assistant model in the catalog. FunctionGemma remains on demand on memory-tight devices and is not loaded alongside an assistant. When generation fails, NILA records the error category and duration without logging the prompt, shows that it used a fallback, and keeps the deterministic path available.
 
-1. Gemma 4 E2B drafts a skill manifest.
-2. The validator rejects unknown fields, tools, permissions and components.
-3. NILA shows the skill's data access and actions.
-4. The user approves installation and grants Android permissions separately.
-5. NILA stores the versioned manifest and executes it through registered capabilities.
+The assistant tries GPU for text inference. Audio and vision use CPU backends. The current model names and loading policy are fixed in code; selectable models, single-model low-memory loading and completed Pixel 4a calibration are future work.
 
-Android permissions must be declared in the APK. A generated skill can request only that reviewed subset. Missing capabilities produce an explanation, not generated code.
-
-## Expense tracker skill
-
-The expense tracker demonstrates the skill runtime. It is not compiled into NILA as a special app.
-
-```text
-Financial SMS
-    -> deterministic transaction detector
-    -> amount / direction / merchant / account suffix / timestamp
-    -> merchant normalization and known-category rules
-    -> Gemma category fallback when confidence is low
-    -> structured local transaction
-    -> generated dashboard and correction form
-```
-
-Raw SMS is processed locally and is not embedded. The skill stores only fields needed for the user's expense history. Corrections update the merchant rule for later transactions.
-
-## Memory system
-
-ObjectBox 5.4.2 stores structured objects and HNSW vectors. EmbeddingGemma 2 Text 270M creates embeddings locally.
-
-Memory types:
-
-- Working: current conversation state; short-lived.
-- Semantic: explicit preferences and stable facts.
-- Episodic: requests, actions and outcomes.
-- Skill: manifests, versions and user corrections.
-- Structured private records: transactions, carts, reminders and approvals.
-
-Durable records include source, owner, confidence, sensitivity, creation time, last use, expiry and deletion state. Semantic retrieval filters by memory type and owning skill before ranking by vector distance, confidence and recency.
-
-Exact data uses exact queries. Vector similarity may suggest context but cannot authorize an action, calculate money or override current user input.
-
-## Model runtime
-
-- Gemma 4 E2B: assistant and skill planner.
-- FunctionGemma 270M: tool router, fine-tuned for NILA.
-- EmbeddingGemma 2 Text 270M: semantic retrieval.
-- LiteRT-LM: Android inference with GPU first, NPU only after a measured device win.
-
-Models are loaded lazily. The runtime records load time, first-token time, decode rate, peak memory and failures on the actual iQOO 15. A deterministic path remains available when the assistant model is unavailable.
+`training/functiongemma/` contains dataset generation, tests and a Kaggle training/export script. It exports only when the tuned held-out tool-name accuracy beats the base model. A successful exported model and device benchmark are release evidence, not repository source.
 
 ## Voice
 
-Lakshmi is the voice identity. Android's on-device SpeechRecognizer provides input and offline TextToSpeech voices provide output for English, Hindi and Malayalam. The settings screen exposes downloaded languages, offline availability and a text-only fallback.
+NILA records 16 kHz mono audio directly with `AudioRecord`, stops after detected silence and asks Gemma 4 E2B to transcribe it on-device. English, Hindi and Malayalam share the same typed-request path. Lakshmi speaks supported replies through an installed offline Android TextToSpeech voice and stays silent when only a network voice is available.
 
-## Permission policy
+The end-of-speech threshold is fixed and still needs Pixel 4a calibration. Downloaded voice packs, noisy-room behavior, multilingual accuracy and thermal/latency results must be verified on the device.
 
-- Read: automatic search, inspection, calculation and retrieval.
-- Prepare: automatic drafts, plans, carts, skill creation and generated UI.
-- Commit: explicit confirmation before pay, order, book, send, publish, delete or share.
+## Local memory
 
-The confirmation screen supplies informed consent: it must show provider, account, destination, data shared and final price before a consequential tool runs, and the action runs only when the user taps Confirm. There is no fingerprint step; the iQOO 15 loan devices have fingerprint locked for the hackathon.
+People and facts live in Room over SQLCipher. A random database passphrase is wrapped with an Android Keystore key. My NILA supports facts, relations, optional contact links, correction, deletion and a biometric/device-credential screen lock.
 
-## Evolution
+Health metadata uses encrypted preferences; report photos and PDFs use encrypted app-private files. Fitness entries and reminders are local. Backup rules exclude memory, health records and attachments from cloud backup and device transfer.
 
-- Phase 1: Android launcher proving intent-first interaction, skills and permissions.
-- Phase 2: NILA Runtime with a wider capability registry, portable skills and richer memory controls.
-- Phase 3: independent NILA OS with system-level integration.
+Retrieval is currently exact and rule-based. Embeddings, vector search, provenance/confidence fields, export and portable encrypted backup are future work. If the Keystore key can no longer decrypt the database, the current recovery path starts a fresh database; it does not recover the old contents.
 
-The finale proves Phase 1. It does not claim OEM privileges or a complete operating system.
+## Network integrations
+
+- Swiggy Food: OAuth/MCP address, search, menu, cart, coupon, payment option and confirmed order flow.
+- Swiggy Instamart: search, cart comparison and confirmed checkout when the provider exposes a supported payment method.
+- Zomato: OAuth/MCP dish and cart-price comparison with Swiggy.
+- Zepto: OAuth/MCP product search, cart review and confirmed order flow.
+- Maps: coarse device location, Nominatim place lookup and OSRM driving distance/ETA, with an Open Maps handoff for turn-by-turn navigation.
+- Web search: Tavily when the user supplies a key in Settings.
+
+Provider responses are parsed defensively, but their remote schemas and authentication can change. Public Nominatim and OSRM endpoints are demo fallbacks, not production infrastructure. Automated tests must stop before a real order; live checkout requires a separate, explicit user confirmation.
+
+## Future architecture
+
+The following ideas are not implemented on `main`:
+
+- Multi-step generated skills, generated native apps and the expense-tracker skill.
+- Dynamic MCP discovery, installation, versioned UI-control mappings and arbitrary cross-app computer use.
+- EmbeddingGemma/ObjectBox semantic memory.
+- Dineout, ONDC and Google Maps MCP integrations.
+- Progressive task stages, elapsed time, cancellation and background continuation.
+- NILA Orbit sponsorships, impression accounting, earnings and payouts.
+- An independent NILA operating system.
+
+Any future generated UI must remain a validated tree of trusted native components. Any capability that can pay, order, send, publish, book, delete or share must remain behind the same confirmation boundary.

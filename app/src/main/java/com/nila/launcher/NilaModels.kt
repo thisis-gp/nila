@@ -24,8 +24,7 @@ import kotlinx.coroutines.withContext
 
 /** Model files pushed with adb into the app's external files dir. Never bundled: Gemma is over the 2 GB APK limit. */
 object ModelFiles {
-    const val ASSISTANT = "gemma-4-E2B-it.litertlm"
-    const val ROUTER = "functiongemma-mobile-actions_q8_ekv1024.litertlm"
+    const val ROUTER = "nila-router-functiongemma-run8-q8-ekv2048.litertlm"
 
     /**
      * Created from the app's own process: a folder made by `adb shell mkdir` is shell-owned and the app
@@ -41,9 +40,16 @@ object ModelFiles {
         listOfNotNull(File(context.filesDir, "models"), dir(context))
             .map { File(it, name) }
             .firstOrNull { it.isFile && it.length() > 0 }
+
+    fun installed(context: Context): Set<String> = listOfNotNull(File(context.filesDir, "models"), dir(context))
+        .flatMap { it.listFiles().orEmpty().toList() }
+        .filter { it.isFile && it.extension == "litertlm" && it.length() > 0 }
+        .mapTo(mutableSetOf()) { it.name }
 }
 
-enum class ModelState(val label: String) { MISSING("not installed"), LOADING("loading…"), READY("ready"), FAILED("failed to load") }
+enum class ModelState(val label: String) {
+    MISSING("not installed"), ON_DEMAND("available · on demand"), LOADING("loading…"), READY("ready"), FAILED("failed to load"),
+}
 
 /** JSON-safe string literal. */
 private fun json(value: String) = buildString {
@@ -206,11 +212,7 @@ private class CapabilityTool(private val capability: CapabilityDescriptor) : Ope
     override fun execute(paramsJsonString: String) = error("NILA runs tools itself after validation")
 }
 
-/**
- * The two on-device models. FunctionGemma 270M picks tools; Gemma 4 E2B talks. Both stay resident once
- * loaded. Order per ARCHITECTURE.md: deterministic fast paths, then the router, then conversation.
- * Business rules and permissions stay in NilaEngine: model output is only a proposal checked by checkCall.
- */
+/** Business rules and permissions stay in NilaEngine: model output is only a proposal checked by checkCall. */
 /** [facts] reads what the user asked NILA to remember, fresh for every chat reply. */
 class NilaBrain(
     private val context: Context,
@@ -218,7 +220,9 @@ class NilaBrain(
     private val facts: () -> List<MemoryFact>,
     /** My NILA's health records, for questions like "when was my last blood test". */
     private val healthRecords: () -> List<HealthRecord> = { emptyList() },
+    private val skills: () -> List<NilaSkill> = { emptyList() },
 ) {
+    init { ScreenGuidanceRuntime.bind(this) }
     /** Set when Gemma read the last message as a personal fact, so [learn] keeps it whatever its wording. */
     private var learnNext = false
     var assistantState by mutableStateOf(ModelState.MISSING)
@@ -228,6 +232,20 @@ class NilaBrain(
     /** Last model load failure, shown in the chat status; this vivo ROM drops app logcat output. */
     var loadError by mutableStateOf<String?>(null)
         private set
+    internal var selectedAssistant by mutableStateOf<ModelSpec?>(null)
+        private set
+    internal var selectedAssistantId by mutableStateOf<String?>(null)
+        private set
+    internal var modelOptions by mutableStateOf<List<ModelOption>>(emptyList())
+        private set
+    private var inferenceFailed by mutableStateOf(false)
+    val modelStatus: String get() = buildString {
+        append(com.nila.launcher.modelStatus(selectedAssistant, inferenceFailed))
+        append(" · ")
+        append("FunctionGemma ${routerState.label}")
+        loadError?.let { append("\n"); append(it) }
+    }
+    private var deviceMemory = DeviceMemory(0, 0, lowMemory = true)
 
     // LiteRT-LM engines are used from one thread only.
     private val llm = Executors.newSingleThreadExecutor { Thread(it, "nila-llm") }.asCoroutineDispatcher()
@@ -240,6 +258,7 @@ class NilaBrain(
      * progress, so nothing is closed while in use. Call when the screen that owns this brain goes away.
      */
     fun close() {
+        ScreenGuidanceRuntime.unbind(this)
         llm.executor.execute {
             router?.close(); router = null
             assistant?.close(); assistant = null
@@ -248,12 +267,61 @@ class NilaBrain(
     }
 
     suspend fun load() = withContext(llm) {
-        router = loadModel(ModelFiles.ROUTER, gpuFirst = false, audio = false) { routerState = it }
-        assistant = loadModel(ModelFiles.ASSISTANT, gpuFirst = true, audio = true) { assistantState = it }
+        deviceMemory = ModelCatalog.deviceMemory(context)
+        val installed = ModelFiles.installed(context)
+        modelOptions = ModelCatalog.choices(installed, deviceMemory)
+        val preferences = context.getSharedPreferences("nila_models", Context.MODE_PRIVATE)
+        val preferred = preferences.getString("selected_model_id", null)
+        selectedAssistant = ModelCatalog.selectAssistant(installed, deviceMemory, preferred)
+        selectedAssistantId = selectedAssistant?.id
+        selectedAssistant?.let { if (preferred != it.id) preferences.edit().putString("selected_model_id", it.id).apply() }
+        assistant = selectedAssistant?.let { loadModel(it, gpuFirst = true) { assistantState = it } }
+        val routerInstalled = ModelFiles.find(context, ModelFiles.ROUTER) != null
+        routerState = if (routerInstalled) ModelState.ON_DEMAND else ModelState.MISSING
     }
 
-    private fun loadModel(name: String, gpuFirst: Boolean, audio: Boolean, vision: Boolean = false, setState: (ModelState) -> Unit): Engine? {
-        val file = ModelFiles.find(context, name) ?: return null.also { setState(ModelState.MISSING) }
+    suspend fun refreshModelChoices() = withContext(llm) {
+        deviceMemory = ModelCatalog.deviceMemory(context)
+        val effectiveMemory = selectedAssistant?.takeIf { assistant != null }?.let {
+            deviceMemory.copy(availableBytes = deviceMemory.availableBytes + it.minimumAvailableBytes)
+        } ?: deviceMemory
+        modelOptions = ModelCatalog.choices(ModelFiles.installed(context), effectiveMemory)
+    }
+
+    suspend fun selectAssistantModel(id: String): Boolean = withContext(llm) {
+        val installed = ModelFiles.installed(context)
+        if (selectedAssistant?.id == id && assistant != null) return@withContext true
+        val previous = selectedAssistant
+        assistant?.close()
+        assistant = null
+        router?.close()
+        router = null
+        deviceMemory = ModelCatalog.deviceMemory(context)
+        modelOptions = ModelCatalog.choices(installed, deviceMemory)
+        val option = modelOptions.firstOrNull { it.model.id == id && it.installed && it.fitsMemory }
+        if (option == null) {
+            selectedAssistant = previous
+            selectedAssistantId = previous?.id
+            assistant = previous?.let { loadModel(it, gpuFirst = true) { assistantState = it } }
+            return@withContext false
+        }
+        selectedAssistant = option.model
+        selectedAssistantId = id
+        context.getSharedPreferences("nila_models", Context.MODE_PRIVATE).edit().putString("selected_model_id", id).apply()
+        assistant = loadModel(option.model, gpuFirst = true) { assistantState = it }
+        routerState = if (ModelFiles.find(context, ModelFiles.ROUTER) == null) ModelState.MISSING else ModelState.ON_DEMAND
+        if (assistant != null) true else {
+            selectedAssistant = previous
+            selectedAssistantId = previous?.id
+            context.getSharedPreferences("nila_models", Context.MODE_PRIVATE)
+                .edit().putString("selected_model_id", previous?.id).apply()
+            assistant = previous?.let { loadModel(it, gpuFirst = true) { assistantState = it } }
+            false
+        }
+    }
+
+    private fun loadModel(model: ModelSpec, gpuFirst: Boolean, setState: (ModelState) -> Unit): Engine? {
+        val file = ModelFiles.find(context, model.filename) ?: return null.also { setState(ModelState.MISSING) }
         setState(ModelState.LOADING)
         val backends = if (gpuFirst) listOf(Backend.GPU(), Backend.CPU()) else listOf(Backend.CPU())
         for (backend in backends) {
@@ -261,11 +329,8 @@ class NilaBrain(
                 EngineConfig(
                     modelPath = file.absolutePath,
                     backend = backend,
-                    // Gemma's audio encoder runs on the CPU, as in Google's AI Edge Gallery.
-                    audioBackend = if (audio) Backend.CPU() else null,
-                    // Gemma 4 E2B also reads images (My NILA's report photos), but only the report reader loads
-                    // vision. On the CPU, like audio: on the GPU the iQOO 15 never finished loading the assistant.
-                    visionBackend = if (vision) Backend.CPU() else null,
+                    audioBackend = if (ModelCapability.AUDIO in model.capabilities) Backend.CPU() else null,
+                    visionBackend = if (ModelCapability.VISION in model.capabilities) Backend.CPU() else null,
                     cacheDir = context.cacheDir.absolutePath,
                 ),
             )
@@ -277,7 +342,7 @@ class NilaBrain(
                 // close() throws on an engine that never initialized; unguarded, that escaped and
                 // crashed NILA on launch before the CPU fallback could run.
                 runCatching { created.close() }
-                loadError = "$name on ${backend::class.simpleName}: ${e.message}"
+                loadError = "${model.label} on ${backend::class.simpleName}: ${e.message}"
                 runCatching { java.io.File(context.filesDir, "model_load.txt").appendText("$loadError\n") }
             }
         }
@@ -290,6 +355,9 @@ class NilaBrain(
      * becomes "order butter chicken" before anything routes it. Unknown favourites are asked for, never guessed.
      */
     suspend fun respond(input: String): NilaResponse {
+        matchingSkill(input, skills())?.let { skill ->
+            skillCall(skill, engine.capabilities)?.let { return engine.execute(NilaIntent.Call(it)) }
+        }
         // "photos I took on Dec 18 2024": searched on the phone itself, by the day the user named.
         photoSearch(input, java.time.LocalDate.now())?.let { return it }
         myNilaAnswer(input)?.let { return it }
@@ -501,7 +569,10 @@ class NilaBrain(
      * so a wrong guess for "hi" becomes a conversation instead of "I can't open that app".
      */
     private fun modelRoute(input: String): NilaResponse? {
-        val model = router ?: return null
+        val loadedHere = router == null
+        if (loadedHere && deviceMemory.availableBytes < ModelCatalog.FUNCTION_GEMMA.minimumAvailableBytes) return null
+        val model = router ?: loadModel(ModelCatalog.FUNCTION_GEMMA, gpuFirst = false) { routerState = it } ?: return null
+        try {
         val response = runCatching {
             model.createConversation(
                 ConversationConfig(
@@ -520,6 +591,12 @@ class NilaBrain(
         // "chat" or an unknown tool means this is conversation, not an action.
         if (proposed == null) return null
         return act(proposed.name, proposed.arguments, input)
+        } finally {
+            if (loadedHere) {
+                runCatching { model.close() }
+                routerState = ModelState.ON_DEMAND
+            }
+        }
     }
 
     /**
@@ -561,34 +638,45 @@ class NilaBrain(
         }
     }
 
-    /**
-     * Reads a medical report photo with Gemma 4 E2B on the phone and returns what it says, as JSON NILA
-     * parses itself. Vision loads only here, in its own CPU engine freed right after, so the assistant
-     * everyone uses stays lighter. Unavailable when the model can't load; Unreadable when its reply can't
-     * be read. NILA then saves the photo and says so, never made-up values.
-     * ponytail: a second engine per report costs a few seconds and RAM while reading; keep one warm if reports get frequent.
-     */
+    /** Reads a report only when the selected assistant includes a vision encoder. */
     suspend fun readReport(jpeg: ByteArray): ReportRead = withContext(llm) {
-        val reader = loadModel(ModelFiles.ASSISTANT, gpuFirst = false, audio = false, vision = true) {} ?: return@withContext ReportRead.Unavailable
+        if (ModelCapability.VISION !in (selectedAssistant?.capabilities ?: emptySet())) return@withContext ReportRead.Unavailable
+        val reader = assistant ?: return@withContext ReportRead.Unavailable
         val start = SystemClock.elapsedRealtime()
-        try {
-            val reply = try {
+        val reply = try {
                 reader.createConversation(ConversationConfig(samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0))).use { conversation ->
                     conversation.sendMessage(Contents.of(Content.ImageBytes(jpeg), Content.Text(READ_REPORT)))
                         .contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "readReport failed: ${e::class.java.simpleName}")
-                null
-            }
-            // Timing only: a report is health data and must never reach device logs.
-            Log.i(TAG, "readReport ms=${SystemClock.elapsedRealtime() - start} chars=${reply?.length ?: 0}")
-            reply?.let(::parseReportReading)?.let { ReportRead.Read(it) } ?: ReportRead.Unreadable
-        } finally {
-            runCatching { reader.close() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "readReport failed: ${e::class.java.simpleName}")
+            null
         }
+        // Timing only: a report is health data and must never reach device logs.
+        Log.i(TAG, "readReport ms=${SystemClock.elapsedRealtime() - start} chars=${reply?.length ?: 0}")
+        reply?.let(::parseReportReading)?.let { ReportRead.Read(it) } ?: ReportRead.Unreadable
+    }
+
+    /** Uses the already loaded on-device vision assistant; suggestions never trigger taps. */
+    internal suspend fun suggestScreenTargets(jpeg: ByteArray): ScreenTargetResult = withContext(llm) {
+        val model = selectedAssistant
+        val memory = ModelCatalog.deviceMemory(context)
+        if (!canRunScreenGuidance(model, assistant != null, memory)) return@withContext ScreenTargetResult.Unavailable
+        val reader = assistant ?: return@withContext ScreenTargetResult.Unavailable
+        val reply = try {
+            reader.createConversation(ConversationConfig(samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0))).use { conversation ->
+                conversation.sendMessage(Contents.of(Content.ImageBytes(jpeg), Content.Text(SCREEN_GUIDANCE_PROMPT)))
+                    .contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "screen guidance failed: ${e::class.java.simpleName}")
+            null
+        }
+        reply?.let(::parseScreenTargets)?.let(ScreenTargetResult::Suggestions) ?: ScreenTargetResult.Unreadable
     }
 
     /**
@@ -596,6 +684,7 @@ class NilaBrain(
      * as typing, so voice never skips the rules, checks or confirmations.
      */
     suspend fun transcribe(wav: ByteArray): String? = withContext(llm) {
+        if (ModelCapability.AUDIO !in (selectedAssistant?.capabilities ?: emptySet())) return@withContext null
         val model = assistant ?: return@withContext null
         val start = SystemClock.elapsedRealtime()
         runCatching {
@@ -635,7 +724,8 @@ class NilaBrain(
 
     private fun chat(input: String, allowTools: Boolean = true): NilaResponse? {
         val model = assistant ?: return null
-        val response = runCatching {
+        val startedAt = SystemClock.elapsedRealtime()
+        val response = try {
             model.createConversation(
                 ConversationConfig(
                     systemInstruction = Contents.of(personaWith(PERSONA, facts())),
@@ -646,13 +736,32 @@ class NilaBrain(
                     automaticToolCalling = false,
                 ),
             ).use { it.sendMessage(input) }
-        }.getOrNull() ?: return null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: OutOfMemoryError) {
+            inferenceFailed = true
+            Log.e(TAG, "assistant inference exhausted memory after ${SystemClock.elapsedRealtime() - startedAt} ms")
+            return null
+        } catch (e: Exception) {
+            inferenceFailed = true
+            Log.w(TAG, "assistant inference failed (${e::class.java.simpleName}) after ${SystemClock.elapsedRealtime() - startedAt} ms")
+            return null
+        }
         response.toolCalls.firstOrNull()?.let { proposed ->
             trace("gemma tool=${proposed.name} args=${proposed.arguments.keys}")
-            act(proposed.name, proposed.arguments, input)?.let { return it }
+            act(proposed.name, proposed.arguments, input)?.let {
+                inferenceFailed = false
+                return it
+            }
         }
         val reply = cleanReply(response.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim())
-            ?: return null
+        if (reply == null) {
+            inferenceFailed = true
+            Log.w(TAG, "assistant inference returned no usable text after ${SystemClock.elapsedRealtime() - startedAt} ms")
+            return null
+        }
+        inferenceFailed = false
+        Log.i(TAG, "assistant inference completed after ${SystemClock.elapsedRealtime() - startedAt} ms")
         return NilaResponse.Text(reply)
     }
 
@@ -710,6 +819,14 @@ class NilaBrain(
             Copy names, values and dates exactly as printed. Never guess a value that is not on the page. Give no medical advice.
         """.trimIndent()
 
+        val SCREEN_GUIDANCE_PROMPT = """
+            Inspect this user-selected app screenshot. Return only JSON in this exact shape:
+            {"targets":[{"label":"short visible control name","x":0.5,"y":0.5}]}
+            Give at most 8 useful visible controls. x and y are normalized positions from 0.0 to 1.0
+            across the full image. Do not infer hidden controls or describe private content. If no controls
+            are clear, return {"targets":[]}. These are suggestions only; a person will decide what to do.
+        """.trimIndent()
+
         /** For My NILA: keep a lasting personal detail from an ordinary message, or nothing. */
         val LEARN = """
             Read the user's message. If it states a lasting personal detail about the user or someone close to them,
@@ -720,8 +837,8 @@ class NilaBrain(
         """.trimIndent()
         const val ALARM_HELP = "I couldn't read that time, so no alarm is set. Try \"set an alarm for 1:30 pm\"."
         const val NO_ACTION_TAKEN = "I haven't done that. Chat can't take actions. To set an alarm, say a time like \"set an alarm for 1:30 pm\" and tap Set alarm on the card."
-        const val NOT_LOADED_YET = "I'm still starting up on this phone — give it a moment and try again. " +
-            "Exact actions like \"set an alarm for 6\" or \"turn on the flashlight\" work even before I'm fully loaded."
+        const val NOT_LOADED_YET = "On-device chat isn't available on this phone right now. " +
+            "Exact actions like \"set an alarm for 6\" or \"turn on the flashlight\" still work."
 
         /**
          * An escape hatch for FunctionGemma, which otherwise tends to pick some tool for every input
