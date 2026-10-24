@@ -1,5 +1,6 @@
 package com.nila.launcher
 
+import java.util.Locale
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -464,30 +465,34 @@ private fun LanguagesScreen(onOpen: (NilaScreen) -> Unit, onBack: () -> Unit) = 
     val context = LocalContext.current
     var output by remember { mutableStateOf<Map<String, SpeechOutputStatus>>(emptyMap()) }
     var checks by remember { mutableStateOf(0) }
+    var probed by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(checks) { probeSpeechOutput(context) { output = it } }
+    LaunchedEffect(checks) { probeSpeechOutput(context) { output = it; probed = true } }
 
     ScreenTitle("Speak in your\nlanguage.")
-    BodyText("Gemma 4 E2B listens to every language on this phone, with nothing sent online. Just speak: it works out which language you used. Typing always works too.")
-    voiceLanguages.forEach { language ->
-        val speaking = output[language.tag]
+    BodyText("Voice capture and transcription use on-device Gemma 4 E2B. Transcription language coverage has not been validated on this phone. Typing always works too.")
+    output.forEach { (tag, speaking) ->
+        val language = Locale.forLanguageTag(tag).getDisplayName(Locale.getDefault()).ifBlank { tag }
         SectionCard(
-            title = language.name,
-            detail = "Listening: Gemma 4 E2B on this phone\nSpeaking:${(speaking ?: SpeechOutputStatus.UNKNOWN).label}",
+            title = language,
+            detail = "Transcription: not verified\nSpeaking: ${speaking.label}",
             status = when (speaking) {
-                null -> "CHECKING…"
-                SpeechOutputStatus.OFFLINE -> "LISTENS AND SPEAKS · OFFLINE"
-                else -> "LISTENS · REPLIES IN TEXT"
+                SpeechOutputStatus.OFFLINE -> "SPEECH OUTPUT · OFFLINE"
+                SpeechOutputStatus.NEEDS_DOWNLOAD -> "SPEECH OUTPUT · DOWNLOAD VOICE"
+                SpeechOutputStatus.ONLINE_ONLY -> "SPEECH OUTPUT · NETWORK-DEPENDENT"
+                else -> "SPEECH OUTPUT · NOT AVAILABLE OFFLINE"
             },
         )
     }
-    if (output.values.any { it == SpeechOutputStatus.NEEDS_DOWNLOAD || it == SpeechOutputStatus.UNAVAILABLE }) {
+    if (!probed) BodyText("Checking the voices installed on this phone…")
+    else if (output.isEmpty()) BodyText("No available text-to-speech voices were reported by Android.")
+    if (output.values.any { it != SpeechOutputStatus.OFFLINE }) {
         SecondaryButton("Install speaking voices") {
             if (!installSpeechOutput(context)) message = "No voice installer is available on this phone."
         }
     }
     message?.let { BodyText(it, Lime) }
-    PrimaryButton("Check again") { message = null; checks++ }
+    PrimaryButton("Check again") { message = null; probed = false; checks++ }
 }
 
 @Composable

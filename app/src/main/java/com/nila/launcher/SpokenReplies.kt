@@ -5,11 +5,24 @@ import android.speech.tts.TextToSpeech
 import android.util.Log
 import java.util.Locale
 
-/** Picks the voice language from the reply's own script: Malayalam, Devanagari (Hindi), or English. */
-fun replyLanguage(text: String): String = when {
-    text.any { it in 'ഀ'..'ൿ' } -> "ml-IN"
-    text.any { it in 'ऀ'..'ॿ' } -> "hi-IN"
-    else -> "en-IN"
+/** Picks a TTS locale only for scripts with a clear language match; unknown scripts use English. */
+fun replyLanguage(text: String): String {
+    val locales = text.codePoints().toArray().asSequence().mapNotNull { codePoint ->
+        when (Character.UnicodeScript.of(codePoint)) {
+            Character.UnicodeScript.MALAYALAM -> "ml-IN"
+            Character.UnicodeScript.DEVANAGARI -> "hi-IN"
+            Character.UnicodeScript.TAMIL -> "ta-IN"
+            Character.UnicodeScript.TELUGU -> "te-IN"
+            Character.UnicodeScript.KANNADA -> "kn-IN"
+            Character.UnicodeScript.THAI -> "th-TH"
+            Character.UnicodeScript.HIRAGANA, Character.UnicodeScript.KATAKANA -> "ja-JP"
+            Character.UnicodeScript.HANGUL -> "ko-KR"
+            Character.UnicodeScript.GREEK -> "el-GR"
+            Character.UnicodeScript.HEBREW -> "he-IL"
+            else -> null
+        }
+    }.toList()
+    return locales.firstOrNull() ?: "en-IN"
 }
 
 /** What Lakshmi says for a reply. Cards get a short line that points at the button; nothing is spoken as done. */
