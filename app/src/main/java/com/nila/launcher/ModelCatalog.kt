@@ -25,8 +25,15 @@ internal data class ModelSpec(
     }.takeIf { capability !in capabilities }
 }
 
-internal enum class RouterLoadPolicy { ON_DEMAND, RESIDENT }
 internal const val GIB = 1024L * 1024 * 1024
+
+internal data class ModelOption(val model: ModelSpec, val installed: Boolean, val fitsMemory: Boolean) {
+    val reason: String get() = when {
+        !installed -> "Model file not installed on this phone"
+        !fitsMemory -> "Not enough free memory to load safely right now"
+        else -> "Ready · loads when needed"
+    }
+}
 
 internal object ModelCatalog {
     val GEMMA_4_E2B = ModelSpec(
@@ -36,6 +43,16 @@ internal object ModelCatalog {
         capabilities = setOf(ModelCapability.TEXT, ModelCapability.AUDIO, ModelCapability.VISION, ModelCapability.TOOLS),
         minimumAvailableBytes = 4 * GIB,
     )
+
+    val GEMMA_3_1B = ModelSpec(
+        id = "gemma-3-1b-it",
+        filename = "gemma3-1b-it-int4.litertlm",
+        label = "Gemma 3 1B · text",
+        capabilities = setOf(ModelCapability.TEXT),
+        minimumAvailableBytes = GIB + GIB / 4,
+    )
+
+    val assistants = listOf(GEMMA_3_1B, GEMMA_4_E2B)
 
     val FUNCTION_GEMMA = ModelSpec(
         id = "functiongemma-run8-q8-ekv2048",
@@ -51,16 +68,16 @@ internal object ModelCatalog {
         return DeviceMemory(info.totalMem, info.availMem, info.lowMemory)
     }
 
-    fun selectAssistant(installed: Set<String>, memory: DeviceMemory): ModelSpec? = GEMMA_4_E2B.takeIf {
-        it.filename in installed && !memory.lowMemory && memory.availableBytes >= it.minimumAvailableBytes
+    fun choices(installed: Set<String>, memory: DeviceMemory): List<ModelOption> = assistants.map { model ->
+        ModelOption(model, model.filename in installed, !memory.lowMemory && memory.availableBytes >= model.minimumAvailableBytes)
     }
 
-    fun routerPolicy(memory: DeviceMemory): RouterLoadPolicy =
-        if (memory.lowMemory || memory.totalBytes < 10 * GIB || memory.availableBytes < 4 * GIB) {
-            RouterLoadPolicy.ON_DEMAND
-        } else {
-            RouterLoadPolicy.RESIDENT
+    fun selectAssistant(installed: Set<String>, memory: DeviceMemory, preferredId: String? = null): ModelSpec? =
+        choices(installed, memory).let { options ->
+            options.firstOrNull { it.model.id == preferredId && it.installed && it.fitsMemory }?.model
+                ?: options.filter { it.installed && it.fitsMemory }.minByOrNull { it.model.minimumAvailableBytes }?.model
         }
+
 }
 
 internal fun modelStatus(model: ModelSpec?, inferenceFailed: Boolean = false): String = buildString {

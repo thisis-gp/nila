@@ -65,6 +65,9 @@ internal fun NilaScreenCatalogue(
     onWelcomeTour: () -> Unit,
     accounts: List<ServiceAccount>,
     modelStatus: String,
+    modelOptions: List<ModelOption>,
+    selectedModelId: String?,
+    onSelectModel: (String) -> Unit,
     skills: List<NilaSkill>,
     workflows: List<NilaWorkflow>,
     capabilities: List<CapabilityDescriptor>,
@@ -86,7 +89,7 @@ internal fun NilaScreenCatalogue(
         NilaScreen.Memory -> MemoryScreen(onOpen, onBack, facts, onForgetFact, onForgetAll)
         NilaScreen.Capabilities -> CapabilitiesScreen(onOpen, onBack)
         NilaScreen.Activity -> ActivityScreen(onOpen, onBack)
-        NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, onWelcomeTour, facts, accounts, modelStatus)
+        NilaScreen.Settings -> SettingsScreen(onOpen, onBack, onChooseDefaultHome, onWelcomeTour, facts, accounts, modelStatus, modelOptions, selectedModelId, onSelectModel)
         NilaScreen.Skills -> SkillBuilderScreen(onOpen, onBack, skills, workflows, capabilities, onSaveSkill, onDeleteSkill, onSaveWorkflow, onDeleteWorkflow)
         NilaScreen.Languages -> LanguagesScreen(onOpen, onBack)
         NilaScreen.PhoneAccess -> Page("PHONE ACCESS", onOpen, onBack) { PhoneAccessTab() }

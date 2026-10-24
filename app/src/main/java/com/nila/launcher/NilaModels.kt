@@ -40,6 +40,11 @@ object ModelFiles {
         listOfNotNull(File(context.filesDir, "models"), dir(context))
             .map { File(it, name) }
             .firstOrNull { it.isFile && it.length() > 0 }
+
+    fun installed(context: Context): Set<String> = listOfNotNull(File(context.filesDir, "models"), dir(context))
+        .flatMap { it.listFiles().orEmpty().toList() }
+        .filter { it.isFile && it.extension == "litertlm" && it.length() > 0 }
+        .mapTo(mutableSetOf()) { it.name }
 }
 
 enum class ModelState(val label: String) {
@@ -228,6 +233,10 @@ class NilaBrain(
         private set
     internal var selectedAssistant by mutableStateOf<ModelSpec?>(null)
         private set
+    internal var selectedAssistantId by mutableStateOf<String?>(null)
+        private set
+    internal var modelOptions by mutableStateOf<List<ModelOption>>(emptyList())
+        private set
     private var inferenceFailed by mutableStateOf(false)
     val modelStatus: String get() = buildString {
         append(com.nila.launcher.modelStatus(selectedAssistant, inferenceFailed))
@@ -257,15 +266,55 @@ class NilaBrain(
 
     suspend fun load() = withContext(llm) {
         deviceMemory = ModelCatalog.deviceMemory(context)
-        val installed = setOf(ModelCatalog.GEMMA_4_E2B)
-            .filter { ModelFiles.find(context, it.filename) != null }
-            .mapTo(mutableSetOf()) { it.filename }
-        selectedAssistant = ModelCatalog.selectAssistant(installed, deviceMemory)
+        val installed = ModelFiles.installed(context)
+        modelOptions = ModelCatalog.choices(installed, deviceMemory)
+        val preferences = context.getSharedPreferences("nila_models", Context.MODE_PRIVATE)
+        val preferred = preferences.getString("selected_model_id", null)
+        selectedAssistant = ModelCatalog.selectAssistant(installed, deviceMemory, preferred)
+        selectedAssistantId = selectedAssistant?.id
+        selectedAssistant?.let { if (preferred != it.id) preferences.edit().putString("selected_model_id", it.id).apply() }
         assistant = selectedAssistant?.let { loadModel(it, gpuFirst = true) { assistantState = it } }
         val routerInstalled = ModelFiles.find(context, ModelFiles.ROUTER) != null
         routerState = if (routerInstalled) ModelState.ON_DEMAND else ModelState.MISSING
-        if (routerInstalled && ModelCatalog.routerPolicy(deviceMemory) == RouterLoadPolicy.RESIDENT) {
-            router = loadModel(ModelCatalog.FUNCTION_GEMMA, gpuFirst = false) { routerState = it }
+    }
+
+    suspend fun refreshModelChoices() = withContext(llm) {
+        deviceMemory = ModelCatalog.deviceMemory(context)
+        val effectiveMemory = selectedAssistant?.takeIf { assistant != null }?.let {
+            deviceMemory.copy(availableBytes = deviceMemory.availableBytes + it.minimumAvailableBytes)
+        } ?: deviceMemory
+        modelOptions = ModelCatalog.choices(ModelFiles.installed(context), effectiveMemory)
+    }
+
+    suspend fun selectAssistantModel(id: String): Boolean = withContext(llm) {
+        val installed = ModelFiles.installed(context)
+        if (selectedAssistant?.id == id && assistant != null) return@withContext true
+        val previous = selectedAssistant
+        assistant?.close()
+        assistant = null
+        router?.close()
+        router = null
+        deviceMemory = ModelCatalog.deviceMemory(context)
+        modelOptions = ModelCatalog.choices(installed, deviceMemory)
+        val option = modelOptions.firstOrNull { it.model.id == id && it.installed && it.fitsMemory }
+        if (option == null) {
+            selectedAssistant = previous
+            selectedAssistantId = previous?.id
+            assistant = previous?.let { loadModel(it, gpuFirst = true) { assistantState = it } }
+            return@withContext false
+        }
+        selectedAssistant = option.model
+        selectedAssistantId = id
+        context.getSharedPreferences("nila_models", Context.MODE_PRIVATE).edit().putString("selected_model_id", id).apply()
+        assistant = loadModel(option.model, gpuFirst = true) { assistantState = it }
+        routerState = if (ModelFiles.find(context, ModelFiles.ROUTER) == null) ModelState.MISSING else ModelState.ON_DEMAND
+        if (assistant != null) true else {
+            selectedAssistant = previous
+            selectedAssistantId = previous?.id
+            context.getSharedPreferences("nila_models", Context.MODE_PRIVATE)
+                .edit().putString("selected_model_id", previous?.id).apply()
+            assistant = previous?.let { loadModel(it, gpuFirst = true) { assistantState = it } }
+            false
         }
     }
 
