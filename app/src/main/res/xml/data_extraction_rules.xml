@@ -7,6 +7,7 @@
         <exclude domain="sharedpref" path="nila_health.xml" />
         <exclude domain="sharedpref" path="nila_reminders.xml" />
         <exclude domain="sharedpref" path="nila_reminders_secure.xml" />
+        <exclude domain="sharedpref" path="nila_mcp_servers_secure.xml" />
         <exclude domain="sharedpref" path="nila_skills.xml" />
         <exclude domain="sharedpref" path="nila_skills_secure.xml" />
         <exclude domain="sharedpref" path="nila_memory_key.xml" />
@@ -22,6 +23,7 @@
         <exclude domain="sharedpref" path="nila_health.xml" />
         <exclude domain="sharedpref" path="nila_reminders.xml" />
         <exclude domain="sharedpref" path="nila_reminders_secure.xml" />
+        <exclude domain="sharedpref" path="nila_mcp_servers_secure.xml" />
         <exclude domain="sharedpref" path="nila_skills.xml" />
         <exclude domain="sharedpref" path="nila_skills_secure.xml" />
         <exclude domain="sharedpref" path="nila_memory_key.xml" />

@@ -163,7 +163,12 @@ private fun executeMcpTool(context: Context, invocation: NilaResponse.McpToolInv
                 ?: error("Zomato did not complete this tool.")
         }
         "zepto" -> ZeptoMcpClient(ZeptoAuth(context)).callTool(invocation.toolName, arguments)
-        else -> error("Unknown MCP server.")
+        else -> {
+            val server = McpServerStore(context).all().firstOrNull { it.id == invocation.serverId }
+                ?: error("This MCP server was removed.")
+            McpClient(server.endpoint, server.bearerToken.takeIf(String::isNotBlank)).callTool(invocation.toolName, arguments)
+                ?: error("${server.name} did not complete this tool.")
+        }
     }
     if (result.optBoolean("isError")) error("The service reported that this tool failed.")
     val text = result.optJSONArray("content")?.optJSONObject(0)?.optString("text").orEmpty().trim()
@@ -377,6 +382,10 @@ private fun NilaApp(resumeVersion: Int) {
     // Bumped when Settings connects or disconnects an account, so its cards re-read who is signed in.
     var accountsRevision by remember { mutableIntStateOf(0) }
     var mcpRegistryRevision by remember { mutableIntStateOf(0) }
+    val mcpServerStore = remember { McpServerStore(context.applicationContext) }
+    val customMcpServers = remember(accountsRevision) { mcpServerStore.all() }
+    var mcpServerStatus by remember { mutableStateOf<String?>(null) }
+    var mcpBusy by remember { mutableStateOf(false) }
     LaunchedEffect(SignIns.revision, accountsRevision) {
         val swiggy = async(Dispatchers.IO) {
             val session = swiggySession
@@ -398,7 +407,59 @@ private fun NilaApp(resumeVersion: Int) {
         engine.replaceMcpTools("swiggy", swiggy.await())
         engine.replaceMcpTools("zomato", zomato.await())
         engine.replaceMcpTools("zepto", zepto.await())
+        val custom = customMcpServers.map { server ->
+            async(Dispatchers.IO) {
+                server to runCatching {
+                    val raw = McpClient(server.endpoint, server.bearerToken.takeIf(String::isNotBlank)).listToolsRaw()
+                    DynamicMcpToolRegistry.parse(server.id, server.name, raw)
+                }.getOrNull()
+            }
+        }
+        custom.forEach { task ->
+            val (server, tools) = task.await()
+            engine.replaceMcpTools(server.id, tools)
+        }
         mcpRegistryRevision++
+    }
+
+    fun addMcpServer(name: String, endpoint: String, token: String) {
+        if (mcpBusy) return
+        mcpBusy = true
+        mcpServerStatus = "Checking the HTTPS endpoint and supported tools…"
+        scope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                val raw = McpClient(endpoint, token.takeIf(String::isNotBlank)).listToolsRaw()
+                val preview = DynamicMcpToolRegistry.parse("candidate", name, raw)
+                require(preview.isNotEmpty()) { "No supported flat tools were found. Server was not saved." }
+                val server = mcpServerStore.add(name, endpoint, token).getOrThrow()
+                server to DynamicMcpToolRegistry.parse(server.id, server.name, raw)
+            }
+            withContext(Dispatchers.Main) {
+                mcpBusy = false
+                result.onSuccess { (server, tools) ->
+                    engine.replaceMcpTools(server.id, tools)
+                    mcpServerStatus = "Added ${server.name}; ${tools.size} supported tools discovered. Calls always need confirmation."
+                    accountsRevision++
+                }.onFailure { error ->
+                    // Do not surface server response bodies or request exceptions that could contain secrets.
+                    mcpServerStatus = when (error.message) {
+                        "No supported flat tools were found. Server was not saved." -> error.message
+                        else -> "Couldn't add that server. Check its HTTPS endpoint, token and supported MCP schema."
+                    }
+                }
+            }
+        }
+    }
+
+    fun removeMcpServer(id: String) {
+        val server = customMcpServers.firstOrNull { it.id == id } ?: return
+        if (!mcpServerStore.remove(id)) {
+            mcpServerStatus = "Couldn't remove this server securely."
+            return
+        }
+        engine.replaceMcpTools(id, emptyList())
+        mcpServerStatus = "Removed ${server.name}."
+        accountsRevision++
     }
 
     /**
@@ -878,6 +939,11 @@ private fun NilaApp(resumeVersion: Int) {
                                 onWelcomeTour = { showWelcome = true },
                                 facts = facts,
                                 mcpTools = remember(engine, mcpRegistryRevision) { engine.dynamicMcpTools() },
+                                customMcpServers = customMcpServers,
+                                mcpServerStatus = mcpServerStatus,
+                                mcpBusy = mcpBusy,
+                                onAddMcpServer = ::addMcpServer,
+                                onRemoveMcpServer = ::removeMcpServer,
                                 skills = skills,
                                 workflows = workflows,
                                 capabilities = engine.capabilities.values.toList(),

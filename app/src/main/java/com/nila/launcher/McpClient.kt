@@ -16,11 +16,20 @@ import java.util.concurrent.atomic.AtomicInteger
  * get_food_cart, get_payment_options, place_food_order, ...). Blocking: call
  * from Dispatchers.IO.
  */
-internal class McpClient(private val endpoint: String, private val accessToken: String) {
-    private val http = OkHttpClient.Builder().readTimeout(30, TimeUnit.SECONDS).build()
+internal class McpClient(private val endpoint: String, private val accessToken: String?) {
+    private val http = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
     private val nextId = AtomicInteger(1)
     private var sessionId: String? = null
     private var initialized = false
+
+    init {
+        require(McpEndpoint.validate(endpoint) == null) { "MCP endpoint must be a valid HTTPS URL without embedded credentials." }
+    }
 
     /** Last failure reason, shown in the UI — this vivo ROM drops app logcat output. */
     var lastError: String? = null
@@ -77,15 +86,24 @@ internal class McpClient(private val endpoint: String, private val accessToken: 
             .put("params", params)
         val request = Request.Builder()
             .url(endpoint)
-            .header("Authorization", "Bearer $accessToken")
             .header("Accept", "application/json, text/event-stream")
+            .apply { accessToken?.takeIf(String::isNotBlank)?.let { header("Authorization", "Bearer $it") } }
             .apply { sessionId?.let { header("Mcp-Session-Id", it) } }
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
         http.newCall(request).execute().use { resp ->
-            val raw = resp.body?.string().orEmpty()
+            val body = resp.body
+            if (body != null && body.contentLength() > MAX_RESPONSE_BYTES) {
+                lastError = "$method -> response too large"
+                return@runCatching null
+            }
+            val raw = body?.source()?.readByteArray(MAX_RESPONSE_BYTES + 1)?.toString(Charsets.UTF_8).orEmpty()
+            if (raw.length > MAX_RESPONSE_BYTES) {
+                lastError = "$method -> response too large"
+                return@runCatching null
+            }
             if (!resp.isSuccessful) {
-                lastError = "$method -> HTTP ${resp.code}: ${raw.take(200)}"
+                lastError = "$method -> HTTP ${resp.code}"
                 return@runCatching null
             }
             resp.header("Mcp-Session-Id")?.let { sessionId = it }
@@ -101,10 +119,14 @@ internal class McpClient(private val endpoint: String, private val accessToken: 
             }
             val parsed = JSONObject(json)
             parsed.optJSONObject("error")?.let {
-                lastError = "$method -> ${it.optString("message")}"
+                lastError = "$method -> server returned an RPC error"
                 return@runCatching null
             }
             parsed.optJSONObject("result")
         }
-    }.onFailure { lastError = "$method -> ${it.javaClass.simpleName}: ${it.message}" }.getOrNull()
+    }.onFailure { lastError = "$method -> ${it.javaClass.simpleName}" }.getOrNull()
+
+    private companion object {
+        const val MAX_RESPONSE_BYTES = 1_048_576L
+    }
 }
