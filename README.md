@@ -11,14 +11,17 @@ This repository is a working launcher prototype, not an independent operating sy
 - Phone actions including alarms, timers, flashlight, camera, notes, calendar, calls, messages and media controls.
 - Trusted native cards for food, groceries, routes, files, photos, health records and fitness.
 - User-authored, one-step skills: exact phrases can invoke an existing NILA tool; their data is encrypted locally.
+- User-authored workflows: exact phrases preview up to eight existing tools, then run supported read/prepare steps in order; each Commit pauses for confirmation and interactive provider steps hand off to the user.
 - Swiggy Food, Swiggy Instamart, Zomato and Zepto account connections and guarded commerce flows.
 - OpenStreetMap place lookup and route estimates, with a maps-app handoff for navigation.
 - My NILA facts, people, reminders and encrypted health records stored on the phone.
 - Explicit confirmation before consequential actions.
 
+Voice capture is processed by the on-device Gemma 4 E2B model. Transcription language coverage has not been validated across phones. Spoken replies use only voices advertised by the installed Android TTS engine; NILA stays silent if the selected reply language has no installed offline voice. Network-dependent voices are reported separately and are never selected.
+
 FunctionGemma routes a fixed set of tools. Gemma 4 E2B provides conversation, transcription and report reading. Deterministic phone actions still work when a model is unavailable.
 
-Generated multi-step skills/apps, dynamic MCP installation, semantic vector memory, cross-app screenshot guidance, selectable models and NILA Orbit earnings are planned work; they are not part of the current `main` build.
+Generated code/apps/agents, unattended cross-app control, semantic vector memory, selectable models and NILA Orbit earnings remain future work. Workflows are declarative data, not generated code. Dynamic MCP installation and screen guidance are tracked in separate open pull requests.
 
 ## Run
 
