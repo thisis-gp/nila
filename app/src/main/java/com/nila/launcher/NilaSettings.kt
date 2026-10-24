@@ -108,6 +108,7 @@ internal fun SettingsScreen(
             )
             SettingsRow(LucideR.drawable.lucide_ic_smartphone, "Phone access", "Photos, files, contacts", onClick = { onOpen(NilaScreen.PhoneAccess) })
             SettingsRow(LucideR.drawable.lucide_ic_history, "Activity and approvals", "What NILA has done for you", onClick = { onOpen(NilaScreen.Activity) })
+            SettingsRow(LucideR.drawable.lucide_ic_sparkles, "Build a skill", "Create a private phrase-to-tool shortcut", onClick = { onOpen(NilaScreen.Skills) })
             SettingsRow(LucideR.drawable.lucide_ic_hand, "Confirm before acting", "NILA always asks before paying, sending or booking", trailing = "Always")
 
             GroupLabel("About")

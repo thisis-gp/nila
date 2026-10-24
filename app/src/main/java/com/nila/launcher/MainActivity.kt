@@ -165,9 +165,12 @@ private fun NilaApp(resumeVersion: Int) {
     val memory = remember { NilaMemory(context.applicationContext) }
     val facts by memory.factsFlow.collectAsState()
     val health = remember { HealthStore(context.applicationContext) }
+    val skillStore = remember { NilaSkillStore(context.applicationContext) }
+    var skillsRevision by remember { mutableIntStateOf(0) }
+    val skills = remember(skillsRevision) { skillStore.all() }
     LaunchedEffect(health) { withContext(Dispatchers.IO) { health.sweep() } }
     val reminders = remember { NilaReminders(context.applicationContext) }
-    val brain = remember { NilaBrain(context.applicationContext, engine, { memory.facts() }, { health.records() }) }
+    val brain = remember { NilaBrain(context.applicationContext, engine, { memory.facts() }, { health.records() }, skillStore::all) }
     // Lakshmi speaks replies to spoken requests; typed requests stay silent.
     val lakshmi = remember { Lakshmi(context) }
     DisposableEffect(lakshmi) { onDispose { lakshmi.close() } }
@@ -725,6 +728,10 @@ private fun NilaApp(resumeVersion: Int) {
                                 onForgetAll = { scope.launch { memory.clear() } },
                                 onWelcomeTour = { showWelcome = true },
                                 facts = facts,
+                                skills = skills,
+                                capabilities = engine.capabilities.values.toList(),
+                                onSaveSkill = { skill -> skillStore.save(skill); skillsRevision++ },
+                                onDeleteSkill = { id -> skillStore.delete(id); skillsRevision++ },
                                 accounts = accountsRevision.let { listOf(
                                     ServiceAccount(
                                         name = "Swiggy",
