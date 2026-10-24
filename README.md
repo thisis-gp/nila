@@ -10,6 +10,7 @@ This repository is a working launcher prototype, not an independent operating sy
 - Typed and microphone requests with on-device Gemma inference when the model files are installed.
 - Phone actions including alarms, timers, flashlight, camera, notes, calendar, calls, messages and media controls.
 - Trusted native cards for food, groceries, routes, files, photos, health records and fitness.
+- User-authored, one-step skills: exact phrases can invoke an existing NILA tool; their data is encrypted locally.
 - Swiggy Food, Swiggy Instamart, Zomato and Zepto account connections and guarded commerce flows.
 - OpenStreetMap place lookup and route estimates, with a maps-app handoff for navigation.
 - My NILA facts, people, reminders and encrypted health records stored on the phone.
@@ -19,7 +20,7 @@ Voice capture is processed by the on-device Gemma 4 E2B model. Transcription lan
 
 FunctionGemma routes a fixed set of tools. Gemma 4 E2B provides conversation, transcription and report reading. Deterministic phone actions still work when a model is unavailable.
 
-Generated apps/skills, dynamic MCP installation, semantic vector memory, cross-app screenshot control, selectable models and NILA Orbit earnings are planned work; they are not part of the current `main` build.
+Generated multi-step skills/apps, dynamic MCP installation, semantic vector memory, cross-app screenshot guidance, selectable models and NILA Orbit earnings are planned work; they are not part of the current `main` build.
 
 ## Run
 
