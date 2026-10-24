@@ -222,6 +222,7 @@ class NilaBrain(
     private val healthRecords: () -> List<HealthRecord> = { emptyList() },
     private val skills: () -> List<NilaSkill> = { emptyList() },
 ) {
+    init { ScreenGuidanceRuntime.bind(this) }
     /** Set when Gemma read the last message as a personal fact, so [learn] keeps it whatever its wording. */
     private var learnNext = false
     var assistantState by mutableStateOf(ModelState.MISSING)
@@ -257,6 +258,7 @@ class NilaBrain(
      * progress, so nothing is closed while in use. Call when the screen that owns this brain goes away.
      */
     fun close() {
+        ScreenGuidanceRuntime.unbind(this)
         llm.executor.execute {
             router?.close(); router = null
             assistant?.close(); assistant = null
@@ -656,6 +658,26 @@ class NilaBrain(
         reply?.let(::parseReportReading)?.let { ReportRead.Read(it) } ?: ReportRead.Unreadable
     }
 
+    /** Uses the already loaded on-device vision assistant; suggestions never trigger taps. */
+    internal suspend fun suggestScreenTargets(jpeg: ByteArray): ScreenTargetResult = withContext(llm) {
+        val model = selectedAssistant
+        val memory = ModelCatalog.deviceMemory(context)
+        if (!canRunScreenGuidance(model, assistant != null, memory)) return@withContext ScreenTargetResult.Unavailable
+        val reader = assistant ?: return@withContext ScreenTargetResult.Unavailable
+        val reply = try {
+            reader.createConversation(ConversationConfig(samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0))).use { conversation ->
+                conversation.sendMessage(Contents.of(Content.ImageBytes(jpeg), Content.Text(SCREEN_GUIDANCE_PROMPT)))
+                    .contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "screen guidance failed: ${e::class.java.simpleName}")
+            null
+        }
+        reply?.let(::parseScreenTargets)?.let(ScreenTargetResult::Suggestions) ?: ScreenTargetResult.Unreadable
+    }
+
     /**
      * Turns a spoken WAV clip into text with Gemma 4 E2B on the phone. The text then takes the same path
      * as typing, so voice never skips the rules, checks or confirmations.
@@ -794,6 +816,14 @@ class NilaBrain(
              "follow_up": the follow-up date the document asks for, copied exactly as printed (like "04 Jan 2027"), or "" if it prints none,
              "summary": one or two plain sentences on the test, what was found and the follow-up. Never name any person: no patient and no doctor}
             Copy names, values and dates exactly as printed. Never guess a value that is not on the page. Give no medical advice.
+        """.trimIndent()
+
+        val SCREEN_GUIDANCE_PROMPT = """
+            Inspect this user-selected app screenshot. Return only JSON in this exact shape:
+            {"targets":[{"label":"short visible control name","x":0.5,"y":0.5}]}
+            Give at most 8 useful visible controls. x and y are normalized positions from 0.0 to 1.0
+            across the full image. Do not infer hidden controls or describe private content. If no controls
+            are clear, return {"targets":[]}. These are suggestions only; a person will decide what to do.
         """.trimIndent()
 
         /** For My NILA: keep a lasting personal detail from an ordinary message, or nothing. */
