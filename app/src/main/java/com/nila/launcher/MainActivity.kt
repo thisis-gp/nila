@@ -272,6 +272,16 @@ private fun NilaApp(resumeVersion: Int) {
 
     val scope = rememberCoroutineScope()
     var isThinking by remember { mutableStateOf(false) }
+    var thinkingMessage by remember { mutableStateOf("Looking that up…") }
+    LaunchedEffect(isThinking) {
+        thinkingMessage = "Looking that up…"
+        if (isThinking) {
+            delay(1800)
+            thinkingMessage = "Sorting the useful bits…"
+            delay(3500)
+            thinkingMessage = "Still with you — checking one more thing…"
+        }
+    }
     var justReplied by remember { mutableStateOf(false) }
     val swiggySession = remember(SignIns.revision) { SwiggyAuth.currentSession(context) }
     val zomatoSession = remember(SignIns.revision) { ZomatoAuth.currentSession(context) }
@@ -885,6 +895,7 @@ private fun NilaApp(resumeVersion: Int) {
                                 turns = turns,
                                 input = input,
                                 isThinking = isThinking,
+                                thinkingMessage = thinkingMessage,
                                 modelStatus = brain.modelStatus,
                                 transcribe = brain::transcribe,
                                 onInput = { input = it },
@@ -1117,6 +1128,7 @@ private fun AgentSpace(
     turns: List<Turn>,
     input: String,
     isThinking: Boolean,
+    thinkingMessage: String,
     modelStatus: String,
     transcribe: suspend (wav: ByteArray) -> String?,
     onInput: (String) -> Unit,
@@ -1196,12 +1208,12 @@ private fun AgentSpace(
                         when {
                             busy && (turn.response is NilaResponse.Food || turn.response is NilaResponse.Grocery) -> {
                                 // Keep the booking card on screen while Swiggy answers, faded so taps wait.
-                                ThinkingLine()
+                                ThinkingLine(thinkingMessage)
                                 Box(Modifier.alpha(BUSY_CARD_ALPHA)) {
                                     ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, runWorkflow = runWorkflow, confirmWorkflow = confirmWorkflow, cancelWorkflow = cancelWorkflow, food = food, grocery = grocery, forget = forget, addTurn = addTurn)
                                 }
                             }
-                            busy -> ThinkingLine()
+                            busy -> ThinkingLine(thinkingMessage)
                             else -> ResponseView(response = turn.response, context = context, prepare = prepare, confirm = confirm, runWorkflow = runWorkflow, confirmWorkflow = confirmWorkflow, cancelWorkflow = cancelWorkflow, food = food, grocery = grocery, forget = forget, addTurn = addTurn)
                         }
                     }
