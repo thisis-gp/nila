@@ -29,6 +29,10 @@ Open **Settings → MCP servers**, enter a name and an HTTPS Streamable HTTP end
 
 NILA currently discovers only tools with flat scalar inputs (string, integer, number or boolean), up to 16 parameters per tool. Unsupported schemas are skipped. Every discovered tool is treated as consequential: the confirmation card shows the server, tool and supplied arguments, and nothing runs until you confirm. OAuth-only servers and other MCP transports are not supported by this manual setup.
 
+Discovery follows paginated `tools/list`, `resources/list` and `prompts/list` responses, with bounds on pages and total entries. The client also supports `resources/read` and `prompts/get`; resources and prompt templates are not yet surfaced in chat. This implementation currently speaks the 2024-11-05 initialize/session form, not the breaking 2026-07-28 stateless revision (`server/discover`, per-request metadata, and `Mcp-Method`/`Mcp-Name` headers); [the current protocol defines those wire changes](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports). NILA does not implement server-to-client sampling, roots, or notifications. Custom endpoints currently support Streamable HTTP with manual bearer tokens; legacy HTTP+SSE and local stdio servers are not supported. Built-in Swiggy, Zomato and Zepto sign-in flows are provider-specific and do not make arbitrary OAuth MCP servers compatible.
+
+Cross-app actions use Android's app launcher, deep links and system composer/chooser. NILA does not silently tap other apps or use Accessibility to automate arbitrary screens. Calls open the dialer, messages open a prefilled composer, and the person still completes the consequential action in the target app.
+
 ## Run
 
 Requirements: JDK 17 and Android SDK 36. USB debugging and an authorized Android device are needed for install and launch checks.
