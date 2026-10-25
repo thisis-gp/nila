@@ -68,6 +68,9 @@ internal object ModelCatalog {
         return DeviceMemory(info.totalMem, info.availMem, info.lowMemory)
     }
 
+    /** GPU-first load measured hanging (never falling back) on the Pixel 4a; big-RAM phones keep GPU. */
+    fun assistantGpuFirst(memory: DeviceMemory): Boolean = memory.totalBytes >= 8 * GIB
+
     fun choices(installed: Set<String>, memory: DeviceMemory): List<ModelOption> = assistants.map { model ->
         ModelOption(model, model.filename in installed, !memory.lowMemory && memory.availableBytes >= model.minimumAvailableBytes)
     }

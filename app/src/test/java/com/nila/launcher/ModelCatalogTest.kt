@@ -59,4 +59,11 @@ class ModelCatalogTest {
         assertNull(ModelCatalog.selectAssistant(setOf("nila-assistant-jimi-gemma3-1b-v8-wi8-afp32.litertlm"), DeviceMemory(6L * GIB, 3L * GIB, false)))
     }
 
+    @Test
+    fun assistantLoadsCpuFirstOnSmallRamPhones() {
+        // The Pixel 4a's GPU-first load hung without ever falling back (measured); 8 GB+ keeps GPU.
+        assertFalse(ModelCatalog.assistantGpuFirst(DeviceMemory(6L * GIB, 2L * GIB, false)))
+        assertTrue(ModelCatalog.assistantGpuFirst(DeviceMemory(12L * GIB, 4L * GIB, false)))
+    }
+
 }
