@@ -119,7 +119,10 @@ class NilaEngine(
     private val percentage = Regex("""(\d+(?:\.\d+)?)\s*%\s*(?:of)?\s*(\d+(?:\.\d+)?)""")
     private val percentFollowUp = Regex("""\s*(?:and|what about|how about|now)?\s*(?:with\s+)?(\d+(?:\.\d+)?)\s*(?:%|percent)\s*[?.!]*\s*""")
     private val alarm = Regex("""alarm\s+(?:(?:for|at|on)\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?""")
-    private val remember = Regex("""remember(?: that)?\s+(.+)""")
+    private val timeFirstAlarm = Regex("""\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+alarm\b""")
+    private val remember = Regex("""remember(?: that)?\s+(.+)|(?:don'?t|do not)\s+forget\s+(?:that\s+)?(.+)""")
+    // Restaurant-meal words: casual food asks the fine-tuned router misses ("get me lunch", "im starving").
+    private val mealWords = Regex("""\b(lunch|dinner|breakfast|dessert|starving|bhook)\b""")
     // "1:30", "1.30", "1 30" and "9 pm"; then compact "130" or "1330" as hours and minutes.
     private val removeAlarm = Regex("""\b(remove|delete|cancel|turn off|switch off|stop|dismiss|clear|disable)\b.*\balarms?\b""")
     private val clockTime = Regex("""(?<![\d:.])(\d{1,2})(?:[:.\s](\d{2}))?\s*(am|pm)?(?![\d:.])""")
@@ -463,8 +466,19 @@ class NilaEngine(
             }
         }
         moreActionCall(input)?.let { return NilaIntent.Call(it) }
+        // "schedule demo review monday at 10am" names no event word; the verb alone carries it.
+        if (Regex("""^\s*(?:please\s+)?schedule\s+\S""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("create_event", eventArgs(input)))
         if (Regex("""\b(event|meeting|appointment|calendar)\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("create_event", eventArgs(input)))
 
+        // "12:15 pm alarm": the time can lead too, not only "alarm for 12:15".
+        timeFirstAlarm.find(normalized)?.let { match ->
+            val args = mutableMapOf<String, Any>(
+                "hour" to match.groupValues[1].toInt(),
+                "minute" to match.groupValues[2].ifBlank { "0" }.toInt(),
+            )
+            match.groupValues[3].ifEmpty { null }?.let { args["meridiem"] = it }
+            return NilaIntent.Call(ToolCall("create_alarm", args))
+        }
         // The router only extracts what was said; run() converts and validates the time.
         alarm.find(normalized)?.let { match ->
             val args = mutableMapOf<String, Any>(
@@ -477,8 +491,22 @@ class NilaEngine(
 
         // Match on the raw text: the user's fact is stored as they said it, not as normalized for parsing.
         remember.find(input.lowercase())?.let {
-            val fact = input.substring(input.lowercase().indexOf(it.groupValues[1])).trim()
+            val captured = it.groupValues[1].ifEmpty { it.groupValues[2] }
+            val fact = input.substring(input.lowercase().indexOf(captured)).trim()
             return NilaIntent.Call(ToolCall("remember_fact", mapOf("fact" to fact)))
+        }
+
+        // Meal words are restaurant food, never groceries: "get me lunch", "im starving", "bhook lagi hai".
+        // The fine-tuned router retreats to chat for these (measured); the model keeps the item asks.
+        // Checked after remember: "Remember that dinner is at 7" is a fact, not a food order.
+        mealWords.find(normalized)?.let { match ->
+            val query = when (match.value) {
+                in setOf("lunch", "dinner", "breakfast", "dessert") -> match.value
+                else -> normalized.replace(Regex("""\bi'?m\s+starving\b|\bbhook\s+lagi\s+hai\b|\bget\s+me\b|\bplease\b|[,.!]"""), " ")
+                    .split(" ").filter { it.length > 2 && it !in setOf("the", "some", "food") }.joinToString(" ")
+                    .ifBlank { match.value }
+            }
+            return NilaIntent.Call(ToolCall("search_food", mapOf("query" to query)))
         }
 
         appToOpen(input)?.let { return NilaIntent.Call(ToolCall("launch_app", mapOf("name" to it))) }

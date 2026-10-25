@@ -60,7 +60,7 @@ fun messageParts(text: String): Pair<String, String>? = messageLead.find(text)?.
     m.groupValues[1] to body.replaceFirstChar { it.uppercase() }
 }
 
-fun directionsTo(text: String) = Regex("""^\s*(?:please\s+)?(?:take me to|navigate to|directions to|get directions to|how do i get to|route to)\s+(.+)$""", RegexOption.IGNORE_CASE).after(text, 1)
+fun directionsTo(text: String) = Regex("""^\s*(?:please\s+)?(?:take me to|navigate to|directions to|get directions to|how do i get to|how much time\s+(?:does it take\s+)?to|how long does it take to|route to)\s+(.+)$""", RegexOption.IGNORE_CASE).after(text, 1)
     ?: placeAsked(text)
 
 /**
