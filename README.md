@@ -55,7 +55,7 @@ The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 The model files are not bundled in the APK:
 
 - `gemma-4-E2B-it.litertlm` (assistant; `gemma3-1b-it-int4.litertlm` is an optional lower-memory choice)
-- `nila-router-functiongemma-run8-q8-ekv2048.litertlm` (tool router)
+- `nila-router-functiongemma-run8-q8-ekv4096.litertlm` (tool router)
 
 NILA looks for them in its internal or app-specific external `models` directory. Without them, the app reports the missing model and keeps its deterministic fallback behavior. The repository does not distribute model weights.
 

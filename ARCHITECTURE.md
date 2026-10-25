@@ -39,7 +39,7 @@ The built-in capability registry is compiled into the app, and Settings can add 
 
 - `gemma-4-E2B-it.litertlm`: conversation, tool fallback, speech transcription, report reading and screen-control suggestions.
 - `gemma3-1b-it-int4.litertlm`: text-only assistant choice for lower-memory phones.
-- `nila-router-functiongemma-run8-q8-ekv2048.litertlm`: the small tool router.
+- `nila-router-functiongemma-run8-q8-ekv4096.litertlm`: the small tool router (4096-token KV cache: the 17-tool prompt needs about 2536).
 - LiteRT-LM 0.17.1: Android inference runtime.
 
 The files are not bundled in the APK. NILA looks for them in its internal or app-specific external `models` directory. An installed assistant loads only when Android reports enough available memory (Gemma 4 E2B needs 4 GiB; Gemma 3 1B needs 1.25 GiB). Neither assistant model is validated on the Pixel 4a yet. FunctionGemma remains on demand on memory-tight devices and is not loaded alongside an assistant. When generation fails, NILA records the error category and duration without logging the prompt, shows that it used a fallback, and keeps the deterministic path available.

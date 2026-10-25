@@ -24,7 +24,7 @@ import kotlinx.coroutines.withContext
 
 /** Model files pushed with adb into the app's external files dir. Never bundled: Gemma is over the 2 GB APK limit. */
 object ModelFiles {
-    const val ROUTER = "nila-router-functiongemma-run8-q8-ekv2048.litertlm"
+    const val ROUTER = "nila-router-functiongemma-run8-q8-ekv4096.litertlm"
 
     /**
      * Created from the app's own process: a folder made by `adb shell mkdir` is shell-owned and the app

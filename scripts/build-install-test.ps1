@@ -108,7 +108,7 @@ if ($AssistantModelPath) {
     Copy-ModelIntoApp $AssistantModelPath $assistantName
 }
 if ($RouterModelPath) {
-    Copy-ModelIntoApp $RouterModelPath 'nila-router-functiongemma-run8-q8-ekv2048.litertlm'
+    Copy-ModelIntoApp $RouterModelPath 'nila-router-functiongemma-run8-q8-ekv4096.litertlm'
 }
 
 & $adb @adbArgs shell am force-stop com.nila.launcher
