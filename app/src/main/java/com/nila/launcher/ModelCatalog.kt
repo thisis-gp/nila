@@ -55,8 +55,8 @@ internal object ModelCatalog {
     val assistants = listOf(GEMMA_3_1B, GEMMA_4_E2B)
 
     val FUNCTION_GEMMA = ModelSpec(
-        id = "functiongemma-run8-q8-ekv2048",
-        filename = "nila-router-functiongemma-run8-q8-ekv2048.litertlm",
+        id = "functiongemma-run8-q8-ekv4096",
+        filename = "nila-router-functiongemma-run8-q8-ekv4096.litertlm",
         label = "FunctionGemma run 8",
         capabilities = setOf(ModelCapability.TOOLS),
         minimumAvailableBytes = GIB,
