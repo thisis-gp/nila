@@ -92,6 +92,32 @@ class MoreActionsTest {
     }
 
     @Test
+    fun phrasingsTheModelTierUsedToMissNowRouteByRule() {
+        // Each line was a wrong route in the 78% Pixel 4a eval run; all are unambiguous phrasings.
+        assertEquals("Whitefield", directionsTo("how much time to Whitefield"))
+        assertEquals("Bangalore Palace", directionsTo("how much time does it take to Bangalore Palace"))
+        assertEquals("create_alarm", tool("12:15 pm alarm"))
+        assertEquals("create_alarm", tool("5:30 pm alarm"))
+        assertEquals("remember_fact", tool("don't forget I am allergic to peanuts"))
+        assertEquals("remember_fact", tool("don't forget my office is in Whitefield"))
+        assertEquals("create_event", tool("schedule demo review monday at 10am"))
+        assertEquals("create_event", tool("schedule hackathon finale saturday at 9am"))
+    }
+
+    @Test
+    fun mealWordsAreRestaurantFoodNotGroceries() {
+        // Measured retreats-to-chat on the Pixel 4a eval run.
+        assertEquals("search_food", tool("get me lunch"))
+        assertEquals("search_food", tool("get me dessert"))
+        assertEquals("search_food", tool("im starving"))
+        assertEquals("search_food", tool("bhook lagi hai"))
+        // Item asks stay with the model tier: bread is genuinely ambiguous, eggs reached the
+        // groceries tool through the shortlist in the on-device run.
+        assertNull(tool("get me bread"))
+        assertNull(tool("get me eggs"))
+    }
+
+    @Test
     fun whereIsAPlaceShowsTheRouteNotASearch() {
         assertEquals("get_directions", tool("where is meghana biriyani"))
         assertEquals("get_directions", tool("Where's Truffles?"))

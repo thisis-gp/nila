@@ -43,6 +43,14 @@ class PhoneActionsTest {
     }
 
     @Test
+    fun monthlyReminderAcceptsTheReminderLedAndDayWord() {
+        // "monthly reminder for X on day 15": the eval caught this falling through to the model.
+        val args = monthlyReminderArgs("monthly reminder for change water filter on day 15")
+        assertEquals(15, args?.get("day"))
+        assertEquals("Change water filter", args?.get("title"))
+    }
+
+    @Test
     fun timerStatusIsOnlyAboutTheTimer() {
         // The router eval caught these: "how much time to <place>" is travel time, not the timer,
         // and "check the timer" should read the status.

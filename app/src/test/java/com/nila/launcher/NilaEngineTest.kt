@@ -196,8 +196,11 @@ class NilaEngineTest {
     }
 
     @Test
-    fun foodIsLeftToTheModelNotKeywords() {
-        assertEquals(NilaIntent.Converse("I'm starving, get me biryani"), engine.route("I'm starving, get me biryani"))
+    fun mealWordsRouteToFoodWithTheDishTheUserNamed() {
+        // The on-device eval showed the model retreating to chat for hungry phrasings, so they are rules now.
+        val routed = engine.route("I'm starving, get me biryani") as NilaIntent.Call
+        assertEquals("search_food", routed.call.capabilityId)
+        assertEquals("biryani", routed.call.args["query"])
     }
 
     @Test

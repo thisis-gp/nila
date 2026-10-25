@@ -160,9 +160,9 @@ data class MonthlyReminder(val title: String, val day: Int, val time: LocalTime)
 
 private const val LAST_SAFE_DAY = 28
 private val monthlyWords = Regex("""\b(every month|each month|monthly|every month's)\b""")
-private val monthDay = Regex("""\b(?:on\s+(?:the\s+)?)?(\d{1,2})(?:st|nd|rd|th)\b|\bon\s+(?:the\s+)?(\d{1,2})\b(?!\s*(?:am|pm|:))""")
+private val monthDay = Regex("""\b(?:on\s+(?:the\s+)?)?(\d{1,2})(?:st|nd|rd|th)\b|\bon\s+(?:the\s+|day\s+)?(\d{1,2})\b(?!\s*(?:am|pm|:))""")
 private val reminderTime = Regex("""\bat\s+(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?\b""")
-private val reminderLead = Regex("""^\s*(please\s+)?(remind me|set a (monthly )?reminder|add a (monthly )?reminder|reminder)\s*(to|about|for|that)?\s*""", RegexOption.IGNORE_CASE)
+private val reminderLead = Regex("""^\s*(please\s+)?(monthly reminder|remind me|set a (monthly )?reminder|add a (monthly )?reminder|reminder)\s*(to|about|for|that)?\s*""", RegexOption.IGNORE_CASE)
 
 /**
  * "remind me to pay the electricity bill every month on the 5th at 9 am" → title, day, time. Null when it
