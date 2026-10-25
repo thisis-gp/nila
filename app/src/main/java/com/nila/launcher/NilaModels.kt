@@ -627,7 +627,12 @@ class NilaBrain(
      */
     private fun modelRoute(input: String): NilaResponse? {
         val loadedHere = router == null
-        if (loadedHere && deviceMemory.availableBytes < ModelCatalog.FUNCTION_GEMMA.minimumAvailableBytes) return null
+        // Read memory now, not at load time: the on-demand router was silently disabled for a whole eval
+        // run because load() captured availMem during post-install churn (measured on the Pixel 4a).
+        if (loadedHere) {
+            deviceMemory = ModelCatalog.deviceMemory(context)
+            if (deviceMemory.availableBytes < ModelCatalog.FUNCTION_GEMMA.minimumAvailableBytes) return null
+        }
         val model = router ?: loadModel(ModelCatalog.FUNCTION_GEMMA, gpuFirst = false) { routerState = it } ?: return null
         try {
         val response = runCatching {
