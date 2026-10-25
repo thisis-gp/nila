@@ -82,6 +82,16 @@ class MoreActionsTest {
     }
 
     @Test
+    fun anAppNameAloneIsNotAnOpenCommand() {
+        // The router eval caught this: "what is YouTube" is a question, not a launch command.
+        assertNull(tool("what is YouTube"))
+        assertNull(tool("what is youtube"))
+        assertEquals("open_app", tool("youtube kholo"))
+        assertEquals("open_app", tool("I want to watch something on netflix"))
+        assertEquals("open_app", tool("take me to bgmi app"))
+    }
+
+    @Test
     fun whereIsAPlaceShowsTheRouteNotASearch() {
         assertEquals("get_directions", tool("where is meghana biriyani"))
         assertEquals("get_directions", tool("Where's Truffles?"))
