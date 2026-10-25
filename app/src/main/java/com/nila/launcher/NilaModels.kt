@@ -206,6 +206,55 @@ fun spokenTranscript(raw: String?): String? {
     return text
 }
 
+/**
+ * An escape hatch for FunctionGemma, which otherwise tends to pick some tool for every input
+ * ("hi" became search_food on the iQOO 15). Choosing it hands the message to Gemma.
+ */
+internal val CHAT_TOOL = CapabilityDescriptor(
+    id = "chat",
+    description = "Talk with the user: greetings, questions about NILA or anything else, small talk, opinions, or any request the other functions cannot do",
+    params = listOf(Param("message", ParamType.STRING)),
+    permission = PermissionClass.READ,
+)
+
+/** How many tool schemas the router is offered: more means proportionally slower prefill on-device. */
+internal const val MAX_ROUTER_TOOLS = 10
+
+/** Words that match every description and say nothing about which tool is meant. */
+private val ROUTER_STOPWORDS = setOf(
+    "the", "and", "for", "you", "your", "with", "that", "this", "from", "can", "get", "set", "put",
+    "how", "what", "when", "where", "why", "who", "does", "did", "please", "turn", "into", "some", "want",
+)
+
+/** "reminder" -> "remind", "foods" -> "food": crude but enough for tool matching, no dependency. */
+private fun routerStem(word: String) = when {
+    word.length > 5 && word.endsWith("ing") -> word.dropLast(3)
+    word.length > 5 && word.endsWith("ly") -> word.dropLast(2)
+    word.length > 5 && word.endsWith("er") -> word.dropLast(2)
+    word.length > 4 && word.endsWith("es") -> word.dropLast(2)
+    word.length > 4 && word.endsWith("s") -> word.dropLast(1)
+    else -> word
+}
+
+private fun routerTerms(text: String) =
+    text.lowercase().split(Regex("""[^\p{L}\p{N}]+""")).filter { it.length > 2 }.map(::routerStem).toSet()
+
+/**
+ * The tools worth the router's context: what the input's words lexically match, plus the paraphrase-heavy
+ * tools the keyword layer can never catch, plus chat. Wrong-tool risk stays bounded: the model can only
+ * propose from this list and every proposal is revalidated against the full registry by checkCall.
+ */
+internal fun routerTools(input: String, registry: Map<String, CapabilityDescriptor>): List<CapabilityDescriptor> {
+    val words = routerTerms(input) - ROUTER_STOPWORDS
+    val matched = registry.values
+        .map { tool -> tool to words.intersect(routerTerms(tool.id.replace('_', ' ') + " " + tool.description)).size }
+        .filter { it.second > 0 }
+        .sortedByDescending { it.second }
+        .map { it.first }
+    val always = listOfNotNull("search_food", "search_groceries", "get_directions", "remember_fact").mapNotNull(registry::get)
+    return (matched + always).distinctBy { it.id }.take(MAX_ROUTER_TOOLS - 1) + CHAT_TOOL
+}
+
 /** Exposes a capability's schema to LiteRT-LM. Execution stays in NilaEngine, never inside the model runtime. */
 private class CapabilityTool(private val capability: CapabilityDescriptor) : OpenApiTool {
     override fun getToolDescriptionJsonString() = toolSchemaJson(capability)
@@ -585,8 +634,10 @@ class NilaBrain(
             model.createConversation(
                 ConversationConfig(
                     systemInstruction = Contents.of("You are a model that can do function calling with the following functions"),
-                    // Native capabilities are all in the fine-tune set; connected MCP tools join from the live registry.
-                    tools = (engine.capabilities.values.filter { it.id != CHAT_TOOL.id } + CHAT_TOOL).map { tool(CapabilityTool(it)) },
+                    // A lexical shortlist, not every schema: the 17-tool prompt needed 2536 tokens and
+                    // 30-45s of CPU prefill on the Pixel 4a (measured, PR #75's eval). Connected MCP
+                    // tools join the same shortlist through the live registry.
+                    tools = routerTools(input, engine.capabilities).map { tool(CapabilityTool(it)) },
                     automaticToolCalling = false,
                 ),
             ).use { it.sendMessage(input) }
@@ -852,12 +903,6 @@ class NilaBrain(
          * An escape hatch for FunctionGemma, which otherwise tends to pick some tool for every input
          * ("hi" became search_food on the iQOO 15). Choosing it hands the message to Gemma.
          */
-        val CHAT_TOOL = CapabilityDescriptor(
-            id = "chat",
-            description = "Talk with the user: greetings, questions about NILA or anything else, small talk, opinions, or any request the other functions cannot do",
-            params = listOf(Param("message", ParamType.STRING)),
-            permission = PermissionClass.READ,
-        )
         /** NILA's phrasebook: every command the keyword rules understand. Gemma maps any wording onto one. */
         const val WEB_RESULTS_READ = 5
         const val WEB_SNIPPET_CHARS = 400
