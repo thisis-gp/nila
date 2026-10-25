@@ -509,6 +509,14 @@ class NilaEngine(
             return NilaIntent.Call(ToolCall("search_food", mapOf("query" to query)))
         }
 
+        // The answer to a pending basket ask routes where the user said; anything else with an item
+        // asks, because the fine-tuned router measured 0/5 on casual grocery-item asks.
+        basketFollowUp(normalized)?.let { return NilaIntent.Call(it) }
+        basketItem(input, normalized)?.let { item ->
+            pendingBasket = item
+            return NilaIntent.Ask("Should I look for \"$item\" as restaurant food or groceries?")
+        }
+
         appToOpen(input)?.let { return NilaIntent.Call(ToolCall("launch_app", mapOf("name" to it))) }
 
         // Food and directions have no keyword rule: FunctionGemma reads the intent and
@@ -529,6 +537,7 @@ class NilaEngine(
             "I didn't catch that — try asking again. I can order food or groceries, search the web, set an alarm or timer, " +
                 "get directions, play music, remember a preference, or open an app."
         )
+        is NilaIntent.Ask -> NilaResponse.Text(intent.question)
         is NilaIntent.Call -> when (val check = checkCall(intent.call, capabilities)) {
             is CallCheck.Rejected -> NilaResponse.Text("I can't do that. ${check.reason}.")
             is CallCheck.Missing -> NilaResponse.Text("I need the ${check.params.joinToString()} to do that.")
@@ -551,12 +560,13 @@ class NilaEngine(
             "open_app" -> apps[args["app"]]?.let { NilaResponse.OpenApp(it.first, it.second, it.third) }
                 ?: NilaResponse.Text("I can't open that app.")
             "remember_fact" -> NilaResponse.Remember(args["fact"] as String, MemoryKind.from(args["kind"] as? String), aboutKey(args["about"] as? String))
+            // A basket ask's query is the pending item itself; running it ends the ask.
             "search_food" -> NilaResponse.FoodSearch(
-                query = args["query"] as String,
+                query = (args["query"] as String).also { if (pendingBasket == it) pendingBasket = null },
                 // "chicken" for "chicken biryani" repeats the dish; only a word the dish doesn't already say is a preference.
                 preference = (args["preference"] as? String)?.takeIf { it.isNotBlank() && !(args["query"] as String).contains(it, ignoreCase = true) },
             )
-            "search_groceries" -> NilaResponse.GrocerySearch(args["query"] as String)
+            "search_groceries" -> NilaResponse.GrocerySearch((args["query"] as String).also { if (pendingBasket == it) pendingBasket = null })
             "get_directions" -> NilaResponse.Navigate(args["destination"] as String)
             "set_timer" -> {
                 val hours = args["hours"] as Int? ?: 0
@@ -603,6 +613,29 @@ class NilaEngine(
 
     // ponytail: pending confirmations live in memory; a process restart drops them, which fails safe.
     private val pending = mutableMapOf<String, ToolCall>()
+
+    // ponytail: the item a basket ask is waiting on, same memory-only trade as [pending].
+    private var pendingBasket: String? = null
+
+    /** "food", "groceries" and close variants, answered for a pending basket ask. Pure: route() runs
+     *  twice per reply (understand's check, then answerFor), so consuming happens in run(), not here. */
+    private fun basketFollowUp(normalized: String): ToolCall? {
+        val item = pendingBasket ?: return null
+        return when {
+            Regex("""\b(restaurant|restaurants|food|dish|meal|order food)\b""").containsMatchIn(normalized) -> ToolCall("search_food", mapOf("query" to item))
+            Regex("""\b(groceries|grocery|supermarket|store|kirana)\b""").containsMatchIn(normalized) -> ToolCall("search_groceries", mapOf("query" to item))
+            else -> null
+        }
+    }
+
+    /**
+     * A casually asked item ("get me eggs", "I need dishwash liquid"), or null. Meal words never reach
+     * here, and tool-verb phrasings NILA already rules ("order food X") were handled earlier.
+     */
+    private fun basketItem(input: String, normalized: String): String? =
+        Regex("""^\s*(?:please\s+)?(?:can you\s+|could you\s+)?(?:get|bring|buy|pick up|fetch|need|want)\s+(?:me\s+)?(?:some\s+|the\s+)?(.+?)(?:\s+please)?\s*[.!?]?\s*$""")
+            .find(normalized)?.groupValues?.get(1)?.trim()
+            ?.takeIf { it.length in 2..80 && !mealWords.containsMatchIn(it) }
 
     /** Runs a pending Commit call once. A reused or unknown token runs nothing. */
     fun confirm(token: String): NilaResponse {

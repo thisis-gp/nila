@@ -118,6 +118,28 @@ class MoreActionsTest {
     }
 
     @Test
+    fun casualItemAsksAskFoodOrGroceriesThenRouteTheAnswer() {
+        // Measured 0/5 on the fine-tuned router: casual item asks are asked, never guessed.
+        assertNull(tool("get me eggs"))
+        val ask = engine.respond("get me eggs")
+        assertTrue(ask is NilaResponse.Text && "eggs" in (ask as NilaResponse.Text).value)
+
+        assertEquals(ToolCall("search_groceries", mapOf("query" to "eggs")), engine.route("groceries").let { (it as NilaIntent.Call).call })
+        assertNull(engine.route("get me dishwash liquid").let { it as? NilaIntent.Call })
+
+        assertTrue(engine.respond("I need dishwash liquid") is NilaResponse.Text)
+        assertEquals(
+            ToolCall("search_food", mapOf("query" to "dishwash liquid")),
+            (engine.route("restaurant food") as NilaIntent.Call).call,
+        )
+    }
+
+    @Test
+    fun mealWordItemAsksStillBypassTheBasketAsk() {
+        assertEquals("search_food", tool("get me lunch"))
+    }
+
+    @Test
     fun whereIsAPlaceShowsTheRouteNotASearch() {
         assertEquals("get_directions", tool("where is meghana biriyani"))
         assertEquals("get_directions", tool("Where's Truffles?"))

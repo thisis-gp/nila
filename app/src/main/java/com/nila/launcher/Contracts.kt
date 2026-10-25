@@ -35,6 +35,8 @@ sealed interface NilaIntent {
     data class Call(val call: ToolCall) : NilaIntent
     /** No tool fits; Gemma answers in conversation. */
     data class Converse(val text: String) : NilaIntent
+    /** A deterministic clarifying question; the answer is caught by a follow-up rule, never a guess. */
+    data class Ask(val question: String) : NilaIntent
 }
 
 sealed interface CallCheck {
