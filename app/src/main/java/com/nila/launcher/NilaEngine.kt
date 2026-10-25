@@ -442,7 +442,8 @@ class NilaEngine(
         if (Regex("""\btimer\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("set_timer", timerArgs(input).orEmpty()))
         if (Regex("""\b(flash ?light|torch)\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("flashlight", mapOf("on" to torchOn(input))))
         // Voice goes to the voice recorder, checked before the camera: "record my voice" is audio, not video.
-        if (Regex("""\brecord\b.*\b(voice|audio|sound)\b|\bvoice (note|recording|memo|recorder)\b|\b(audio|sound) recorder\b""").containsMatchIn(normalized)) {
+        // "recording" too: "start recording my voice" used to fall through to opening an app.
+        if (Regex("""\brecord(?:ing)?\b.*\b(voice|audio|sound)\b|\bvoice (note|recording|memo|recorder)\b|\b(audio|sound) recorder\b""").containsMatchIn(normalized)) {
             return NilaIntent.Call(ToolCall("record_audio", emptyMap()))
         }
         if (Regex("""\b(camera|selfie)\b|\btake an? (photo|picture|pic)\b|\brecord an? video\b""").containsMatchIn(normalized)) {
@@ -453,6 +454,14 @@ class NilaEngine(
         }
         callTarget(input)?.let { return NilaIntent.Call(ToolCall("call_contact", mapOf("who" to it))) }
         skillCall(input, normalized, installedApps())?.let { return NilaIntent.Call(it) }
+        // Only an app the user asked to open — before the generic actions so "take me to youtube app"
+        // opens the app instead of routing to a place named "youtube app", and "what is YouTube"
+        // (no open intent) stays a question.
+        if (Regex("""\b(open|launch|start|go to|watch|kholo|take me)\b""").containsMatchIn(normalized)) {
+            apps.keys.firstOrNull(normalized::contains)?.let { app ->
+                return NilaIntent.Call(ToolCall("open_app", mapOf("app" to app)))
+            }
+        }
         moreActionCall(input)?.let { return NilaIntent.Call(it) }
         if (Regex("""\b(event|meeting|appointment|calendar)\b""").containsMatchIn(normalized)) return NilaIntent.Call(ToolCall("create_event", eventArgs(input)))
 
@@ -472,9 +481,6 @@ class NilaEngine(
             return NilaIntent.Call(ToolCall("remember_fact", mapOf("fact" to fact)))
         }
 
-        apps.keys.firstOrNull(normalized::contains)?.let { app ->
-            return NilaIntent.Call(ToolCall("open_app", mapOf("app" to app)))
-        }
         appToOpen(input)?.let { return NilaIntent.Call(ToolCall("launch_app", mapOf("name" to it))) }
 
         // Food and directions have no keyword rule: FunctionGemma reads the intent and

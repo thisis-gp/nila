@@ -56,8 +56,9 @@ fun wantsFront(text: String) = Regex("""\b(selfie|front camera|front-facing)\b""
 fun timerControl(text: String): String? {
     val lower = text.lowercase()
     return when {
-        // Needs "time" or "timer": "how much battery is left" is not about the timer.
-        Regex("""\b(how much|how long)\s+(time|longer)\b|\btime (left|remaining)\b|\btimer\b.*\b(left|remaining|status)\b""").containsMatchIn(lower) -> "status"
+        // Status needs the timer named, or "time ... left": "how much time to Whitefield" is a directions
+        // question and "how much battery is left" is the battery.
+        Regex("""\btimer\b.*\b(left|remaining|status)\b|\b(left|remaining|status|check)\b.*\btimer\b|\bhow (?:much|long)\s+time\b.*\b(left|remaining)\b|\bhow much longer\b""").containsMatchIn(lower) -> "status"
         !Regex("""\btimer\b""").containsMatchIn(lower) -> null
         Regex("""\b(pause|hold|freeze)\b""").containsMatchIn(lower) -> "pause"
         Regex("""\b(resume|continue|unpause|restart)\b""").containsMatchIn(lower) -> "resume"

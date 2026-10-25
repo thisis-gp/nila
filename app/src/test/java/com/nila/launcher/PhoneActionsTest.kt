@@ -43,6 +43,26 @@ class PhoneActionsTest {
     }
 
     @Test
+    fun timerStatusIsOnlyAboutTheTimer() {
+        // The router eval caught these: "how much time to <place>" is travel time, not the timer,
+        // and "check the timer" should read the status.
+        assertNull(timerControl("how much time to Whitefield"))
+        assertNull(timerControl("how long to Cubbon Park"))
+        assertEquals("status", timerControl("check the timer"))
+        assertEquals("status", timerControl("how much time is left on my timer"))
+        assertEquals("status", timerControl("how much longer"))
+        assertEquals("pause", timerControl("pause the timer"))
+    }
+
+    @Test
+    fun recordingOnesVoiceOpensTheRecorderNotAnApp() {
+        // The router eval caught "start recording my voice" opening an app instead of the recorder.
+        assertEquals(VoiceRecorder, respond("start recording my voice"))
+        assertEquals(VoiceRecorder, respond("record my voice"))
+        assertEquals(VoiceRecorder, respond("record a voice note"))
+    }
+
+    @Test
     fun alarmRemovalOnlyDismissesAnAlarmAndroidCanSee() {
         // Seen on the iQOO 15: asking vivo's Clock to dismiss 23:58 when only 06:30 existed removed the 6:30 alarms.
         assertEquals(DismissPlan.SHOW_LIST, dismissPlan(23, 58, 6, 30))
