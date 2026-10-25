@@ -535,6 +535,7 @@ class NilaBrain(
         engine.calculate(input)?.let { return@withContext answer("calculator", it) }
         engine.calculateFollowUp(input, history.reversed().flatMap { (user, nila) -> listOf(nila, user) })?.let { return@withContext answer("calculator:follow-up", it) }
         val keyword = engine.route(input)
+        if (keyword is NilaIntent.Ask) return@withContext answer("rules:ask", engine.execute(keyword))
         if (keyword is NilaIntent.Call && keyword.call.capabilityId == REMEMBER && assistant != null) {
             return@withContext answer("rules+gemma:$REMEMBER", rememberWithKind(input, engine.execute(keyword)))
         }
