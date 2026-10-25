@@ -98,6 +98,8 @@ import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.first
 import android.content.BroadcastReceiver
 import android.content.IntentFilter
+import android.os.SystemClock
+import java.io.File
 import java.time.LocalTime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -218,6 +220,32 @@ private fun NilaApp(resumeVersion: Int) {
     LaunchedEffect(brain) { brain.load() }
     // Free both native models when this screen goes away, so recreating it never leaves old engines open.
     DisposableEffect(brain) { onDispose { brain.close() } }
+
+    // Debug-only router eval (the roadmap's runnable evaluation). Push "expected<TAB>prompt" lines to
+    // /data/local/tmp, copy them in with `run-as com.nila.launcher cp ... files/router_eval_prompts.txt`,
+    // then launch with `--ez run_router_eval true`. One line per prompt appends to files/router_eval_results.txt
+    // ("expected<TAB>tool-or-response<TAB>ms"), DONE ends the run. brain.respond only returns responses:
+    // no Android action, provider call or order runs from here.
+    val routerEval = (context as? android.app.Activity)?.intent?.getBooleanExtra("run_router_eval", false) == true
+    LaunchedEffect(routerEval) {
+        if (!routerEval) return@LaunchedEffect
+        delay(3000) // let brain.load() move past its initial state before deciding it is not loading
+        snapshotFlow { brain.assistantState }.first { it != ModelState.LOADING }
+        val prompts = File(context.filesDir, "router_eval_prompts.txt")
+        val results = File(context.filesDir, "router_eval_results.txt")
+        prompts.readLines().filter { it.contains('\t') }.forEach { line ->
+            val (expected, prompt) = line.split('\t', limit = 2)
+            val start = SystemClock.elapsedRealtime()
+            val response = runCatching { brain.respond(prompt.trim()) }.getOrNull()
+            val tool = when (response) {
+                null -> "error"
+                is NilaResponse.NeedsConfirmation -> response.capability.id
+                else -> response::class.simpleName.orEmpty()
+            }
+            results.appendText("$expected\t$tool\t${SystemClock.elapsedRealtime() - start}\n")
+        }
+        results.appendText("DONE\n")
+    }
     val turns = remember { mutableStateListOf<Turn>() }
     // Any reminder, not only the monthly card's, asks for notifications the first time: a silent reminder is no reminder.
     val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
