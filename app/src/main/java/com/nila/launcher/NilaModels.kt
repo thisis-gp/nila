@@ -324,7 +324,7 @@ class NilaBrain(
         selectedAssistant = ModelCatalog.selectAssistant(installed, deviceMemory, preferred)
         selectedAssistantId = selectedAssistant?.id
         selectedAssistant?.let { if (preferred != it.id) preferences.edit().putString("selected_model_id", it.id).apply() }
-        assistant = selectedAssistant?.let { loadModel(it, gpuFirst = true) { assistantState = it } }
+        assistant = selectedAssistant?.let { loadModel(it, gpuFirst = ModelCatalog.assistantGpuFirst(deviceMemory)) { assistantState = it } }
         val routerInstalled = ModelFiles.find(context, ModelFiles.ROUTER) != null
         routerState = if (routerInstalled) ModelState.ON_DEMAND else ModelState.MISSING
     }
@@ -351,20 +351,20 @@ class NilaBrain(
         if (option == null) {
             selectedAssistant = previous
             selectedAssistantId = previous?.id
-            assistant = previous?.let { loadModel(it, gpuFirst = true) { assistantState = it } }
+            assistant = previous?.let { loadModel(it, gpuFirst = ModelCatalog.assistantGpuFirst(deviceMemory)) { assistantState = it } }
             return@withContext false
         }
         selectedAssistant = option.model
         selectedAssistantId = id
         context.getSharedPreferences("nila_models", Context.MODE_PRIVATE).edit().putString("selected_model_id", id).apply()
-        assistant = loadModel(option.model, gpuFirst = true) { assistantState = it }
+        assistant = loadModel(option.model, gpuFirst = ModelCatalog.assistantGpuFirst(deviceMemory)) { assistantState = it }
         routerState = if (ModelFiles.find(context, ModelFiles.ROUTER) == null) ModelState.MISSING else ModelState.ON_DEMAND
         if (assistant != null) true else {
             selectedAssistant = previous
             selectedAssistantId = previous?.id
             context.getSharedPreferences("nila_models", Context.MODE_PRIVATE)
                 .edit().putString("selected_model_id", previous?.id).apply()
-            assistant = previous?.let { loadModel(it, gpuFirst = true) { assistantState = it } }
+            assistant = previous?.let { loadModel(it, gpuFirst = ModelCatalog.assistantGpuFirst(deviceMemory)) { assistantState = it } }
             false
         }
     }

@@ -103,6 +103,7 @@ function Copy-ModelIntoApp([string]$Source, [string]$Name) {
 if ($AssistantModelPath) {
     $assistantName = switch ([System.IO.Path]::GetFileName($AssistantModelPath)) {
         'gemma-4-E2B-it.litertlm' { 'gemma-4-E2B-it.litertlm' }
+        'gemma3-1b-it-int4.litertlm' { 'gemma3-1b-it-int4.litertlm' }
         default { throw "Unsupported assistant filename: $([System.IO.Path]::GetFileName($AssistantModelPath))" }
     }
     Copy-ModelIntoApp $AssistantModelPath $assistantName
