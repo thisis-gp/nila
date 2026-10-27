@@ -6,7 +6,16 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.content.Intent
 import android.media.MediaRecorder
+import android.os.Build
+import android.os.Bundle
+import android.util.Log
+import android.speech.RecognitionListener
+import android.speech.RecognitionSupport
+import android.speech.RecognitionSupportCallback
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -41,8 +50,12 @@ import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.sqrt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import com.composables.icons.lucide.R as LucideR
 
@@ -50,6 +63,11 @@ import com.composables.icons.lucide.R as LucideR
 const val VOICE_SAMPLE_RATE = 16_000
 private const val MAX_CLIP_MS = 30_000
 private const val CHUNK_MS = 100
+private const val STOP_POLL_MS = 100L
+private const val VOICE_TAG = "NilaVoice"
+
+/** The languages NILA hears, as Android recognizer tags; Gemma 4 detects the same three itself. */
+private val SPOKEN_LANGUAGES = listOf("en-IN", "hi-IN", "ml-IN")
 
 /** Wraps 16-bit mono PCM in a WAV header: the format LiteRT-LM's Content.AudioBytes reads (as in Google's AI Edge Gallery). */
 fun wav(pcm: ByteArray, sampleRate: Int = VOICE_SAMPLE_RATE): ByteArray =
@@ -123,6 +141,64 @@ suspend fun recordSpeech(stopRequested: () -> Boolean): ByteArray? = withContext
 
 enum class VoiceState { IDLE, LISTENING, UNDERSTANDING }
 
+/**
+ * Listens with Android's own on-device speech recognizer, for phones whose loaded model cannot hear audio.
+ * It never falls back to the network recognizer, so audio stays on the phone. Returns null when nothing was
+ * understood or no on-device recognizer is installed.
+ */
+suspend fun recognizeOnDevice(context: Context, stopRequested: () -> Boolean): String? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || !SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) return null
+    return withContext(Dispatchers.Main) {
+        val recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+        val listenIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            .putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
+            .putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, ArrayList(SPOKEN_LANGUAGES))
+        // Language tags only, never speech: shows which offline packs this phone has when a language is not understood.
+        runCatching { recognizer.checkRecognitionSupport(listenIntent, context.mainExecutor, object : RecognitionSupportCallback {
+            override fun onSupportResult(recognitionSupport: RecognitionSupport) {
+                Log.i(VOICE_TAG, "on-device installed=${recognitionSupport.installedOnDeviceLanguages} supported=${recognitionSupport.supportedOnDeviceLanguages}")
+            }
+            override fun onError(error: Int) { Log.w(VOICE_TAG, "support check failed code=$error") }
+        }) }
+        try {
+            coroutineScope {
+                val stopWatcher = launch {
+                    while (!stopRequested()) delay(STOP_POLL_MS)
+                    recognizer.stopListening()
+                }
+                try {
+                    withTimeoutOrNull(MAX_CLIP_MS.toLong()) { suspendCancellableCoroutine<String?> { heard ->
+                        recognizer.setRecognitionListener(object : RecognitionListener {
+                            override fun onResults(results: Bundle?) {
+                                val best = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                                if (heard.isActive) heard.resume(best, onCancellation = null)
+                            }
+                            override fun onError(error: Int) {
+                                Log.w(VOICE_TAG, "recognizer error code=$error")
+                                if (heard.isActive) heard.resume(null, onCancellation = null)
+                            }
+                            override fun onReadyForSpeech(params: Bundle?) = Unit
+                            override fun onBeginningOfSpeech() = Unit
+                            override fun onRmsChanged(rmsdB: Float) = Unit
+                            override fun onBufferReceived(buffer: ByteArray?) = Unit
+                            override fun onEndOfSpeech() = Unit
+                            override fun onPartialResults(partialResults: Bundle?) = Unit
+                            override fun onEvent(eventType: Int, params: Bundle?) = Unit
+                        })
+                        recognizer.startListening(listenIntent)
+                    } }
+                } finally {
+                    stopWatcher.cancel()
+                }
+            }
+        } finally {
+            recognizer.destroy()
+        }
+    }
+}
+
 /** Where one spoken request is: the agent screen's mic, chip and inline listening state all read it. */
 interface VoiceCapture {
     val state: VoiceState
@@ -137,11 +213,12 @@ interface VoiceCapture {
 /**
  * Records one spoken request at a time. The clip goes to [transcribe] (Gemma 4 E2B, on the phone), which
  * detects English, Hindi or Malayalam itself, and the text goes to [onFinal], so voice gets the same rules as typing.
+ * A null [transcribe] means the loaded model cannot hear audio, so Android's on-device recognizer listens instead.
  */
 @Composable
 fun rememberVoiceCapture(
     /** Gemma detects the language itself. */
-    transcribe: suspend (wav: ByteArray) -> String?,
+    transcribe: (suspend (wav: ByteArray) -> String?)?,
     onFinal: (String) -> Unit,
     onMessage: (String) -> Unit,
     /** Called as recording starts, so NILA stops talking and the mic does not record Lakshmi. */
@@ -154,6 +231,7 @@ fun rememberVoiceCapture(
     // Each recording gets a number; cancel() moves past it so a late transcript from it is ignored.
     val session = remember { AtomicInteger() }
     val latestFinal by rememberUpdatedState(onFinal)
+    val latestTranscribe by rememberUpdatedState(transcribe)
     val latestMessage by rememberUpdatedState(onMessage)
 
     fun listen() {
@@ -162,16 +240,22 @@ fun rememberVoiceCapture(
         currentState = VoiceState.LISTENING
         val mine = session.incrementAndGet()
         scope.launch {
-            val clip = recordSpeech { stopRequested || session.get() != mine }
-            if (session.get() != mine) return@launch
-            if (clip == null) {
-                currentState = VoiceState.IDLE
-                return@launch latestMessage("I didn't hear anything. Tap the mic and try again, or type instead.")
+            val transcribeClip = latestTranscribe
+            val heard = if (transcribeClip == null) {
+                recognizeOnDevice(context) { stopRequested || session.get() != mine }
+            } else {
+                val clip = recordSpeech { stopRequested || session.get() != mine }
+                if (session.get() != mine) return@launch
+                if (clip == null) {
+                    currentState = VoiceState.IDLE
+                    return@launch latestMessage("I didn't hear anything. Tap the mic and try again, or type instead.")
+                }
+                currentState = VoiceState.UNDERSTANDING
+                runCatching { transcribeClip(clip) }.getOrNull()
             }
-            currentState = VoiceState.UNDERSTANDING
-            val text = runCatching { transcribe(clip) }.getOrNull()?.trim()
             if (session.get() != mine) return@launch
             currentState = VoiceState.IDLE
+            val text = heard?.trim()
             if (text.isNullOrBlank()) latestMessage("I couldn't understand that. Try again, or type instead.") else latestFinal(text)
         }
     }

@@ -11,6 +11,12 @@ class NilaModelsTest {
     private val alarm = engine.capabilities.getValue("create_alarm")
 
     @Test
+    fun aReplyThatReadsBackThePersonaIsDropped() {
+        assertTrue(echoesInstructions("Okay, I understand. I will respond in one to three short, warm sentences in the same language."))
+        assertFalse(echoesInstructions("Sure, an alarm for six is a good start to the day."))
+    }
+
+    @Test
     fun modelStatusNamesOnlyValidatedGeneralAssistants() {
         assertEquals(
             "Gemma 4 E2B · voice ready",

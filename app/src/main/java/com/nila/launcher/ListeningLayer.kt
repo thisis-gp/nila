@@ -95,6 +95,9 @@ internal fun requestKeyPhrase(request: String): IntRange? {
     return phrase.first().range.first until end
 }
 
+/** Tells a first-time speaker what to say, and that speaking ends by pausing or tapping Stop. */
+private const val LISTENING_HINT = "Say what you need, like \"set an alarm for 6\" or \"order biryani\". Pause when you're done."
+
 /** The spaced label above the inline listening state: what NILA is doing with the person's voice right now. */
 internal fun listeningLabel(state: VoiceState): String = when (state) {
     VoiceState.LISTENING -> "LISTENING"
@@ -129,6 +132,9 @@ internal fun ListeningTurn(
             quoted = false,
             modifier = Modifier.padding(top = 14.dp),
         )
+        if (voice.state == VoiceState.LISTENING && notice == null) {
+            Text(LISTENING_HINT, color = Muted, fontSize = 15.sp, modifier = Modifier.padding(top = 10.dp))
+        }
         Row(
             Modifier.padding(top = 28.dp, bottom = 24.dp),
             verticalAlignment = Alignment.CenterVertically,

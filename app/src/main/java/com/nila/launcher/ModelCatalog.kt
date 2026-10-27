@@ -98,7 +98,7 @@ internal fun modelStatus(model: ModelSpec?, inferenceFailed: Boolean = false): S
     } else {
         append(model.label)
         append(" · ")
-        append(if (ModelCapability.AUDIO in model.capabilities) "voice ready" else "text only; voice unavailable")
+        append(if (ModelCapability.AUDIO in model.capabilities) "voice ready" else "text only; voice uses Android on-device speech")
         if (ModelCapability.VISION !in model.capabilities) append("; report image reading unavailable")
     }
     if (inferenceFailed) append(" · assistant reply failed; using fallback")

@@ -194,6 +194,11 @@ const val TRANSCRIPTION_PROMPT =
         "Write each language in its own script: Malayalam in Malayalam script, Hindi in Devanagari, English in Latin letters. " +
         "Output only the transcript, with no answer, translation or notes. If there is no clear speech, output exactly: NONE"
 
+/** Phrases from the persona; a small model that reads its instructions back instead of answering uses them. */
+private val INSTRUCTION_ECHOES = listOf("one to three short", "warm sentences", "same language the user", "normal nila function")
+
+internal fun echoesInstructions(reply: String): Boolean = INSTRUCTION_ECHOES.any { it in reply.lowercase() }
+
 /**
  * Null for a transcript that isn't something the person said: "NONE" for silence, or the labelled
  * "English: … Hindi: … Malayalam: …" lines Gemma invented from background noise on the iQOO, which
@@ -285,6 +290,11 @@ class NilaBrain(
         private set
     internal var selectedAssistantId by mutableStateOf<String?>(null)
         private set
+
+    private val smallModel: Boolean get() = selectedAssistant?.id == ModelCatalog.GEMMA_3_270M.id
+
+    /** False on text-only models: voice then goes through Android's on-device recognizer. */
+    val hearsAudio: Boolean get() = selectedAssistant?.let { ModelCapability.AUDIO in it.capabilities } == true
     internal var modelOptions by mutableStateOf<List<ModelOption>>(emptyList())
         private set
     private var inferenceFailed by mutableStateOf(false)
@@ -793,11 +803,13 @@ class NilaBrain(
         val response = try {
             model.createConversation(
                 ConversationConfig(
-                    systemInstruction = Contents.of(personaWith(PERSONA, facts())),
-                    initialMessages = history.flatMap { (user, nila) -> listOf(Message.user(user), Message.model(nila)) },
+                    systemInstruction = Contents.of(personaWith(if (smallModel) SMALL_PERSONA else PERSONA, facts())),
+                    initialMessages = history.takeLast(if (smallModel) SMALL_MODEL_HISTORY_TURNS else HISTORY_TURNS)
+                        .flatMap { (user, nila) -> listOf(Message.user(user), Message.model(nila)) },
                     // A fresh seed per reply: with the default seed "tell me a joke" gave the same joke every time.
                     samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.6, seed = kotlin.random.Random.nextInt()),
-                    tools = if (allowTools) engine.capabilities.values.map { tool(CapabilityTool(it)) } else emptyList(),
+                    // The 270M model cannot call tools; the rules and FunctionGemma already route every action before chat.
+                    tools = if (allowTools && !smallModel) engine.capabilities.values.map { tool(CapabilityTool(it)) } else emptyList(),
                     automaticToolCalling = false,
                 ),
             ).use { it.sendMessage(input) }
@@ -820,6 +832,8 @@ class NilaBrain(
             }
         }
         val reply = cleanReply(response.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }.trim())
+            // Only the 270M model reads its persona back; a bigger model may say these words in a real answer.
+            ?.takeUnless { smallModel && echoesInstructions(it) }
         if (reply == null) {
             inferenceFailed = true
             Log.w(TAG, "assistant inference returned no usable text after ${SystemClock.elapsedRealtime() - startedAt} ms")
@@ -848,7 +862,11 @@ class NilaBrain(
     private companion object {
         const val TAG = "NilaBrain"
         const val HISTORY_TURNS = 4
+        const val SMALL_MODEL_HISTORY_TURNS = 2
         const val REMEMBER = "remember_fact"
+
+        /** The 270M floor model follows one short instruction; the full PERSONA made it recite its own rules. */
+        const val SMALL_PERSONA = "You are NILA, a friendly assistant on the user's phone. Answer in one or two short sentences, in the language the user writes in."
 
         /** For My NILA: what a free-form message is, with the day it means. */
         fun classifyPrompt(today: java.time.LocalDate) = """
