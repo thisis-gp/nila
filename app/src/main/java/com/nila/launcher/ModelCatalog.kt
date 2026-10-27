@@ -52,7 +52,16 @@ internal object ModelCatalog {
         minimumAvailableBytes = GIB + GIB / 4,
     )
 
-    val assistants = listOf(GEMMA_3_1B, GEMMA_4_E2B)
+    /** The conversational floor: same class as FunctionGemma, measured loading on the Pixel 4a. */
+    val GEMMA_3_270M = ModelSpec(
+        id = "gemma-3-270m-it",
+        filename = "gemma3-270m-it-q8.litertlm",
+        label = "Gemma 3 270M · text",
+        capabilities = setOf(ModelCapability.TEXT),
+        minimumAvailableBytes = GIB,
+    )
+
+    val assistants = listOf(GEMMA_3_270M, GEMMA_3_1B, GEMMA_4_E2B)
 
     val FUNCTION_GEMMA = ModelSpec(
         id = "functiongemma-run8-q8-ekv4096",

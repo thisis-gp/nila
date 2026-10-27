@@ -44,7 +44,15 @@ class ModelCatalogTest {
         val memory = DeviceMemory(12L * GIB, 5L * GIB, lowMemory = false)
         val choices = ModelCatalog.choices(installed, memory)
 
-        assertTrue(choices.all { it.installed && it.fitsMemory })
+        assertEquals(
+            setOf(ModelCatalog.GEMMA_3_1B, ModelCatalog.GEMMA_4_E2B),
+            choices.filter { it.installed }.map { it.model }.toSet(),
+        )
+        assertEquals(
+            ModelCatalog.GEMMA_3_270M,
+            choices.first { it.model == ModelCatalog.GEMMA_3_270M }.model,
+        )
+        assertFalse(choices.first { it.model == ModelCatalog.GEMMA_3_270M }.installed)
         assertEquals(ModelCatalog.GEMMA_4_E2B, ModelCatalog.selectAssistant(installed, memory, ModelCatalog.GEMMA_4_E2B.id))
     }
 
@@ -64,6 +72,16 @@ class ModelCatalogTest {
         // The Pixel 4a's GPU-first load hung without ever falling back (measured); 8 GB+ keeps GPU.
         assertFalse(ModelCatalog.assistantGpuFirst(DeviceMemory(6L * GIB, 2L * GIB, false)))
         assertTrue(ModelCatalog.assistantGpuFirst(DeviceMemory(12L * GIB, 4L * GIB, false)))
+    }
+
+    @Test
+    fun theSmallestFittingAssistantIsTheSafeDefault() {
+        // The 4a passes both static gates after a reboot but only the 270M class survives load (measured).
+        val installed = setOf(ModelCatalog.GEMMA_3_270M.filename, ModelCatalog.GEMMA_3_1B.filename)
+        val fourA = DeviceMemory(6L * GIB, (GIB + GIB / 2), false)
+        assertEquals(ModelCatalog.GEMMA_3_270M, ModelCatalog.selectAssistant(installed, fourA))
+        // Nothing fits when free memory is under the smallest gate.
+        assertNull(ModelCatalog.selectAssistant(installed, DeviceMemory(6L * GIB, GIB / 2, false)))
     }
 
 }
